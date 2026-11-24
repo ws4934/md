@@ -48,11 +48,13 @@ export function useScrollSync(
   let cachedPreviewBlocks: HTMLElement[] = []
   let cachedPreviewOffsetTops: number[] = []
   let mutationObserver: MutationObserver | null = null
+  let editorScrollRaf = 0
+  let previewScrollRaf = 0
 
   function setupMutationObserver(preview: HTMLElement) {
     if (mutationObserver)
       return
-    const output = preview.querySelector('#output')
+    const output = preview.querySelector(`#output`)
     if (!output)
       return
     mutationObserver = new MutationObserver(() => { previewVersion++ })
@@ -64,6 +66,23 @@ export function useScrollSync(
     mutationObserver = null
   }
 
+  /**
+   * Computes `el`'s vertical offset inside `ancestor` using `offsetTop` walks
+   * rather than per-element `getBoundingClientRect()` calls.
+   */
+  function offsetTopWithin(el: HTMLElement, ancestor: HTMLElement): number {
+    let top = 0
+    let cur: HTMLElement | null = el
+    while (cur && cur !== ancestor) {
+      top += cur.offsetTop
+      cur = cur.offsetParent as HTMLElement | null
+    }
+    if (cur === ancestor)
+      return top
+    // Fallback if `ancestor` is not an offsetParent in the chain.
+    return el.getBoundingClientRect().top - ancestor.getBoundingClientRect().top + ancestor.scrollTop
+  }
+
   function getPreviewBlockElements(preview: HTMLElement): { blocks: HTMLElement[], offsetTops: number[] } {
     // Lazy init when #output was not ready on first watchEffect run
     if (!mutationObserver)
@@ -72,7 +91,7 @@ export function useScrollSync(
     if (cachedPreviewVersion === previewVersion)
       return { blocks: cachedPreviewBlocks, offsetTops: cachedPreviewOffsetTops }
 
-    const output = preview.querySelector('#output')
+    const output = preview.querySelector(`#output`)
     if (!output) {
       cachedPreviewVersion = previewVersion
       cachedPreviewBlocks = []
@@ -93,29 +112,40 @@ export function useScrollSync(
     for (const child of container.children) {
       const tag = child.tagName
 
-      if (tag === 'STYLE')
+      if (tag === `STYLE`)
         continue
 
       // Skip reading-time blockquote only (class-based; avoids dropping user blockquotes)
-      if (tag === 'BLOCKQUOTE' && (child as HTMLElement).classList.contains('md-blockquote'))
+      if (tag === `BLOCKQUOTE` && (child as HTMLElement).classList.contains(`md-blockquote`))
         continue
 
       // Stop at footnotes (structural; no text match to avoid custom H4 conflicts)
-      if (tag === 'H4' && (child as HTMLElement).dataset.heading === 'true') {
+      if (tag === `H4` && (child as HTMLElement).dataset.heading === `true`) {
         const next = child.nextElementSibling
-        if (next && (next as HTMLElement).classList.contains('footnotes'))
+        if (next && (next as HTMLElement).classList.contains(`footnotes`))
           break
       }
-      if ((child as HTMLElement).classList.contains('footnotes'))
+      if ((child as HTMLElement).classList.contains(`footnotes`))
         break
 
       blocks.push(child as HTMLElement)
     }
 
-    const previewRect = preview.getBoundingClientRect()
-    const offsetTops = blocks.map(el =>
-      el.getBoundingClientRect().top - previewRect.top + preview.scrollTop,
-    )
+    // All direct children of `container` normally share the same `offsetParent`,
+    // so compute the ancestor delta once instead of calling getBoundingClientRect() N times.
+    const offsetTops: number[] = []
+    if (blocks.length > 0) {
+      const sharedParent = blocks[0].offsetParent as HTMLElement | null
+      const baseOffset = sharedParent
+        ? (sharedParent === preview ? 0 : offsetTopWithin(sharedParent, preview))
+        : 0
+      for (let i = 0; i < blocks.length; i++) {
+        const el = blocks[i]
+        offsetTops[i] = el.offsetParent === sharedParent
+          ? baseOffset + el.offsetTop
+          : offsetTopWithin(el, preview)
+      }
+    }
 
     cachedPreviewVersion = previewVersion
     cachedPreviewBlocks = blocks
@@ -123,7 +153,7 @@ export function useScrollSync(
     return { blocks, offsetTops }
   }
 
-  function onEditorScroll() {
+  function syncFromEditorNow() {
     if (!enableScrollSync.value || isSyncingFromPreview)
       return
 
@@ -185,7 +215,16 @@ export function useScrollSync(
     requestAnimationFrame(() => { isSyncingFromEditor = false })
   }
 
-  function onPreviewScroll() {
+  function onEditorScroll() {
+    if (!enableScrollSync.value || isSyncingFromPreview || editorScrollRaf)
+      return
+    editorScrollRaf = requestAnimationFrame(() => {
+      editorScrollRaf = 0
+      syncFromEditorNow()
+    })
+  }
+
+  function syncFromPreviewNow() {
     if (!enableScrollSync.value || isSyncingFromEditor)
       return
 
@@ -258,6 +297,15 @@ export function useScrollSync(
     requestAnimationFrame(() => { isSyncingFromPreview = false })
   }
 
+  function onPreviewScroll() {
+    if (!enableScrollSync.value || isSyncingFromEditor || previewScrollRaf)
+      return
+    previewScrollRaf = requestAnimationFrame(() => {
+      previewScrollRaf = 0
+      syncFromPreviewNow()
+    })
+  }
+
   watchEffect((onCleanup) => {
     if (!enableScrollSync.value)
       return
@@ -273,6 +321,14 @@ export function useScrollSync(
     preview.addEventListener(`scroll`, onPreviewScroll, { passive: true })
 
     onCleanup(() => {
+      if (editorScrollRaf) {
+        cancelAnimationFrame(editorScrollRaf)
+        editorScrollRaf = 0
+      }
+      if (previewScrollRaf) {
+        cancelAnimationFrame(previewScrollRaf)
+        previewScrollRaf = 0
+      }
       scroller.removeEventListener(`scroll`, onEditorScroll)
       preview.removeEventListener(`scroll`, onPreviewScroll)
       teardownMutationObserver()

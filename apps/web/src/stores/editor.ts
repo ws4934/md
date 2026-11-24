@@ -3,7 +3,7 @@ import { t } from '@/i18n/translate'
 
 /** CodeMirror editor instance and basic document operations. */
 export const useEditorStore = defineStore(`editor`, () => {
-  const editor = ref<EditorView | null>(null)
+  const editor = shallowRef<EditorView | null>(null)
 
   let flushPendingContent: (() => void) | null = null
 

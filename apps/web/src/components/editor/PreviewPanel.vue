@@ -3,7 +3,9 @@ import type { DiagramDownloadOverlay } from '@/lib/preview/diagram-download'
 import { CONTENT_FONT_LANG } from '@/i18n/constants'
 import { setupDiagramDownloadOverlay } from '@/lib/preview/diagram-download'
 import { setupEmojiHydration } from '@/lib/preview/emoji-hydrate'
+import { useEditorStore } from '@/stores/editor'
 import { useRenderStore } from '@/stores/render'
+import { useThemeStore } from '@/stores/theme'
 import { useUIStore } from '@/stores/ui'
 
 const props = defineProps<{
@@ -13,7 +15,9 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const editorStore = useEditorStore()
 const renderStore = useRenderStore()
+const themeStore = useThemeStore()
 const uiStore = useUIStore()
 
 const { output } = storeToRefs(renderStore)
@@ -56,9 +60,13 @@ watch(output, () => {
   scheduleHydratePreviewDiagrams()
 })
 
-watch(viewMode, () => {
-  if (viewMode.value === `edit`)
+watch(viewMode, (mode) => {
+  if (mode === `edit`)
     return
+  if (renderStore.isDirty) {
+    themeStore.updateCodeTheme()
+    renderStore.render(editorStore.getContent())
+  }
   scheduleHydratePreviewDiagrams()
 })
 

@@ -159,14 +159,55 @@ export function solveWeChatImage(container?: HTMLElement) {
   })
 }
 
+export interface WeChatCssVarValues {
+  primaryColor: string
+  fontFamily: string
+  fontSize: string
+  lineHeight: string
+  blockSpacing: string
+}
+
+/**
+ * Pure string replacements applied right after juice CSS inlining.
+ * Safe to run inside a Web Worker (no DOM APIs).
+ */
+export function applyWeChatCssVarReplacements(html: string, vars: WeChatCssVarValues): string {
+  return html
+    .replace(/([^-])top:(.*?)em/g, `$1transform: translateY($2em)`)
+    .replace(/hsl\(var\(--foreground\)\)/g, `#3f3f3f`)
+    .replace(/var\(--blockquote-background\)/g, `#f7f7f7`)
+    .replace(/var\(--md-primary-color\)/g, vars.primaryColor)
+    .replace(/var\(--md-font-family\)/g, vars.fontFamily)
+    .replace(/var\(--md-font-size\)/g, vars.fontSize)
+    .replace(/var\(--md-line-height\)/g, vars.lineHeight)
+    .replace(/var\(--md-block-spacing\)/g, vars.blockSpacing)
+    .replace(/--md-primary-color:.+?;/g, ``)
+    .replace(/--md-font-family:.+?;/g, ``)
+    .replace(/--md-font-size:.+?;/g, ``)
+    .replace(/--md-line-height:.+?;/g, ``)
+    .replace(/--md-block-spacing:.+?;/g, ``)
+    .replace(/--md-link-color:.+?;/g, ``)
+    .replace(/--md-blockquote-background:.+?;/g, ``)
+    .replace(
+      /<span class="nodeLabel"([^>]*)><p[^>]*>(.*?)<\/p><\/span>/g,
+      `<span class="nodeLabel"$1>$2</span>`,
+    )
+    .replace(
+      /<span class="edgeLabel"([^>]*)><p[^>]*>(.*?)<\/p><\/span>/g,
+      `<span class="edgeLabel"$1>$2</span>`,
+    )
+}
+
+export function modifyHtmlStructureInPlace(root: ParentNode): void {
+  root.querySelectorAll(`li > ul, li > ol`).forEach((originalItem) => {
+    originalItem.parentElement?.insertAdjacentElement(`afterend`, originalItem)
+  })
+}
+
 export function modifyHtmlStructure(htmlString: string): string {
   const tempDiv = document.createElement(`div`)
   tempDiv.innerHTML = htmlString
-
-  tempDiv.querySelectorAll(`li > ul, li > ol`).forEach((originalItem) => {
-    originalItem.parentElement?.insertAdjacentElement(`afterend`, originalItem)
-  })
-
+  modifyHtmlStructureInPlace(tempDiv)
   return tempDiv.innerHTML
 }
 

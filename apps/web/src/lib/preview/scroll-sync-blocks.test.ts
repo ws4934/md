@@ -40,6 +40,25 @@ describe(`parseSourceBlocks`, () => {
       { startLine: 1, endLine: 3 },
     ])
   })
+
+  it(`uses iterLines when available`, () => {
+    const lines = [`# Title`, ``, `first`, `second`, ``, `third`]
+    let lineCalls = 0
+    const doc: LineDoc = {
+      lines: lines.length,
+      line: (n: number) => {
+        lineCalls++
+        return { text: lines[n - 1] ?? `` }
+      },
+      iterLines: () => lines,
+    }
+    expect(parseSourceBlocks(doc)).toEqual([
+      { startLine: 1, endLine: 1 },
+      { startLine: 3, endLine: 4 },
+      { startLine: 6, endLine: 6 },
+    ])
+    expect(lineCalls).toBe(0)
+  })
 })
 
 describe(`sourceBlockIndexForLine`, () => {
@@ -50,6 +69,8 @@ describe(`sourceBlockIndexForLine`, () => {
   ]
 
   it(`finds the last block whose startLine is <= line`, () => {
+    expect(sourceBlockIndexForLine([], 5)).toBe(0)
+    expect(sourceBlockIndexForLine(blocks, 0)).toBe(0)
     expect(sourceBlockIndexForLine(blocks, 1)).toBe(0)
     expect(sourceBlockIndexForLine(blocks, 3)).toBe(0)
     expect(sourceBlockIndexForLine(blocks, 4)).toBe(1)

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   blockScanLimit,
+  fenceRunLength,
   findAtLineStart,
   findIndentedLineStart,
   findLineEquals,
@@ -137,5 +138,14 @@ describe(`indexOfWithin`, () => {
   it(`matches indexOf when the limit covers the whole source`, () => {
     const src = `alpha <Beta> gamma`
     expect(indexOfWithin(src, `<`, 0, src.length)).toBe(src.indexOf(`<`))
+  })
+})
+
+describe(`fenceRunLength`, () => {
+  it(`detects backtick and tilde fences with up to 3 leading spaces`, () => {
+    expect(fenceRunLength('```ts', 0, 5)).toEqual({ char: '`', length: 3 })
+    expect(fenceRunLength('   ~~~~', 0, 7)).toEqual({ char: '~', length: 4 })
+    expect(fenceRunLength('    ```', 0, 7)).toBeNull()
+    expect(fenceRunLength('``', 0, 2)).toBeNull()
   })
 })

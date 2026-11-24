@@ -334,7 +334,7 @@ function recoverHistory() {
   const content = post.history[currentHistoryIndex.value].content
   post.content = content
   post.updateDatetime = new Date()
-  const ed = toRaw(editor.value!)
+  const ed = editor.value!
   ed.dispatch({
     changes: { from: 0, to: ed.state.doc.length, insert: content },
   })
@@ -429,7 +429,7 @@ function replaceFirst() {
       regex.lastIndex = 0
       postStore.updatePostContent(post.id, replaceInText(post.content, q, replaceQuery.value))
       if (postStore.currentPostId === post.id && editor.value) {
-        const ed = toRaw(editor.value)
+        const ed = editor.value
         ed.dispatch({
           changes: { from: 0, to: ed.state.doc.length, insert: post.content },
         })
@@ -463,7 +463,7 @@ function replaceAll() {
       const newContent = replaceInText(post.content, q, replaceQuery.value)
       postStore.updatePostContent(post.id, newContent)
       if (postStore.currentPostId === post.id && editor.value) {
-        const ed = toRaw(editor.value)
+        const ed = editor.value
         ed.dispatch({
           changes: { from: 0, to: ed.state.doc.length, insert: newContent },
         })

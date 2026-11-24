@@ -87,7 +87,7 @@ watch(
     if (!open)
       return
 
-    const view = toRaw(editorStore.editor)
+    const view = editorStore.editor
     const range = view
       ? findMarkdownTableAt(view.state.doc.toString(), view.state.selection.main.head)
       : null
@@ -168,7 +168,7 @@ function onCellKeydown(event: KeyboardEvent, rowIndex: number, colIndex: number)
  * when the original table can no longer be located.
  */
 function resolveCurrentRange(): MarkdownTableRange | null {
-  const view = toRaw(editorStore.editor)
+  const view = editorStore.editor
   const stored = tableRange.value
   if (!view || !stored)
     return null
@@ -182,7 +182,7 @@ function resolveCurrentRange(): MarkdownTableRange | null {
 }
 
 function applyTable() {
-  const view = toRaw(editorStore.editor)
+  const view = editorStore.editor
   if (!view)
     return
 
@@ -232,7 +232,7 @@ function applyTable() {
 }
 
 function deleteTable() {
-  const view = toRaw(editorStore.editor)
+  const view = editorStore.editor
   if (!view || !tableRange.value)
     return
 

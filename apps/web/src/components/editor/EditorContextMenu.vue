@@ -73,7 +73,7 @@ const contextMenuPos = ref<number | null>(null)
  * the dialog afterwards opens for the clicked table.
  */
 function onContextMenuCapture(event: MouseEvent) {
-  const view = toRaw(editorStore.editor)
+  const view = editorStore.editor
   if (!view || !view.contentDOM.contains(event.target as Node))
     return
   const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
@@ -93,7 +93,7 @@ function onMenuOpen(open: boolean) {
     contextMenuPos.value = null
     return
   }
-  const view = toRaw(editorStore.editor)
+  const view = editorStore.editor
   const pos = contextMenuPos.value ?? view?.state.selection.main.head
   isContextTargetInTable.value = view != null && pos != null
     ? findMarkdownTableAt(view.state.doc.toString(), pos) !== null

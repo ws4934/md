@@ -10,21 +10,38 @@ import {
   exportPureHTML,
   getHtmlContent,
 } from '@/services/export'
+import { useEditorStore } from './editor'
 import { usePostStore } from './post'
+import { useRenderStore } from './render'
+import { useThemeStore } from './theme'
 import { useUIStore } from './ui'
 
 /** Export helpers: HTML, PDF, Markdown, card image, etc. */
 export const useExportStore = defineStore(`export`, () => {
+  const editorStore = useEditorStore()
   const postStore = usePostStore()
+  const renderStore = useRenderStore()
+  const themeStore = useThemeStore()
   const uiStore = useUIStore()
 
-  const editorContent2HTML = () => getHtmlContent()
+  function flushPreviewForExport() {
+    if (!renderStore.isDirty && renderStore.output)
+      return
+    themeStore.updateCodeTheme()
+    renderStore.render(editorStore.getContent())
+  }
+
+  const editorContent2HTML = () => {
+    flushPreviewForExport()
+    return getHtmlContent()
+  }
 
   const exportEditorContent2HTML = async () => {
     const currentPost = postStore.currentPost
     if (!currentPost)
       return
 
+    flushPreviewForExport()
     await exportHTML(currentPost.title)
   }
 
@@ -41,6 +58,7 @@ export const useExportStore = defineStore(`export`, () => {
     if (!currentPost)
       return
 
+    flushPreviewForExport()
     await exportPNG(currentPost.title, {
       previewDevice: uiStore.previewDevice,
     })
@@ -51,6 +69,7 @@ export const useExportStore = defineStore(`export`, () => {
     if (!currentPost)
       return
 
+    flushPreviewForExport()
     const toastId = toast.loading(t(`store.png.segmentsStart`))
     try {
       const count = await exportPNGSegments(currentPost.title, {
@@ -77,6 +96,7 @@ export const useExportStore = defineStore(`export`, () => {
     if (!currentPost)
       return
 
+    flushPreviewForExport()
     await exportPDF(currentPost.title, options)
   }
 

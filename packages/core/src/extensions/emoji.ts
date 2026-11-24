@@ -2,7 +2,7 @@ import type { MarkedExtension } from 'marked'
 import type { EmojiToken } from '../types/marked-tokens'
 import { asGenericTokenRenderer, asTextTokenRenderer } from '../types/marked-tokens'
 import { escapeHtml } from '../utils/basicHelpers'
-import { blockScanLimit, indexOfWithin } from '../utils/scan'
+import { blockScanLimit, fenceRunLength, indexOfWithin } from '../utils/scan'
 import { EMOJI_SHORTCODES } from './emoji-data'
 
 // Shortcode names are lowercase with digits, underscores and the +1/-1 aliases.
@@ -266,22 +266,6 @@ function renderSticker(
  *   Optional `alt` and `width="20%"` (original-size mode).
  * - Legacy aliases: `{{emoji:<id>}}` and `![name](asset://<id>){N%}`
  */
-function fenceRunLength(src: string, lineStart: number, lineEnd: number): { char: string, length: number } | null {
-  let i = lineStart
-  let indent = 0
-  while (i < lineEnd && src[i] === ` ` && indent < 3) {
-    i++
-    indent++
-  }
-  const char = src[i]
-  if (char !== `\`` && char !== `~`)
-    return null
-  let length = 0
-  while (i + length < lineEnd && src[i + length] === char)
-    length++
-  return length >= 3 ? { char, length } : null
-}
-
 function findLineStartEmojiTag(src: string): number | undefined {
   const limit = blockScanLimit(src)
   let fenceChar = ``

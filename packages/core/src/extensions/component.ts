@@ -1,7 +1,7 @@
 import type { ComponentRegistry, CustomComponentDef } from '@md/shared/types'
 import type { MarkedExtension } from 'marked'
 import { escapeHtml, unescapeHtml } from '../utils/basicHelpers'
-import { blockScanLimit, indexOfWithin } from '../utils/scan'
+import { blockScanLimit, fenceRunLength, indexOfWithin } from '../utils/scan'
 
 // Built-in components
 
@@ -436,23 +436,6 @@ export function markedComponent(
         return true
       from = index + 1
     }
-  }
-
-  /** Length of a leading ``` / ~~~ fence on the line at `lineStart`, else 0. */
-  function fenceRunLength(src: string, lineStart: number, lineEnd: number): { char: string, length: number } | null {
-    let i = lineStart
-    let indent = 0
-    while (i < lineEnd && src[i] === ` ` && indent < 3) {
-      i++
-      indent++
-    }
-    const char = src[i]
-    if (char !== `\`` && char !== `~`)
-      return null
-    let length = 0
-    while (i + length < lineEnd && src[i + length] === char)
-      length++
-    return length >= 3 ? { char, length } : null
   }
 
   function findComponentStart(src: string): number | undefined {

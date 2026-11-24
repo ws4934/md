@@ -12,7 +12,7 @@ import {
   matchBlockKatex,
 } from '../utils/mathDetection'
 import { ensureMathJaxLoaded, isMathJaxReady } from '../utils/mathjax'
-import { blockScanLimit, findIndentedLineStart } from '../utils/scan'
+import { blockScanLimit, findIndentedLineStart, indexOfWithin } from '../utils/scan'
 import { LRUMap } from '../utils/svgCache'
 
 export interface MarkedKatexOptions {
@@ -187,7 +187,7 @@ function blockLatexKatex(_options: MarkedKatexOptions | undefined, renderer: Kat
     name: `blockLatexKatex`,
     level: `block` as const,
     start(src: string) {
-      const index = src.indexOf(`\\[`)
+      const index = indexOfWithin(src, `\\[`, 0, blockScanLimit(src))
       return index !== -1 ? index : undefined
     },
     tokenizer(src: string) {

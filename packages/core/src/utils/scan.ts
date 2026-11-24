@@ -24,25 +24,41 @@ export function isAtLineStart(src: string, index: number): boolean {
   return index === 0 || isLineTerminator(src.charCodeAt(index - 1))
 }
 
+let lastBlockScanSrc = ``
+let lastBlockScanLimit = 0
+
 /**
  * How far a block-level `start()` needs to look.
  *
  * marked uses the returned index only to decide where the current paragraph is
  * cut short. A paragraph always ends at a blank line, so anything past the first
  * blank line belongs to a later block that marked tokenizes on its own pass.
+ *
+ * Memoized on the last `src` string because marked calls every block extension's
+ * `start(src)` back-to-back with the exact same `src` reference at each boundary.
  */
 export function blockScanLimit(src: string): number {
+  if (src === lastBlockScanSrc)
+    return lastBlockScanLimit
+
   let from = 0
+  let result = src.length
   for (;;) {
     const newline = src.indexOf(`\n`, from)
-    if (newline === -1)
-      return src.length
+    if (newline === -1) {
+      result = src.length
+      break
+    }
 
     let i = newline + 1
     while (i < src.length) {
       const code = src.charCodeAt(i)
-      if (code === LF)
-        return newline
+      if (code === LF) {
+        result = newline
+        lastBlockScanSrc = src
+        lastBlockScanLimit = result
+        return result
+      }
       if (code === SPACE || code === TAB || code === CR) {
         i++
         continue
@@ -50,11 +66,38 @@ export function blockScanLimit(src: string): number {
       break
     }
 
-    if (i >= src.length)
-      return src.length
+    if (i >= src.length) {
+      result = src.length
+      break
+    }
 
     from = newline + 1
   }
+
+  lastBlockScanSrc = src
+  lastBlockScanLimit = result
+  return result
+}
+
+/** Length of a leading ``` / ~~~ fence on the line `[lineStart, lineEnd)`, else null. */
+export function fenceRunLength(
+  src: string,
+  lineStart: number,
+  lineEnd: number,
+): { char: string, length: number } | null {
+  let i = lineStart
+  let indent = 0
+  while (i < lineEnd && src[i] === ` ` && indent < 3) {
+    i++
+    indent++
+  }
+  const char = src[i]
+  if (char !== `\`` && char !== `~`)
+    return null
+  let length = 0
+  while (i + length < lineEnd && src[i + length] === char)
+    length++
+  return length >= 3 ? { char, length } : null
 }
 
 /**

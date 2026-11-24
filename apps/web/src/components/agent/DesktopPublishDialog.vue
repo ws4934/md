@@ -245,6 +245,8 @@ async function loadInitialState() {
   isEditingCredentials.value = !hasCredentials.value
 
   const markdown = editorStore.getContent()
+  if (renderStore.isDirty || !renderStore.output)
+    editorRefresh({ force: true })
   const html = renderStore.output
   const draft = extractPublishDraft(html, markdown)
 

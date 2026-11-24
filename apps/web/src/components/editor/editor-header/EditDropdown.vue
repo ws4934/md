@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import type { EditorView } from '@codemirror/view'
 import {
   ClipboardPaste,
   Copy,
@@ -53,7 +52,7 @@ function undo() {
     return
 
   try {
-    const editorView = toRaw(editor.value) as EditorView
+    const editorView = editor.value
     undoAction(editorView)
     editorView.focus()
   }
@@ -67,7 +66,7 @@ function redo() {
     return
 
   try {
-    const editorView = toRaw(editor.value) as EditorView
+    const editorView = editor.value
     redoAction(editorView)
     editorView.focus()
   }
@@ -78,14 +77,14 @@ function redo() {
 
 function openSearch() {
   if (editor.value) {
-    const seed = readSearchSeed(toRaw(editor.value) as EditorView)
+    const seed = readSearchSeed(editor.value)
     uiStore.openSearchTab(seed.word, false, seed.findInSelection)
   }
 }
 
 function openReplace() {
   if (editor.value) {
-    const seed = readSearchSeed(toRaw(editor.value) as EditorView)
+    const seed = readSearchSeed(editor.value)
     uiStore.openSearchTab(seed.word, true, seed.findInSelection)
   }
 }

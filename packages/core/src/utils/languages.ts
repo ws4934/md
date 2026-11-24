@@ -9,7 +9,6 @@ import python from 'highlight.js/lib/languages/python'
 import shell from 'highlight.js/lib/languages/shell'
 import typescript from 'highlight.js/lib/languages/typescript'
 import xml from 'highlight.js/lib/languages/xml'
-import { LRUMap } from './svgCache'
 
 /**
  * Languages bundled with the renderer. Everything else loads from CDN on first use
@@ -131,21 +130,81 @@ function splitHighlightedHtmlByLines(html: string): string[] {
   return lines
 }
 
+const MAX_HIGHLIGHT_CACHE_ENTRIES = 2048
+const MAX_HIGHLIGHT_CACHE_CHARS = 16 * 1024 * 1024
+
 /**
- * Highlighting plus the span/whitespace post-processing below is pure, so the
- * preview's full re-render on every keystroke batch would otherwise re-highlight
- * every untouched code block.
- *
- * Entries hold generated HTML — several times the size of the source, and much
- * more with line numbers, since every line becomes its own element. The cap only
- * has to cover the code blocks of the documents in play, so it is kept well
- * below the point where retained markup becomes noticeable.
+ * Fast dual-32-bit FNV-1a hash so cache keys stay compact instead of retaining
+ * full raw code strings inside Map keys.
  */
-const highlightCache = new LRUMap<string>(128)
+function hashCodeKey(language: string, showLineNumber: boolean, text: string): string {
+  let h1 = 0x811C9DC5
+  let h2 = 0x01000193
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    h1 ^= c
+    h1 = Math.imul(h1, 0x01000193)
+    h2 ^= (c + i)
+    h2 = Math.imul(h2, 0x85EBCA6B)
+  }
+  return `${language}\u0000${showLineNumber ? `1` : `0`}\u0000${text.length}:${(h1 >>> 0).toString(36)}:${(h2 >>> 0).toString(36)}`
+}
+
+class ByteBoundedHighlightCache {
+  private readonly map = new Map<string, string>()
+  private totalChars = 0
+
+  get(key: string): string | undefined {
+    const value = this.map.get(key)
+    if (value === undefined)
+      return undefined
+    this.map.delete(key)
+    this.map.set(key, value)
+    return value
+  }
+
+  set(key: string, value: string): void {
+    const existing = this.map.get(key)
+    if (existing !== undefined) {
+      this.totalChars -= existing.length
+      this.map.delete(key)
+    }
+
+    // Skip caching single pathological blocks larger than half the total budget.
+    if (value.length > MAX_HIGHLIGHT_CACHE_CHARS / 2)
+      return
+
+    while (
+      this.map.size >= MAX_HIGHLIGHT_CACHE_ENTRIES
+      || (this.totalChars + value.length > MAX_HIGHLIGHT_CACHE_CHARS && this.map.size > 0)
+    ) {
+      const oldest = this.map.entries().next().value
+      if (!oldest)
+        break
+      this.map.delete(oldest[0])
+      this.totalChars -= oldest[1].length
+    }
+
+    this.map.set(key, value)
+    this.totalChars += value.length
+  }
+
+  clear(): void {
+    this.map.clear()
+    this.totalChars = 0
+  }
+}
+
+/**
+ * Highlighting plus the span/whitespace post-processing below is pure, so
+ * repeated renders reuse memoized HTML. Sized to cover 2,000+ unique blocks
+ * on long technical articles while bounding retained markup memory.
+ */
+const highlightCache = new ByteBoundedHighlightCache()
 
 /** Highlight code and format for display, optionally with line numbers. */
 export function highlightAndFormatCode(text: string, language: string, hljs: HLJSApi, showLineNumber: boolean): string {
-  const cacheKey = `${language}\u0000${showLineNumber ? `1` : `0`}\u0000${text}`
+  const cacheKey = hashCodeKey(language, showLineNumber, text)
   const cached = highlightCache.get(cacheKey)
   if (cached !== undefined) {
     return cached

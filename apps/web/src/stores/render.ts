@@ -15,6 +15,7 @@ export interface RenderOptions {
 /** Markdown rendering, HTML output, and heading extraction. */
 export const useRenderStore = defineStore(`render`, () => {
   const output = ref(``)
+  const isDirty = ref(false)
 
   const readingTime = reactive({
     chars: 0,
@@ -35,6 +36,10 @@ export const useRenderStore = defineStore(`render`, () => {
   let pendingRender: { content: string, options?: RenderOptions } | null = null
 
   const getRenderer = () => renderer
+
+  function markDirty() {
+    isDirty.value = true
+  }
 
   const buildDiagramMessages = () => ({
     mermaidLoading: t(`store.diagram.mermaidLoading`),
@@ -127,8 +132,10 @@ export const useRenderStore = defineStore(`render`, () => {
     const themeMode = options?.themeMode ?? (uiStore.isDark ? `dark` : `light`)
     const optionsFingerprint = buildOptionsFingerprint(themeMode, themeStore, componentStore)
 
-    if (!options?.force && content === lastContent && optionsFingerprint === lastOptionsFingerprint)
+    if (!options?.force && content === lastContent && optionsFingerprint === lastOptionsFingerprint) {
+      isDirty.value = false
       return output.value
+    }
 
     // isUseIndent / isUseJustify are applied via CSS variables, not renderer options
     renderer.reset({
@@ -155,6 +162,7 @@ export const useRenderStore = defineStore(`render`, () => {
 
     lastContent = content
     lastOptionsFingerprint = optionsFingerprint
+    isDirty.value = false
 
     return output.value
   }
@@ -190,12 +198,14 @@ export const useRenderStore = defineStore(`render`, () => {
   return {
     // State
     output,
+    isDirty,
     readingTime,
     titleList,
 
     // Actions
     initRendererInstance,
     getRenderer,
+    markDirty,
     render,
   }
 })

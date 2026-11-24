@@ -1,10 +1,22 @@
+import type { WeChatCssVarValues } from './clipboard-dom'
+import type { JuiceWorkerRequest, JuiceWorkerResponse } from './juice.worker'
 import { inlineEmojiImagesAsBase64 } from '@/lib/export/inlineEmojiImages'
 import { stripUnresolvedAsyncPlaceholders, waitForPreviewReady } from '@/lib/preview/preview-ready'
 import { useEditorStore } from '@/stores/editor'
 import { useRenderStore } from '@/stores/render'
 import { useThemeStore } from '@/stores/theme'
 import { useUIStore } from '@/stores/ui'
-import { applyWeChatStructureFixes, createEmptyNode, modifyHtmlStructure, promoteSvgHtmlLabels, sanitizeHtmlCssForJuice, solveWeChatImage, stripFontFamilyForJuiceFallback, stripInvalidCssForJuice } from './clipboard-dom'
+import {
+  applyWeChatCssVarReplacements,
+  applyWeChatStructureFixes,
+  createEmptyNode,
+  modifyHtmlStructureInPlace,
+  promoteSvgHtmlLabels,
+  sanitizeHtmlCssForJuice,
+  solveWeChatImage,
+  stripFontFamilyForJuiceFallback,
+  stripInvalidCssForJuice,
+} from './clipboard-dom'
 import { getStylesToAdd } from './share-styles'
 import { prepareDiagramSvgsForWeChat, prepareMathFormulasForWeChat, sanitizeSvgsForWeChat } from './wechat-svg'
 
@@ -16,7 +28,51 @@ const JUICE_OPTIONS = {
   resolveCSSVariables: false,
 } as const
 
-async function mergeCss(html: string): Promise<string> {
+let juiceWorker: Worker | null = null
+let juiceWorkerUnavailable = false
+let nextJuiceJobId = 1
+const pendingJuiceJobs = new Map<number, {
+  resolve: (html: string) => void
+  reject: (err: Error) => void
+}>()
+
+function getJuiceWorker(): Worker | null {
+  if (juiceWorkerUnavailable || typeof Worker === `undefined`)
+    return null
+  if (juiceWorker)
+    return juiceWorker
+  try {
+    const worker = new Worker(new URL(`./juice.worker.ts`, import.meta.url), { type: `module` })
+    worker.addEventListener(`message`, (event: MessageEvent<JuiceWorkerResponse>) => {
+      const { id, html, error } = event.data
+      const pending = pendingJuiceJobs.get(id)
+      if (!pending)
+        return
+      pendingJuiceJobs.delete(id)
+      if (error)
+        pending.reject(new Error(error))
+      else
+        pending.resolve(html ?? ``)
+    })
+    worker.addEventListener(`error`, (event) => {
+      juiceWorker = null
+      juiceWorkerUnavailable = true
+      const err = new Error(event.message || `Juice worker failed`)
+      for (const pending of pendingJuiceJobs.values())
+        pending.reject(err)
+      pendingJuiceJobs.clear()
+      worker.terminate()
+    })
+    juiceWorker = worker
+    return worker
+  }
+  catch {
+    juiceWorkerUnavailable = true
+    return null
+  }
+}
+
+async function mergeCssOnMainThread(html: string, vars: WeChatCssVarValues): Promise<string> {
   const { default: juice } = await import(`juice`)
   const sanitized = sanitizeHtmlCssForJuice(html)
   const attempts = [
@@ -27,14 +83,32 @@ async function mergeCss(html: string): Promise<string> {
 
   for (const attempt of attempts) {
     try {
-      return attempt()
+      return applyWeChatCssVarReplacements(attempt(), vars)
     }
     catch (error) {
       console.warn(`WeChat copy: juice failed, trying fallback`, error)
     }
   }
 
-  return sanitized
+  return applyWeChatCssVarReplacements(sanitized, vars)
+}
+
+async function mergeCssOffThread(html: string, vars: WeChatCssVarValues): Promise<string> {
+  const worker = getJuiceWorker()
+  if (!worker)
+    return mergeCssOnMainThread(html, vars)
+
+  try {
+    return await new Promise<string>((resolve, reject) => {
+      const id = nextJuiceJobId++
+      pendingJuiceJobs.set(id, { resolve, reject })
+      const payload: JuiceWorkerRequest = { id, html, vars }
+      worker.postMessage(payload)
+    })
+  }
+  catch {
+    return mergeCssOnMainThread(html, vars)
+  }
 }
 
 /**
@@ -60,8 +134,11 @@ export async function processClipboardContent(primaryColor: string) {
   const wechatThemeMode = `light` as const
   const rerenderForLight = uiStore.isDark
 
-  if (rerenderForLight)
-    renderStore.render(content, { themeMode: wechatThemeMode, force: true })
+  // Always flush dirty preview (e.g. edited while hidden in `edit` view mode) before cloning.
+  if (rerenderForLight || renderStore.isDirty || !renderStore.output) {
+    themeStore.updateCodeTheme()
+    renderStore.render(content, { themeMode: wechatThemeMode, force: rerenderForLight })
+  }
 
   const previewReady = await waitForPreviewReady(undefined, { themeMode: wechatThemeMode })
 
@@ -72,40 +149,21 @@ export async function processClipboardContent(primaryColor: string) {
     await inlineEmojiImagesAsBase64(clipboardDiv)
 
     const stylesToAdd = await getStylesToAdd()
-
-    if (stylesToAdd) {
-      clipboardDiv.innerHTML = stylesToAdd + clipboardDiv.innerHTML
-    }
-
     stripInvalidCssForJuice(clipboardDiv)
-    clipboardDiv.innerHTML = modifyHtmlStructure(await mergeCss(clipboardDiv.innerHTML))
 
+    const rawInputHtml = stylesToAdd ? stylesToAdd + clipboardDiv.innerHTML : clipboardDiv.innerHTML
+    const inlinedHtml = await mergeCssOffThread(rawInputHtml, {
+      primaryColor,
+      fontFamily: themeStore.fontFamily,
+      fontSize: themeStore.fontSize,
+      lineHeight: themeStore.lineHeight,
+      blockSpacing: themeStore.blockSpacing,
+    })
+
+    // Single main-thread parse after worker inlining + CSS variable substitution.
+    clipboardDiv.innerHTML = inlinedHtml
+    modifyHtmlStructureInPlace(clipboardDiv)
     clipboardDiv.querySelectorAll(`a[href^="#"]`).forEach(a => a.removeAttribute(`href`))
-
-    clipboardDiv.innerHTML = clipboardDiv.innerHTML
-      .replace(/([^-])top:(.*?)em/g, `$1transform: translateY($2em)`)
-      .replace(/hsl\(var\(--foreground\)\)/g, `#3f3f3f`)
-      .replace(/var\(--blockquote-background\)/g, `#f7f7f7`)
-      .replace(/var\(--md-primary-color\)/g, primaryColor)
-      .replace(/var\(--md-font-family\)/g, themeStore.fontFamily)
-      .replace(/var\(--md-font-size\)/g, themeStore.fontSize)
-      .replace(/var\(--md-line-height\)/g, themeStore.lineHeight)
-      .replace(/var\(--md-block-spacing\)/g, themeStore.blockSpacing)
-      .replace(/--md-primary-color:.+?;/g, ``)
-      .replace(/--md-font-family:.+?;/g, ``)
-      .replace(/--md-font-size:.+?;/g, ``)
-      .replace(/--md-line-height:.+?;/g, ``)
-      .replace(/--md-block-spacing:.+?;/g, ``)
-      .replace(/--md-link-color:.+?;/g, ``)
-      .replace(/--md-blockquote-background:.+?;/g, ``)
-      .replace(
-        /<span class="nodeLabel"([^>]*)><p[^>]*>(.*?)<\/p><\/span>/g,
-        `<span class="nodeLabel"$1>$2</span>`,
-      )
-      .replace(
-        /<span class="edgeLabel"([^>]*)><p[^>]*>(.*?)<\/p><\/span>/g,
-        `<span class="edgeLabel"$1>$2</span>`,
-      )
 
     solveWeChatImage(clipboardDiv)
 
@@ -126,7 +184,11 @@ export async function processClipboardContent(primaryColor: string) {
     }
   }
   finally {
-    if (rerenderForLight)
-      renderStore.render(content, { themeMode: `dark`, force: true })
+    if (rerenderForLight) {
+      if (uiStore.viewMode === `edit`)
+        renderStore.markDirty()
+      else
+        renderStore.render(content, { themeMode: `dark`, force: true })
+    }
   }
 }

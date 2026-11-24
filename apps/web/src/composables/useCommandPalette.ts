@@ -32,7 +32,7 @@ export function useCommandPalette() {
   const { formatContent } = useEditorDocumentActions()
 
   function withEditor(run: (view: EditorView) => void | Promise<void>) {
-    const view = editorStore.editor ? toRaw(editorStore.editor) as EditorView : null
+    const view = editorStore.editor
     if (!view)
       return
     void run(view)

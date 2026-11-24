@@ -201,7 +201,7 @@ function stopAI() {
 }
 
 function replaceText() {
-  const editorView = toRaw(editorStore.editor!)!
+  const editorView = editorStore.editor!
   const selection = editorView.state.selection.main
   editorView.dispatch(editorView.state.replaceSelection(message.value))
 
