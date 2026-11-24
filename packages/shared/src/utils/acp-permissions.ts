@@ -45,10 +45,11 @@ export function clampAgentModePermissionLevel(
   currentLevel: AcpPermissionLevel,
   reportedLevel: AcpPermissionLevel | null,
 ): AcpPermissionLevel {
-  if (!reportedLevel)
-    return currentLevel
-  return PERMISSION_PRIVILEGE_RANK[reportedLevel] <= PERMISSION_PRIVILEGE_RANK[currentLevel]
-    ? reportedLevel
+  // Unmapped custom agent modes carry `ask`-equivalent privilege (matching setPermissionMode),
+  // tightening `bypass`/`auto_edits` while never escalating `plan`.
+  const effectiveReported = reportedLevel ?? `ask`
+  return PERMISSION_PRIVILEGE_RANK[effectiveReported] <= PERMISSION_PRIVILEGE_RANK[currentLevel]
+    ? effectiveReported
     : currentLevel
 }
 

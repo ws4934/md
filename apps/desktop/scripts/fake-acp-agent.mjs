@@ -11,6 +11,8 @@ import readline from 'node:readline'
 const junkStdout = process.env.FAKE_AGENT_JUNK_STDOUT === `1`
 const hangMethod = process.env.FAKE_AGENT_HANG_METHOD || ``
 const earlyUpdate = process.env.FAKE_AGENT_EARLY_UPDATE === `1`
+const earlyModeUpdate = process.env.FAKE_AGENT_EARLY_MODE_UPDATE || ``
+const rejectSetMode = process.env.FAKE_AGENT_REJECT_SET_MODE === `1`
 const modelStyle = process.env.FAKE_AGENT_MODEL_STYLE || `models`
 const modesStyle = process.env.FAKE_AGENT_MODES_STYLE || `claude`
 const extraModes = process.env.FAKE_AGENT_EXTRA_MODES === `1`
@@ -76,6 +78,12 @@ function sendUpdate(update) {
 function buildModesEntries() {
   if (modesStyle === `none`)
     return []
+  if (modesStyle === `custom_only`) {
+    return [
+      { id: `deep_review`, name: `Deep Review`, description: `Editorial fact-check and tone audit` },
+      { id: `plan`, name: `Plan`, description: `Read-only planning mode` },
+    ]
+  }
   const base = [
     { id: `default`, name: `Default`, description: `Ask before edits and commands` },
     { id: `acceptEdits`, name: `Accept Edits`, description: `Auto-accept file edits` },
@@ -393,6 +401,14 @@ async function handleRequest(msg) {
         })
       }
 
+      if (earlyModeUpdate) {
+        currentModeId = earlyModeUpdate
+        sendUpdate({
+          sessionUpdate: `current_mode_update`,
+          currentModeId,
+        })
+      }
+
       sendResult(id, {
         sessionId: SESSION_ID,
         ...buildModelsMetadata(),
@@ -430,7 +446,7 @@ async function handleRequest(msg) {
       return
     }
     case `session/set_mode`: {
-      if (modelStyle === `configOptions` || modesStyle === `none`) {
+      if (rejectSetMode || modelStyle === `configOptions` || modesStyle === `none`) {
         sendError(id, -32601, `Method not found: session/set_mode`)
         return
       }

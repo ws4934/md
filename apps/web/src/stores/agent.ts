@@ -236,6 +236,8 @@ export const useAgentStore = defineStore(`agent`, () => {
   const customExtraModes = computed<AcpModeInfo[]>(() => getCustomExtraModes(availableModes.value))
 
   const activeCustomMode = computed<AcpModeInfo | null>(() => {
+    if (currentPermissionLevel.value !== `ask`)
+      return null
     const modeId = currentModeId.value
     if (!modeId)
       return null
@@ -678,6 +680,10 @@ export const useAgentStore = defineStore(`agent`, () => {
     modeId?: string | null
   }): Promise<void> {
     const session = activeSession.value
+    const prevDraftLevel = draftPermissionLevel.value
+    const prevDraftMode = draftModeId.value
+    const prevSessionLevel = session?.permissionLevel
+    const prevSessionMode = session?.modeId
 
     if (params.permissionLevel) {
       draftPermissionLevel.value = params.permissionLevel
@@ -709,6 +715,12 @@ export const useAgentStore = defineStore(`agent`, () => {
         session.modeId = result.modeId
       }
       catch (error) {
+        draftPermissionLevel.value = prevDraftLevel
+        draftModeId.value = prevDraftMode
+        if (session) {
+          session.permissionLevel = prevSessionLevel
+          session.modeId = prevSessionMode
+        }
         toast.error(error instanceof Error ? error.message : String(error))
       }
     }

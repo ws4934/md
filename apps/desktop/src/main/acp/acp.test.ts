@@ -452,6 +452,36 @@ describe(`acpHost permission levels, ACP modes & article disk sync`, () => {
           builtin: true,
           avatar: { letter: `B`, color: `#5B5BD6` },
         },
+        {
+          id: `fake-early-mode`,
+          name: `Fake Early Mode`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0`,
+            FAKE_AGENT_MODES_STYLE: `claude`,
+            FAKE_AGENT_EARLY_MODE_UPDATE: `default`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `E`, color: `#5B5BD6` },
+        },
+        {
+          id: `fake-custom-readonly`,
+          name: `Fake Custom Readonly`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0`,
+            FAKE_AGENT_MODEL_STYLE: `models`,
+            FAKE_AGENT_MODES_STYLE: `custom_only`,
+            FAKE_AGENT_INITIAL_MODE: `deep_review`,
+            FAKE_AGENT_REJECT_SET_MODE: `1`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `C`, color: `#5B5BD6` },
+        },
       ],
       onEvent: (event) => {
         events.push(event)
@@ -546,6 +576,8 @@ describe(`acpHost permission levels, ACP modes & article disk sync`, () => {
     expect(clampAgentModePermissionLevel(`ask`, `plan`)).toBe(`plan`)
     expect(clampAgentModePermissionLevel(`auto_edits`, `bypass`)).toBe(`auto_edits`)
     expect(clampAgentModePermissionLevel(`bypass`, `ask`)).toBe(`ask`)
+    expect(clampAgentModePermissionLevel(`bypass`, null)).toBe(`ask`)
+    expect(clampAgentModePermissionLevel(`plan`, null)).toBe(`plan`)
 
     events.length = 0
     const pushSess = await host.startSession({
@@ -620,6 +652,37 @@ describe(`acpHost permission levels, ACP modes & article disk sync`, () => {
       postTitle: `Init Bypass`,
     })
     expect(events.filter(e => e.type === `permission_requested`).map(e => e.request.toolKind)).toEqual([`execute`])
+
+    // 8. Early startup current_mode_update("default") during session/new must not clobber user's requested `bypass`.
+    const earlyModeSess = await host.startSession({
+      agentId: `fake-early-mode`,
+      permissionLevel: `bypass`,
+      postId: `p6`,
+      postTitle: `Early Mode`,
+      content: `# Early`,
+    })
+    expect(earlyModeSess.permissionLevel).toBe(`bypass`)
+    expect(earlyModeSess.currentModeId).toBe(`bypassPermissions`)
+
+    // 9. Explicit canonical permissionLevel on an agent stuck in an unmapped custom mode clears modeId
+    //    (so custom mode never masks `bypass` in UI) and tolerates read-only session/set_mode rejection.
+    const customReadonlySess = await host.startSession({
+      agentId: `fake-custom-readonly`,
+      permissionLevel: `bypass`,
+      modeId: null,
+      postId: `p7`,
+      postTitle: `Custom Readonly`,
+      content: `# Custom`,
+    })
+    expect(customReadonlySess.permissionLevel).toBe(`bypass`)
+    expect(customReadonlySess.currentModeId).toBeNull()
+
+    const switchedLevel = await host.setPermissionMode({
+      sessionId: customReadonlySess.sessionId,
+      permissionLevel: `plan`,
+      modeId: null,
+    })
+    expect(switchedLevel).toEqual({ permissionLevel: `plan`, modeId: null })
   })
 
   it(`syncs article back to editor on completed edit tool call and at turn end`, async () => {

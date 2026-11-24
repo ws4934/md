@@ -43,6 +43,7 @@ interface ManagedSession {
   syncChain: Promise<void>
   permissionState: {
     level: AcpPermissionLevel
+    applyingHostMode: boolean
   }
 }
 
@@ -177,7 +178,8 @@ export class AcpHost {
       = params.permissionLevel
         ?? mapAcpModeIdToPermissionLevel(params.modeId)
         ?? settings.defaultPermissionLevel
-    const permissionState = { level: initialLevel }
+    // Suppress boot-time mode clamping until initializeNewSession + initial setMode complete.
+    const permissionState = { level: initialLevel, applyingHostMode: true }
 
     const sessionRef: { current: AcpSession | null } = { current: null }
     const session = new AcpSession({
@@ -195,10 +197,11 @@ export class AcpHost {
       },
       onEvent: (event) => {
         if (event.type === `mode_changed`) {
-          const mappedLevel = mapAcpModeIdToPermissionLevel(event.modeId)
-          // Agent-originated mode updates may keep or restrict permissions, never escalate.
-          // Echoes of our own setPermissionMode already match permissionState.level.
-          permissionState.level = clampAgentModePermissionLevel(permissionState.level, mappedLevel)
+          if (!permissionState.applyingHostMode) {
+            const mappedLevel = mapAcpModeIdToPermissionLevel(event.modeId)
+            // Agent-originated mode updates may keep or restrict permissions, never escalate.
+            permissionState.level = clampAgentModePermissionLevel(permissionState.level, mappedLevel)
+          }
           this.onEvent?.({
             ...event,
             permissionLevel: permissionState.level,
@@ -267,17 +270,28 @@ export class AcpHost {
       = (params.modeId && session.modes.some(m => m.id === params.modeId) ? params.modeId : null)
         ?? mapPermissionLevelToAcpModeId(permissionState.level, session.modes)
 
-    if (targetModeId && targetModeId !== session.currentModeId) {
-      try {
-        await session.setMode(targetModeId)
+    try {
+      if (targetModeId && targetModeId !== session.currentModeId) {
+        try {
+          await session.setMode(targetModeId)
+        }
+        catch {
+          // Keep client-side enforcement even if the agent declines the initial mode switch.
+        }
       }
-      catch {
-        // Keep client-side enforcement even if the agent declines the initial mode switch.
-      }
+    }
+    finally {
+      permissionState.applyingHostMode = false
     }
 
     if (session.currentModelId)
       await this.registry.rememberLastModel(params.agentId, session.currentModelId)
+
+    const effectiveModeId = this.resolveExposedModeId(
+      session.currentModeId,
+      permissionState.level,
+      params.modeId,
+    )
 
     this.onEvent?.({
       type: `session_created`,
@@ -293,10 +307,27 @@ export class AcpHost {
       modelId: session.currentModelId,
       models: session.models,
       modes: session.modes,
-      currentModeId: session.currentModeId,
+      currentModeId: effectiveModeId,
       permissionLevel: permissionState.level,
       commands: session.commands,
     }
+  }
+
+  /**
+   * Expose `currentModeId` only when it was explicitly requested as a custom mode
+   * or maps to the effective `permissionLevel`, preventing an unmapped default mode
+   * (e.g. `build` or `deep_review`) from masking `bypass`/`plan` in the UI picker.
+   */
+  private resolveExposedModeId(
+    currentModeId: string | null,
+    permissionLevel: AcpPermissionLevel,
+    requestedModeId?: string | null,
+  ): string | null {
+    if (!currentModeId)
+      return null
+    if (requestedModeId && currentModeId === requestedModeId)
+      return currentModeId
+    return mapAcpModeIdToPermissionLevel(currentModeId) === permissionLevel ? currentModeId : null
   }
 
   /**
@@ -389,6 +420,7 @@ export class AcpHost {
     if (!managed)
       throw new Error(`Unknown ACP session: ${params.sessionId}`)
 
+    const previousLevel = managed.permissionState.level
     let targetModeId: string | null = null
 
     if (params.permissionLevel) {
@@ -396,17 +428,50 @@ export class AcpHost {
       targetModeId
         = (params.modeId && managed.session.modes.some(m => m.id === params.modeId) ? params.modeId : null)
           ?? mapPermissionLevelToAcpModeId(params.permissionLevel, managed.session.modes)
+
+      if (targetModeId && targetModeId !== managed.session.currentModeId) {
+        managed.permissionState.applyingHostMode = true
+        try {
+          await managed.session.setMode(targetModeId)
+        }
+        catch {
+          // Keep client-side permission policy active when an agent exposes read-only modes.
+        }
+        finally {
+          managed.permissionState.applyingHostMode = false
+        }
+      }
+
+      return {
+        permissionLevel: managed.permissionState.level,
+        modeId: this.resolveExposedModeId(
+          managed.session.currentModeId,
+          managed.permissionState.level,
+          params.modeId,
+        ),
+      }
     }
-    else if (params.modeId) {
+
+    if (params.modeId) {
       const mapped = mapAcpModeIdToPermissionLevel(params.modeId)
       // Default unknown custom modes to `ask` so switching away from `bypass` stays safe.
       managed.permissionState.level = mapped ?? `ask`
       if (managed.session.modes.some(m => m.id === params.modeId))
         targetModeId = params.modeId
-    }
 
-    if (targetModeId && targetModeId !== managed.session.currentModeId) {
-      await managed.session.setMode(targetModeId)
+      if (targetModeId && targetModeId !== managed.session.currentModeId) {
+        managed.permissionState.applyingHostMode = true
+        try {
+          await managed.session.setMode(targetModeId)
+        }
+        catch (error) {
+          managed.permissionState.level = previousLevel
+          throw error
+        }
+        finally {
+          managed.permissionState.applyingHostMode = false
+        }
+      }
     }
 
     return {
