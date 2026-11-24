@@ -140,6 +140,7 @@ export class AcpRegistry {
             : DEFAULT_ACP_SETTINGS.defaultAgentId,
           defaultPermissionLevel: level,
           lastModelByAgent: { ...(parsed.lastModelByAgent ?? {}) },
+          lastThinkingLevelByAgent: { ...(parsed.lastThinkingLevelByAgent ?? {}) },
           customAgents: Array.isArray(parsed.customAgents) ? parsed.customAgents : [],
           commandOverrides: { ...(parsed.commandOverrides ?? {}) },
         }
@@ -183,6 +184,9 @@ export class AcpRegistry {
       lastModelByAgent: patch.lastModelByAgent
         ? { ...this.settings.lastModelByAgent, ...patch.lastModelByAgent }
         : this.settings.lastModelByAgent,
+      lastThinkingLevelByAgent: patch.lastThinkingLevelByAgent
+        ? { ...this.settings.lastThinkingLevelByAgent, ...patch.lastThinkingLevelByAgent }
+        : this.settings.lastThinkingLevelByAgent,
       commandOverrides: patch.commandOverrides
         ? { ...this.settings.commandOverrides, ...patch.commandOverrides }
         : this.settings.commandOverrides,
@@ -201,6 +205,14 @@ export class AcpRegistry {
     if (this.settings.lastModelByAgent[agentId] === modelId)
       return
     this.settings.lastModelByAgent[agentId] = modelId
+    await this.persist()
+  }
+
+  async rememberLastThinkingLevel(agentId: string, level: string): Promise<void> {
+    await this.ensureLoaded()
+    if (this.settings.lastThinkingLevelByAgent[agentId] === level)
+      return
+    this.settings.lastThinkingLevelByAgent[agentId] = level
     await this.persist()
   }
 
@@ -371,6 +383,7 @@ export class AcpRegistry {
     this.settings.customAgents = this.settings.customAgents.filter(a => a.id !== agentId)
     delete this.settings.commandOverrides[agentId]
     delete this.settings.lastModelByAgent[agentId]
+    delete this.settings.lastThinkingLevelByAgent[agentId]
     if (this.settings.defaultAgentId === agentId)
       this.settings.defaultAgentId = `claude`
     this.detectionCache.delete(agentId)

@@ -177,6 +177,7 @@ export class AcpHost {
     await fs.writeFile(articlePath, params.content, `utf8`)
 
     const initialModelId = params.modelId ?? settings.lastModelByAgent[params.agentId] ?? null
+    const initialThinkingLevel = params.thinkingLevel ?? settings.lastThinkingLevelByAgent[params.agentId] ?? null
     const initialLevel: AcpPermissionLevel
       = params.permissionLevel
         ?? mapAcpModeIdToPermissionLevel(params.modeId)
@@ -197,6 +198,7 @@ export class AcpHost {
       env: launch.env,
       pathOverride: this.pathOverride,
       initialModelId,
+      initialThinkingLevel,
       resolveAutoPermission: (toolKind) => {
         return evaluatePermissionPolicy(permissionState.level, toolKind, {
           agentHasPlanMode: agentHasPlanMode(sessionRef.current?.modes ?? []),
@@ -268,11 +270,18 @@ export class AcpHost {
     })
 
     // Feed session capabilities into the persistent probe cache so picker opens skip re-probing.
-    if (session.models.length > 0 || session.modes.length > 0 || session.commands.length > 0) {
+    if (
+      session.models.length > 0
+      || session.modes.length > 0
+      || session.commands.length > 0
+      || session.thinkingOptions.length > 0
+    ) {
       this.probeCache.seed({
         agentId: params.agentId,
         models: session.models,
         currentModelId: session.currentModelId,
+        thinkingOptions: session.thinkingOptions,
+        currentThinkingLevel: session.currentThinkingLevel,
         modes: session.modes,
         currentModeId: session.currentModeId,
         commands: session.commands,
@@ -304,6 +313,8 @@ export class AcpHost {
 
     if (session.currentModelId)
       await this.registry.rememberLastModel(params.agentId, session.currentModelId)
+    if (session.currentThinkingLevel)
+      await this.registry.rememberLastThinkingLevel(params.agentId, session.currentThinkingLevel)
 
     const effectiveModeId = this.resolveExposedModeId(
       session.currentModeId,
@@ -324,6 +335,8 @@ export class AcpHost {
       sessionId,
       modelId: session.currentModelId,
       models: session.models,
+      thinkingLevel: session.currentThinkingLevel,
+      thinkingOptions: session.thinkingOptions,
       modes: session.modes,
       currentModeId: effectiveModeId,
       permissionLevel: permissionState.level,
@@ -419,11 +432,32 @@ export class AcpHost {
     await managed.session.cancel()
   }
 
-  async setModel(params: { sessionId: string, modelId: string }): Promise<{ modelId: string | null }> {
+  async setModel(params: {
+    sessionId: string
+    modelId: string
+    thinkingLevel?: string | null
+  }): Promise<{ modelId: string | null, thinkingLevel: string | null }> {
     const managed = this.sessions.get(params.sessionId)
     if (!managed)
       throw new Error(`Unknown ACP session: ${params.sessionId}`)
-    const result = await managed.session.setModel(params.modelId)
+    const result = await managed.session.setModel(params.modelId, params.thinkingLevel)
+    if (result.modelId)
+      await this.registry.rememberLastModel(managed.session.agentId, result.modelId)
+    if (result.thinkingLevel)
+      await this.registry.rememberLastThinkingLevel(managed.session.agentId, result.thinkingLevel)
+    return result
+  }
+
+  async setThinkingLevel(params: {
+    sessionId: string
+    thinkingLevel: string
+  }): Promise<{ thinkingLevel: string | null, modelId: string | null }> {
+    const managed = this.sessions.get(params.sessionId)
+    if (!managed)
+      throw new Error(`Unknown ACP session: ${params.sessionId}`)
+    const result = await managed.session.setThinkingLevel(params.thinkingLevel)
+    if (result.thinkingLevel)
+      await this.registry.rememberLastThinkingLevel(managed.session.agentId, result.thinkingLevel)
     if (result.modelId)
       await this.registry.rememberLastModel(managed.session.agentId, result.modelId)
     return result

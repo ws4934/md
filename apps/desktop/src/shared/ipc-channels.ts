@@ -19,6 +19,7 @@ export const IPC_CHANNELS = {
   ACP_PROMPT: `md:acp:prompt`,
   ACP_CANCEL_TURN: `md:acp:cancel-turn`,
   ACP_SET_MODEL: `md:acp:set-model`,
+  ACP_SET_THINKING_LEVEL: `md:acp:set-thinking-level`,
   ACP_SET_PERMISSION_MODE: `md:acp:set-permission-mode`,
   ACP_RESPOND_PERMISSION: `md:acp:respond-permission`,
   ACP_CLOSE_SESSION: `md:acp:close-session`,

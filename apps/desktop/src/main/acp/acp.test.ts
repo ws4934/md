@@ -1190,14 +1190,23 @@ describe(`antigravity model preservation, client-side bypass rollback, and auth 
       content: `# Draft`,
     })
 
-    // config_option_update emitted by set_model/set_mode must not clobber availableModels or strip `-low`.
-    expect(started.modelId).toBe(`gemini-3.8-flash-low`)
-    expect(started.models.some(m => m.id === `gemini-3.8-flash-low`)).toBe(true)
+    // Legacy variant IDs resolve onto grouped base models + thinkingLevel, and config_option_update preserves them.
+    expect(started.modelId).toBe(`gemini-3.8-flash`)
+    expect(started.thinkingLevel).toBe(`low`)
+    expect(started.models.map(m => m.id)).toEqual([
+      `gemini-4-neon`,
+      `gemini-3.8-flash`,
+      `claude-sonnet-5-5`,
+      `gpt-oss-120b-medium`,
+    ])
+    expect(started.models.find(m => m.id === `gemini-3.8-flash`)?.thinkingVariantIds?.low).toBe(`gemini-3.8-flash-low`)
+    expect(started.models.find(m => m.id === `gpt-oss-120b-medium`)?.thinkingOptions).toBeUndefined()
     expect(started.permissionLevel).toBe(`bypass`)
     expect(started.currentModeId).toBeNull()
 
     const settings = await host.getSettings()
-    expect(settings.lastModelByAgent[`fake-agy`]).toBe(`gemini-3.8-flash-low`)
+    expect(settings.lastModelByAgent[`fake-agy`]).toBe(`gemini-3.8-flash`)
+    expect(settings.lastThinkingLevelByAgent[`fake-agy`]).toBe(`low`)
 
     // Switching to agy's custom `auto` mode sets client policy to `ask` and exposes `auto`, then back to `bypass` runs on `default`.
     const autoMode = await host.setPermissionMode({ sessionId: started.sessionId, modeId: `auto` })
@@ -1248,5 +1257,258 @@ describe(`antigravity model preservation, client-side bypass rollback, and auth 
         e.type === `mode_changed` && e.modeId === `auto`,
     )
     expect(leftBypassEvent?.permissionLevel).toBe(`ask`)
+  })
+})
+
+describe(`thinking level switching (variants vs configOption) and config_option_update sync`, () => {
+  it(`switches thinking level via variant set_model on agy and codex, falls back on model switch, and remembers last level`, async () => {
+    const dataDir = await makeTempDir(`md-acp-thinking-variants-`)
+    const events: AcpHostEvent[] = []
+    const host = new AcpHost({
+      dataDir,
+      extraBuiltinAgents: [
+        {
+          id: `fake-agy-think`,
+          name: `Fake Agy Think`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_MODEL_STYLE: `agy`,
+            FAKE_AGENT_MODES_STYLE: `agy`,
+            FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `A`, color: `#0F9D8A` },
+        },
+        {
+          id: `fake-agy-push`,
+          name: `Fake Agy Push Thought`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_MODEL_STYLE: `agy`,
+            FAKE_AGENT_MODES_STYLE: `agy`,
+            FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0`,
+            FAKE_AGENT_PUSH_THOUGHT: `low`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `P`, color: `#0F9D8A` },
+        },
+        {
+          id: `fake-codex-think`,
+          name: `Fake Codex Think`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_MODEL_STYLE: `codex`,
+            FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `X`, color: `#3A3A38` },
+        },
+      ],
+      onEvent: ev => events.push(ev),
+    })
+    openHosts.push(host)
+
+    // 1. Agy: start with base model + thinking level -> applies variant via session/set_model.
+    const agy1 = await host.startSession({
+      agentId: `fake-agy-think`,
+      modelId: `gemini-4-neon`,
+      thinkingLevel: `xhigh`,
+      postId: `p1`,
+      postTitle: `Agy Think`,
+      content: `# Draft`,
+    })
+    expect(agy1.modelId).toBe(`gemini-4-neon`)
+    expect(agy1.thinkingLevel).toBe(`xhigh`)
+    expect(agy1.thinkingOptions).toEqual([])
+    expect(agy1.models.find(m => m.id === `gemini-4-neon`)?.thinkingOptions?.map(o => o.id))
+      .toEqual([`low`, `medium`, `high`, `xhigh`])
+
+    // 2. Switching to a model that does not support `xhigh` falls back to `medium`.
+    const switchedToFlash = await host.setModel({
+      sessionId: agy1.sessionId,
+      modelId: `gemini-3.8-flash`,
+    })
+    expect(switchedToFlash).toEqual({ modelId: `gemini-3.8-flash`, thinkingLevel: `medium` })
+
+    // 3. Switching thinking level mid-session sends variant model ID via session/set_model.
+    const switchedToLow = await host.setThinkingLevel({
+      sessionId: agy1.sessionId,
+      thinkingLevel: `low`,
+    })
+    expect(switchedToLow).toEqual({ modelId: `gemini-3.8-flash`, thinkingLevel: `low` })
+
+    // 4. Switching to standalone model without variants clears thinkingLevel to null while keeping remembered level.
+    const switchedToStandalone = await host.setModel({
+      sessionId: agy1.sessionId,
+      modelId: `gpt-oss-120b-medium`,
+    })
+    expect(switchedToStandalone).toEqual({ modelId: `gpt-oss-120b-medium`, thinkingLevel: null })
+
+    // Switch back to flash and confirm wire history used variant set_model (zero set_config_option calls).
+    await host.setModel({
+      sessionId: agy1.sessionId,
+      modelId: `gemini-3.8-flash`,
+      thinkingLevel: `high`,
+    })
+    events.length = 0
+    await host.prompt({
+      sessionId: agy1.sessionId,
+      text: `Confirm wire calls`,
+      content: `# Draft`,
+      postTitle: `Agy Think`,
+    })
+    const agyReply = events
+      .filter((e): e is Extract<AcpHostEvent, { type: `message_chunk` }> => e.type === `message_chunk`)
+      .map(e => e.text)
+      .join(``)
+    expect(agyReply).toContain(`[setModels:gemini-4-neon-xhigh,gemini-3.8-flash-medium,gemini-3.8-flash-low,gpt-oss-120b-medium,gemini-3.8-flash-high]`)
+    expect(agyReply).toContain(`[setConfigs:]`)
+
+    // 5. New session remembers both lastModelByAgent and lastThinkingLevelByAgent (`gemini-3.8-flash` + `high`).
+    const agy2 = await host.startSession({
+      agentId: `fake-agy-think`,
+      postId: `p2`,
+      postTitle: `Agy Remembered`,
+      content: `# Remember`,
+    })
+    expect(agy2.modelId).toBe(`gemini-3.8-flash`)
+    expect(agy2.thinkingLevel).toBe(`high`)
+
+    // 6. Agent-pushed config_option_update updates session thinkingLevel and emits thinking_changed.
+    events.length = 0
+    const agyPush = await host.startSession({
+      agentId: `fake-agy-push`,
+      modelId: `gemini-4-neon`,
+      thinkingLevel: `high`,
+      postId: `p3`,
+      postTitle: `Agy Push`,
+      content: `# Push`,
+    })
+    expect(agyPush.thinkingLevel).toBe(`high`)
+    await host.prompt({
+      sessionId: agyPush.sessionId,
+      text: `Trigger thought update`,
+      content: `# Push`,
+      postTitle: `Agy Push`,
+    })
+    expect(
+      events.some(
+        e => e.type === `thinking_changed` && e.sessionId === agyPush.sessionId && e.thinkingLevel === `low`,
+      ),
+    ).toBe(true)
+
+    // 7. Codex bracket variants (`gpt-6-astra[ultra]` -> `gpt-6-luna[medium]` fallback -> `gpt-6-luna[low]`).
+    const codex = await host.startSession({
+      agentId: `fake-codex-think`,
+      modelId: `gpt-6-astra`,
+      thinkingLevel: `ultra`,
+      postId: `p4`,
+      postTitle: `Codex Think`,
+      content: `# Codex`,
+    })
+    expect(codex.modelId).toBe(`gpt-6-astra`)
+    expect(codex.thinkingLevel).toBe(`ultra`)
+    expect(codex.models.map(m => m.id)).toEqual([`gpt-6-astra`, `gpt-6-luna`])
+    expect(codex.models[0].thinkingOptions?.map(o => o.id)).toEqual([`low`, `medium`, `high`, `xhigh`, `max`, `ultra`])
+
+    const codexSwitched = await host.setModel({
+      sessionId: codex.sessionId,
+      modelId: `gpt-6-luna`,
+    })
+    expect(codexSwitched).toEqual({ modelId: `gpt-6-luna`, thinkingLevel: `medium` })
+
+    const codexLow = await host.setThinkingLevel({
+      sessionId: codex.sessionId,
+      thinkingLevel: `low`,
+    })
+    expect(codexLow).toEqual({ modelId: `gpt-6-luna`, thinkingLevel: `low` })
+
+    events.length = 0
+    await host.prompt({
+      sessionId: codex.sessionId,
+      text: `Verify codex wire`,
+      content: `# Codex`,
+      postTitle: `Codex Think`,
+    })
+    const codexReply = events
+      .filter((e): e is Extract<AcpHostEvent, { type: `message_chunk` }> => e.type === `message_chunk`)
+      .map(e => e.text)
+      .join(``)
+    expect(codexReply).toContain(`[setModels:gpt-6-astra[ultra],gpt-6-luna[medium],gpt-6-luna[low]]`)
+    expect(codexReply).toContain(`[setConfigs:]`)
+  })
+
+  it(`applies thinking level via session/set_config_option when an agent exposes thought_level without model variants`, async () => {
+    const dataDir = await makeTempDir(`md-acp-thinking-config-`)
+    const events: AcpHostEvent[] = []
+    const host = new AcpHost({
+      dataDir,
+      extraBuiltinAgents: [
+        {
+          id: `fake-cfg-thought`,
+          name: `Fake Config Thought`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_MODEL_STYLE: `config_thought`,
+            FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0`,
+            FAKE_AGENT_PUSH_THOUGHT: `low`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `C`, color: `#4C7DF0` },
+        },
+      ],
+      onEvent: ev => events.push(ev),
+    })
+    openHosts.push(host)
+
+    const started = await host.startSession({
+      agentId: `fake-cfg-thought`,
+      modelId: `sonnet-5.5`,
+      thinkingLevel: `high`,
+      postId: `p-cfg`,
+      postTitle: `Config Thought`,
+      content: `# Config`,
+    })
+
+    expect(started.modelId).toBe(`sonnet-5.5`)
+    expect(started.thinkingLevel).toBe(`high`)
+    expect(started.thinkingOptions.map(o => o.id)).toEqual([`low`, `medium`, `high`])
+    expect(started.models[0].thinkingVariantIds).toBeUndefined()
+
+    const switched = await host.setThinkingLevel({
+      sessionId: started.sessionId,
+      thinkingLevel: `medium`,
+    })
+    expect(switched).toEqual({ modelId: `sonnet-5.5`, thinkingLevel: `medium` })
+
+    const settings = await host.getSettings()
+    expect(settings.lastThinkingLevelByAgent[`fake-cfg-thought`]).toBe(`medium`)
+
+    events.length = 0
+    await host.prompt({
+      sessionId: started.sessionId,
+      text: `Verify config option path`,
+      content: `# Config`,
+      postTitle: `Config Thought`,
+    })
+    const reply = events
+      .filter((e): e is Extract<AcpHostEvent, { type: `message_chunk` }> => e.type === `message_chunk`)
+      .map(e => e.text)
+      .join(``)
+    expect(reply).toContain(`[setModels:sonnet-5.5]`)
+    expect(reply).toContain(`[setConfigs:thought_level=high,thought_level=medium]`)
+    expect(
+      events.some(
+        e => e.type === `thinking_changed` && e.sessionId === started.sessionId && e.thinkingLevel === `low`,
+      ),
+    ).toBe(true)
   })
 })

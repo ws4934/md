@@ -19,6 +19,7 @@ import type {
   AcpModelInfo,
   AcpPermissionDecision,
   AcpSlashCommand,
+  AcpThinkingOption,
   AcpToolCallItem,
   AcpToolKind,
 } from '@md/shared/types'
@@ -29,6 +30,11 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { client as createAcpClient, PROTOCOL_VERSION, RequestError } from '@agentclientprotocol/sdk/unstable'
+import {
+  parseVariantModelId,
+  resolveThinkingLevelForModel,
+  resolveWireModelId,
+} from '@md/shared/utils/acp-thinking'
 import { createSafeNdJsonStream } from './ndjson-stream'
 import {
   buildAgentEnv,
@@ -41,6 +47,7 @@ import {
   buildPermissionResponse,
   deriveModelsFromSessionResponse,
   deriveModesFromSessionResponse,
+  deriveThinkingFromConfigOptions,
   findSelectConfigOption,
   isMethodNotFoundError,
   mapPermissionRequest,
@@ -65,6 +72,7 @@ export interface AcpSessionOptions {
   env?: Record<string, string>
   pathOverride?: string
   initialModelId?: string | null
+  initialThinkingLevel?: string | null
   initialModeId?: string | null
   timeouts?: AcpSessionTimeouts
   resolveAutoPermission?: (toolKind: AcpToolKind, title: string) => `allow` | `reject` | `ask`
@@ -168,6 +176,19 @@ export const DEFAULT_CLIENT_CAPABILITIES = {
   terminal: true,
 } as const
 
+function sameThinkingOptions(
+  a: readonly AcpThinkingOption[],
+  b: readonly AcpThinkingOption[],
+): boolean {
+  if (a.length !== b.length)
+    return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id || a[i].name !== b[i].name || a[i].description !== b[i].description)
+      return false
+  }
+  return true
+}
+
 export class AcpSession {
   readonly agentId: string
   private readonly options: AcpSessionOptions
@@ -182,9 +203,14 @@ export class AcpSession {
   private processFailureGuard: { promise: Promise<never>, dispose: () => void } | null = null
 
   private _sessionId: string | null = null
+  private _rawModels: AcpModelInfo[] = []
   private _models: AcpModelInfo[] = []
+  private _hasModelVariants = false
   private _modelSource: `models` | `configOptions` | `none` = `none`
   private _currentModelId: string | null = null
+  private _currentRawModelId: string | null = null
+  private _thinkingOptions: AcpThinkingOption[] = []
+  private _currentThinkingLevel: string | null = null
   private _modes: AcpModeInfo[] = []
   private _modeSource: `modes` | `configOptions` | `none` = `none`
   private _currentModeId: string | null = null
@@ -222,6 +248,18 @@ export class AcpSession {
 
   get currentModelId(): string | null {
     return this._currentModelId
+  }
+
+  get currentRawModelId(): string | null {
+    return this._currentRawModelId
+  }
+
+  get thinkingOptions(): AcpThinkingOption[] {
+    return this._thinkingOptions
+  }
+
+  get currentThinkingLevel(): string | null {
+    return this._currentThinkingLevel
   }
 
   get modes(): AcpModeInfo[] {
@@ -286,14 +324,7 @@ export class AcpSession {
       this.applySessionMetadata(response)
       this.replayEarlyUpdates()
 
-      if (this.options.initialModelId && this.options.initialModelId !== this._currentModelId) {
-        try {
-          await this.setModel(this.options.initialModelId)
-        }
-        catch {
-          // Keep the agent's default model if the remembered model is no longer advertised.
-        }
-      }
+      await this.applyInitialModelAndThinking()
 
       if (this.options.initialModeId && this.options.initialModeId !== this._currentModeId) {
         try {
@@ -391,11 +422,86 @@ export class AcpSession {
     }
   }
 
-  async setModel(modelId: string): Promise<{ modelId: string | null }> {
+  private async applyInitialModelAndThinking(): Promise<void> {
+    const parsedInit = parseVariantModelId(this.options.initialModelId, this._models)
+    const desiredBaseModel = parsedInit.baseModelId
+    const desiredThinking = this.options.initialThinkingLevel ?? parsedInit.thinkingLevel ?? null
+
+    if (this._hasModelVariants) {
+      if (!desiredBaseModel && !desiredThinking)
+        return
+      const targetBaseId = desiredBaseModel ?? this._currentModelId
+      if (!targetBaseId)
+        return
+      const resolved = resolveWireModelId(
+        targetBaseId,
+        desiredThinking ?? this._currentThinkingLevel,
+        this._models,
+      )
+      if (resolved.wireModelId !== this._currentRawModelId) {
+        try {
+          await this.setModel(resolved.baseModelId, resolved.thinkingLevel)
+          return
+        }
+        catch {
+          // Keep the agent's default model if the remembered model is no longer advertised.
+        }
+      }
+      // If a remembered model failed, still honor remembered thinking level on the agent's default model.
+      if (desiredThinking && this._currentModelId && this._currentModelId !== targetBaseId) {
+        const fallback = resolveWireModelId(this._currentModelId, desiredThinking, this._models)
+        if (fallback.wireModelId !== this._currentRawModelId) {
+          try {
+            await this.setModel(fallback.baseModelId, fallback.thinkingLevel)
+          }
+          catch {
+            // Keep agent's default thinking level if unsupported.
+          }
+        }
+      }
+      return
+    }
+
+    if (desiredBaseModel && desiredBaseModel !== this._currentModelId) {
+      try {
+        await this.setModel(desiredBaseModel)
+      }
+      catch {
+        // Keep the agent's default model if the remembered model is no longer advertised.
+      }
+    }
+
+    if (desiredThinking && this._thinkingOptions.length > 0) {
+      const targetLevel = resolveThinkingLevelForModel(this._thinkingOptions, desiredThinking)
+      if (targetLevel && targetLevel !== this._currentThinkingLevel) {
+        try {
+          await this.setThinkingLevel(targetLevel)
+        }
+        catch {
+          // Keep the agent's default thinking level if the requested level is not supported.
+        }
+      }
+    }
+  }
+
+  async setModel(
+    modelId: string,
+    thinkingLevel?: string | null,
+  ): Promise<{ modelId: string | null, thinkingLevel: string | null }> {
     if (!this.connection || !this._sessionId || this.closed)
       throw new Error(`ACP session is not active`)
 
     const modelOption = findSelectConfigOption(this._configOptions, `model`)
+    const parsed = this._hasModelVariants
+      ? parseVariantModelId(modelId, this._models)
+      : { baseModelId: modelId, thinkingLevel: null }
+    const effectiveBaseId = parsed.baseModelId ?? modelId
+    const effectiveDesiredThinking = thinkingLevel !== undefined
+      ? thinkingLevel
+      : (parsed.thinkingLevel ?? this._currentThinkingLevel)
+    const resolved = this._hasModelVariants
+      ? resolveWireModelId(effectiveBaseId, effectiveDesiredThinking, this._models)
+      : { wireModelId: modelId, baseModelId: modelId, thinkingLevel: this._currentThinkingLevel }
 
     // Prefer unstable session/set_model when the agent advertised models via `models`.
     if (this._modelSource === `models` || !modelOption) {
@@ -403,18 +509,45 @@ export class AcpSession {
         await this.runBoundedRequest(
           this.connection.agent.request(`session/set_model`, {
             sessionId: this._sessionId,
-            modelId,
+            modelId: resolved.wireModelId,
           }),
           this.timeouts.sessionNewMs,
           `ACP session/set_model timed out`,
         )
-        this._currentModelId = modelId
-        this.emit({
-          type: `model_changed`,
-          sessionId: this._sessionId,
-          modelId: this._currentModelId,
-        })
-        return { modelId: this._currentModelId }
+        this._currentRawModelId = resolved.wireModelId
+        if (this._currentModelId !== resolved.baseModelId) {
+          this._currentModelId = resolved.baseModelId
+          this.emit({
+            type: `model_changed`,
+            sessionId: this._sessionId,
+            modelId: this._currentModelId,
+          })
+        }
+        if (this._hasModelVariants) {
+          if (this._currentThinkingLevel !== resolved.thinkingLevel) {
+            this._currentThinkingLevel = resolved.thinkingLevel
+            this.emit({
+              type: `thinking_changed`,
+              sessionId: this._sessionId,
+              thinkingLevel: this._currentThinkingLevel,
+            })
+          }
+        }
+        else if (thinkingLevel !== undefined && this._thinkingOptions.length > 0) {
+          const nextLevel = resolveThinkingLevelForModel(
+            this._thinkingOptions,
+            thinkingLevel ?? this._currentThinkingLevel,
+          )
+          if (nextLevel && nextLevel !== this._currentThinkingLevel) {
+            try {
+              await this.setThinkingLevel(nextLevel)
+            }
+            catch {
+              // Keep agent's current thinking level if setting via configOption fails.
+            }
+          }
+        }
+        return { modelId: this._currentModelId, thinkingLevel: this._currentThinkingLevel }
       }
       catch (error) {
         if (!modelOption || !isMethodNotFoundError(error))
@@ -430,32 +563,101 @@ export class AcpSession {
       this.connection.agent.request(`session/set_config_option`, {
         sessionId: this._sessionId,
         configId: modelOption.id,
-        value: modelId,
+        value: resolved.baseModelId,
       }),
       this.timeouts.sessionNewMs,
       `ACP session/set_config_option timed out`,
     )
 
     if (response?.configOptions) {
-      this._configOptions = response.configOptions
-      const derived = deriveModelsFromSessionResponse({
-        sessionId: this._sessionId,
-        configOptions: response.configOptions,
-      })
-      if (derived.models.length > 0)
-        this._models = derived.models
-      this._currentModelId = derived.currentModelId ?? modelId
+      this.syncFromConfigOptions(response.configOptions)
     }
-    else {
-      this._currentModelId = modelId
+    else if (this._currentModelId !== resolved.baseModelId) {
+      this._currentModelId = resolved.baseModelId
+      this._currentRawModelId = resolved.wireModelId
+      this.emit({
+        type: `model_changed`,
+        sessionId: this._sessionId,
+        modelId: this._currentModelId,
+      })
     }
 
-    this.emit({
-      type: `model_changed`,
-      sessionId: this._sessionId,
-      modelId: this._currentModelId,
-    })
-    return { modelId: this._currentModelId }
+    if (!this._hasModelVariants && this._thinkingOptions.length > 0) {
+      const nextLevel = resolveThinkingLevelForModel(
+        this._thinkingOptions,
+        thinkingLevel ?? this._currentThinkingLevel,
+      )
+      if (nextLevel && nextLevel !== this._currentThinkingLevel) {
+        try {
+          await this.setThinkingLevel(nextLevel)
+        }
+        catch {
+          // Keep agent's current thinking level if configOption rejects it.
+        }
+      }
+    }
+
+    return { modelId: this._currentModelId, thinkingLevel: this._currentThinkingLevel }
+  }
+
+  async setThinkingLevel(
+    level: string,
+  ): Promise<{ thinkingLevel: string | null, modelId: string | null }> {
+    if (!this.connection || !this._sessionId || this.closed)
+      throw new Error(`ACP session is not active`)
+
+    const activeModel = this._currentModelId
+      ? this._models.find(m => m.id === this._currentModelId)
+      : undefined
+
+    // Data-driven: prefer per-model variant switching when the active model defines effort variants.
+    if (activeModel?.thinkingVariantIds && Object.keys(activeModel.thinkingVariantIds).length > 0) {
+      const normalized = level.trim().toLowerCase()
+      const matched = activeModel.thinkingOptions?.find(opt => opt.id.toLowerCase() === normalized)
+      const targetLevel = matched?.id ?? level
+      if (!activeModel.thinkingVariantIds[targetLevel])
+        throw new Error(`Thinking level "${level}" is not supported by model "${activeModel.id}"`)
+      const result = await this.setModel(activeModel.id, targetLevel)
+      return { thinkingLevel: result.thinkingLevel, modelId: result.modelId }
+    }
+
+    const thoughtOption = findSelectConfigOption(this._configOptions, `thought_level`)
+    if (!thoughtOption)
+      throw new Error(`Agent does not expose thinking level selection`)
+
+    const response = await this.runBoundedRequest(
+      this.connection.agent.request(`session/set_config_option`, {
+        sessionId: this._sessionId,
+        configId: thoughtOption.id,
+        value: level,
+      }),
+      this.timeouts.sessionNewMs,
+      `ACP session/set_config_option timed out`,
+    )
+
+    if (response?.configOptions) {
+      this.syncFromConfigOptions(response.configOptions)
+      if (this._currentThinkingLevel === null) {
+        this._currentThinkingLevel = level
+        this.emit({
+          type: `thinking_changed`,
+          sessionId: this._sessionId,
+          thinkingLevel: this._currentThinkingLevel,
+          thinkingOptions: this._hasModelVariants ? undefined : this._thinkingOptions,
+        })
+      }
+    }
+    else if (this._currentThinkingLevel !== level) {
+      this._currentThinkingLevel = level
+      this.emit({
+        type: `thinking_changed`,
+        sessionId: this._sessionId,
+        thinkingLevel: this._currentThinkingLevel,
+        thinkingOptions: this._hasModelVariants ? undefined : this._thinkingOptions,
+      })
+    }
+
+    return { thinkingLevel: this._currentThinkingLevel, modelId: this._currentModelId }
   }
 
   async setMode(modeId: string): Promise<{ modeId: string | null }> {
@@ -717,14 +919,138 @@ export class AcpSession {
   private applySessionMetadata(response: ExtendedNewSessionResponse): void {
     this._configOptions = response.configOptions ?? []
     const modelState = deriveModelsFromSessionResponse(response)
+    this._rawModels = modelState.rawModels
     this._models = modelState.models
+    this._hasModelVariants = modelState.hasVariants
     this._currentModelId = modelState.currentModelId
+    this._currentRawModelId = modelState.currentRawModelId
+    this._thinkingOptions = modelState.thinkingOptions
+    this._currentThinkingLevel = modelState.currentThinkingLevel
     this._modelSource = modelState.source
 
     const modeState = deriveModesFromSessionResponse(response)
     this._modes = modeState.modes
     this._currentModeId = modeState.currentModeId
     this._modeSource = modeState.source
+  }
+
+  private syncFromConfigOptions(configOptions: SessionConfigOption[]): void {
+    if (!this._sessionId)
+      return
+
+    this._configOptions = configOptions
+    const thoughtState = deriveThinkingFromConfigOptions(configOptions)
+
+    if (this._modelSource === `models`) {
+      const resolvedRaw = resolveCurrentModelFromConfigOptions(
+        configOptions,
+        this._rawModels,
+        this._currentRawModelId,
+      )
+      this._currentRawModelId = resolvedRaw
+
+      if (this._hasModelVariants) {
+        const parsed = parseVariantModelId(resolvedRaw, this._models)
+        const nextBaseId = parsed.baseModelId
+        const baseModel = nextBaseId ? this._models.find(m => m.id === nextBaseId) : undefined
+        const nextThinking = baseModel?.thinkingVariantIds
+          ? (parsed.thinkingLevel ?? thoughtState.currentLevel ?? baseModel.defaultThinkingLevel ?? null)
+          : null
+
+        if (nextBaseId !== this._currentModelId) {
+          this._currentModelId = nextBaseId
+          this.emit({
+            type: `model_changed`,
+            sessionId: this._sessionId,
+            modelId: this._currentModelId,
+          })
+        }
+        if (nextThinking !== this._currentThinkingLevel) {
+          this._currentThinkingLevel = nextThinking
+          this.emit({
+            type: `thinking_changed`,
+            sessionId: this._sessionId,
+            thinkingLevel: this._currentThinkingLevel,
+          })
+        }
+      }
+      else {
+        if (resolvedRaw !== this._currentModelId) {
+          this._currentModelId = resolvedRaw
+          this.emit({
+            type: `model_changed`,
+            sessionId: this._sessionId,
+            modelId: this._currentModelId,
+          })
+        }
+        const optionsChanged = !sameThinkingOptions(this._thinkingOptions, thoughtState.options)
+        const levelChanged = thoughtState.currentLevel !== this._currentThinkingLevel
+        if (optionsChanged)
+          this._thinkingOptions = thoughtState.options
+        if (levelChanged)
+          this._currentThinkingLevel = thoughtState.currentLevel
+        if (optionsChanged || levelChanged) {
+          this.emit({
+            type: `thinking_changed`,
+            sessionId: this._sessionId,
+            thinkingLevel: this._currentThinkingLevel,
+            thinkingOptions: this._thinkingOptions,
+          })
+        }
+      }
+    }
+    else {
+      const derived = deriveModelsFromSessionResponse({
+        sessionId: this._sessionId,
+        configOptions,
+      })
+      if (derived.models.length > 0) {
+        this._rawModels = derived.rawModels
+        this._models = derived.models
+        this._hasModelVariants = derived.hasVariants
+        this._modelSource = derived.source
+      }
+      this._currentRawModelId = derived.currentRawModelId
+      if (derived.currentModelId !== this._currentModelId) {
+        this._currentModelId = derived.currentModelId
+        this.emit({
+          type: `model_changed`,
+          sessionId: this._sessionId,
+          modelId: this._currentModelId,
+        })
+      }
+      const optionsChanged = !sameThinkingOptions(this._thinkingOptions, derived.thinkingOptions)
+      const levelChanged = derived.currentThinkingLevel !== this._currentThinkingLevel
+      if (optionsChanged)
+        this._thinkingOptions = derived.thinkingOptions
+      if (levelChanged)
+        this._currentThinkingLevel = derived.currentThinkingLevel
+      if (optionsChanged || levelChanged) {
+        this.emit({
+          type: `thinking_changed`,
+          sessionId: this._sessionId,
+          thinkingLevel: this._currentThinkingLevel,
+          thinkingOptions: this._hasModelVariants ? undefined : this._thinkingOptions,
+        })
+      }
+    }
+
+    const derivedModes = deriveModesFromSessionResponse({
+      sessionId: this._sessionId,
+      configOptions,
+    })
+    if (this._modeSource !== `modes` && derivedModes.modes.length > 0) {
+      this._modes = derivedModes.modes
+      this._modeSource = derivedModes.source
+    }
+    if (derivedModes.currentModeId !== null && derivedModes.currentModeId !== this._currentModeId) {
+      this._currentModeId = derivedModes.currentModeId
+      this.emit({
+        type: `mode_changed`,
+        sessionId: this._sessionId,
+        modeId: this._currentModeId,
+      })
+    }
   }
 
   private replayEarlyUpdates(): void {
@@ -820,58 +1146,7 @@ export class AcpSession {
         break
       }
       case `config_option_update`: {
-        this._configOptions = update.configOptions
-        if (this._modelSource === `models`) {
-          // Keep `models.availableModels` intact when `configOptions` exposes split base model + thought_level.
-          const resolvedModelId = resolveCurrentModelFromConfigOptions(
-            update.configOptions,
-            this._models,
-            this._currentModelId,
-          )
-          if (resolvedModelId !== this._currentModelId) {
-            this._currentModelId = resolvedModelId
-            this.emit({
-              type: `model_changed`,
-              sessionId: this._sessionId,
-              modelId: this._currentModelId,
-            })
-          }
-        }
-        else {
-          const derived = deriveModelsFromSessionResponse({
-            sessionId: this._sessionId,
-            configOptions: update.configOptions,
-          })
-          if (derived.models.length > 0) {
-            this._models = derived.models
-            this._modelSource = derived.source
-          }
-          if (derived.currentModelId !== this._currentModelId) {
-            this._currentModelId = derived.currentModelId
-            this.emit({
-              type: `model_changed`,
-              sessionId: this._sessionId,
-              modelId: this._currentModelId,
-            })
-          }
-        }
-
-        const derivedModes = deriveModesFromSessionResponse({
-          sessionId: this._sessionId,
-          configOptions: update.configOptions,
-        })
-        if (this._modeSource !== `modes` && derivedModes.modes.length > 0) {
-          this._modes = derivedModes.modes
-          this._modeSource = derivedModes.source
-        }
-        if (derivedModes.currentModeId !== null && derivedModes.currentModeId !== this._currentModeId) {
-          this._currentModeId = derivedModes.currentModeId
-          this.emit({
-            type: `mode_changed`,
-            sessionId: this._sessionId,
-            modeId: this._currentModeId,
-          })
-        }
+        this.syncFromConfigOptions(update.configOptions)
         break
       }
       case `current_mode_update`: {

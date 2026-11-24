@@ -25,11 +25,19 @@ const emitAllToolKinds = process.env.FAKE_AGENT_ALL_TOOL_KINDS === `1`
 const stringifyIds = process.env.FAKE_AGENT_STRINGIFY_IDS === `1`
 const directWriteWithoutEditTool = process.env.FAKE_AGENT_DIRECT_WRITE_ONLY === `1`
 const pushModeUpdate = process.env.FAKE_AGENT_PUSH_MODE || ``
+const pushThoughtUpdate = process.env.FAKE_AGENT_PUSH_THOUGHT || ``
 
 const SESSION_ID = `fake_sess_01`
-let currentModelId = `opus-5.5`
+let currentModelId = modelStyle === `agy`
+  ? `gemini-4-neon-high`
+  : modelStyle === `codex`
+    ? `gpt-6-astra[xhigh]`
+    : `opus-5.5`
+let currentThoughtLevel = `medium`
 let currentModeId = process.env.FAKE_AGENT_INITIAL_MODE || `default`
 const modeHistory = []
+const setModelHistory = []
+const setConfigHistory = []
 let currentCwd = process.cwd()
 let nextClientRequestId = 1000
 const pendingClientRequests = new Map()
@@ -154,13 +162,32 @@ function buildModelsMetadata() {
   if (modelStyle === `agy`) {
     const agyAvailable = [
       { modelId: `gemini-4-neon-high`, name: `Gemini 4 Neon (High)` },
+      { modelId: `gemini-4-neon-xhigh`, name: `Gemini 4 Neon (XHigh)` },
+      { modelId: `gemini-4-neon-medium`, name: `Gemini 4 Neon (Medium)` },
+      { modelId: `gemini-4-neon-low`, name: `Gemini 4 Neon (Low)` },
       { modelId: `gemini-3.8-flash-high`, name: `Gemini 3.8 Flash (High)` },
+      { modelId: `gemini-3.8-flash-medium`, name: `Gemini 3.8 Flash (Medium)` },
       { modelId: `gemini-3.8-flash-low`, name: `Gemini 3.8 Flash (Low)` },
       { modelId: `claude-sonnet-5-5`, name: `Claude Sonnet 5.5` },
+      { modelId: `gpt-oss-120b-medium`, name: `GPT-OSS 120B (Medium)` },
     ]
-    const splitMatch = /^(.*)-(low|medium|high)$/.exec(currentModelId)
-    const baseModel = splitMatch && !currentModelId.startsWith(`claude-`) ? splitMatch[1] : currentModelId
-    const thoughtLevel = splitMatch && !currentModelId.startsWith(`claude-`) ? splitMatch[2] : `high`
+    const splitMatch = /^(gemini-4-neon|gemini-3\.8-flash)-(low|medium|high|xhigh)$/.exec(currentModelId)
+    const baseModel = splitMatch ? splitMatch[1] : currentModelId
+    const thoughtLevel = splitMatch ? splitMatch[2] : null
+    const levelsForModel = baseModel === `gemini-4-neon`
+      ? [
+          { value: `low`, name: `Low` },
+          { value: `medium`, name: `Medium` },
+          { value: `high`, name: `High` },
+          { value: `xhigh`, name: `XHigh` },
+        ]
+      : baseModel === `gemini-3.8-flash`
+        ? [
+            { value: `low`, name: `Low` },
+            { value: `medium`, name: `Medium` },
+            { value: `high`, name: `High` },
+          ]
+        : []
     const agyConfigOptions = [
       {
         id: `model`,
@@ -172,20 +199,19 @@ function buildModelsMetadata() {
           { value: `gemini-4-neon`, name: `Gemini 4 Neon` },
           { value: `gemini-3.8-flash`, name: `Gemini 3.8 Flash` },
           { value: `claude-sonnet-5-5`, name: `Claude Sonnet 5.5` },
+          { value: `gpt-oss-120b-medium`, name: `GPT-OSS 120B (Medium)` },
         ],
       },
-      {
-        id: `thought_level`,
-        name: `Thinking Level`,
-        category: `thought_level`,
-        type: `select`,
-        currentValue: thoughtLevel,
-        options: [
-          { value: `low`, name: `Low` },
-          { value: `medium`, name: `Medium` },
-          { value: `high`, name: `High` },
-        ],
-      },
+      ...(levelsForModel.length > 0 && thoughtLevel
+        ? [{
+            id: `thought_level`,
+            name: `Thinking Level`,
+            category: `thought_level`,
+            type: `select`,
+            currentValue: thoughtLevel,
+            options: levelsForModel,
+          }]
+        : []),
       ...(modeEntries.length > 0
         ? [{
             id: `mode`,
@@ -205,6 +231,75 @@ function buildModelsMetadata() {
       models: { currentModelId, availableModels: agyAvailable },
       ...modesField,
       configOptions: agyConfigOptions,
+    }
+  }
+  if (modelStyle === `codex`) {
+    const codexAvailable = [
+      { modelId: `gpt-6-astra[low]`, name: `6 Astra (low)` },
+      { modelId: `gpt-6-astra[medium]`, name: `6 Astra (medium)` },
+      { modelId: `gpt-6-astra[high]`, name: `6 Astra (high)` },
+      { modelId: `gpt-6-astra[xhigh]`, name: `6 Astra (xhigh)` },
+      { modelId: `gpt-6-astra[max]`, name: `6 Astra (max)` },
+      { modelId: `gpt-6-astra[ultra]`, name: `6 Astra (ultra)` },
+      { modelId: `gpt-6-luna[low]`, name: `6 Luna (low)` },
+      { modelId: `gpt-6-luna[medium]`, name: `6 Luna (medium)` },
+      { modelId: `gpt-6-luna[high]`, name: `6 Luna (high)` },
+      { modelId: `gpt-6-luna[xhigh]`, name: `6 Luna (xhigh)` },
+      { modelId: `gpt-6-luna[max]`, name: `6 Luna (max)` },
+    ]
+    const match = /^(.+)\[([a-z]+)\]$/.exec(currentModelId)
+    const baseModel = match ? match[1] : `gpt-6-astra`
+    const effort = match ? match[2] : `xhigh`
+    const codexLevels = baseModel === `gpt-6-luna`
+      ? [`low`, `medium`, `high`, `xhigh`, `max`]
+      : [`low`, `medium`, `high`, `xhigh`, `max`, `ultra`]
+    const codexConfigOptions = [
+      {
+        id: `model`,
+        name: `Model`,
+        category: `model`,
+        type: `select`,
+        currentValue: baseModel,
+        options: [
+          { value: `gpt-6-astra`, name: `6 Astra`, description: `Flagship model` },
+          { value: `gpt-6-luna`, name: `6 Luna`, description: `Fast model` },
+        ],
+      },
+      {
+        id: `reasoning_effort`,
+        name: `Reasoning Effort`,
+        category: `thought_level`,
+        type: `select`,
+        currentValue: effort,
+        options: codexLevels.map(level => ({ value: level, name: level.toUpperCase() })),
+      },
+    ]
+    return {
+      models: { currentModelId, availableModels: codexAvailable },
+      ...modesField,
+      configOptions: codexConfigOptions,
+    }
+  }
+  if (modelStyle === `config_thought`) {
+    const thoughtConfigOptions = [
+      ...configOptions,
+      {
+        id: `thought_level`,
+        name: `Thinking Level`,
+        category: `thought_level`,
+        type: `select`,
+        currentValue: currentThoughtLevel,
+        options: [
+          { value: `low`, name: `Low`, description: `Faster` },
+          { value: `medium`, name: `Medium`, description: `Balanced` },
+          { value: `high`, name: `High`, description: `Thorough` },
+        ],
+      },
+    ]
+    return {
+      models: { currentModelId, availableModels: modelEntries },
+      ...modesField,
+      configOptions: thoughtConfigOptions,
     }
   }
   if (modelStyle === `configOptions`)
@@ -407,6 +502,22 @@ async function handlePrompt(id, params) {
     })
   }
 
+  if (pushThoughtUpdate) {
+    if (modelStyle === `agy`) {
+      const splitMatch = /^(gemini-4-neon|gemini-3\.8-flash)-/.exec(currentModelId)
+      if (splitMatch)
+        currentModelId = `${splitMatch[1]}-${pushThoughtUpdate}`
+    }
+    else {
+      currentThoughtLevel = pushThoughtUpdate
+    }
+    const meta = buildModelsMetadata()
+    sendUpdate({
+      sessionUpdate: `config_option_update`,
+      configOptions: meta.configOptions ?? [],
+    })
+  }
+
   sendUpdate({
     sessionUpdate: `plan`,
     entries: [
@@ -420,6 +531,16 @@ async function handlePrompt(id, params) {
     sendUpdate({
       sessionUpdate: `agent_message_chunk`,
       content: { type: `text`, text: `\n\n[modes:${modeHistory.join(`,`)}]` },
+    })
+  }
+
+  if (setModelHistory.length > 0 || setConfigHistory.length > 0) {
+    sendUpdate({
+      sessionUpdate: `agent_message_chunk`,
+      content: {
+        type: `text`,
+        text: `\n\n[setModels:${setModelHistory.join(`,`)}][setConfigs:${setConfigHistory.join(`,`)}]`,
+      },
     })
   }
 
@@ -520,6 +641,7 @@ async function handleRequest(msg) {
         return
       }
       currentModelId = params.modelId
+      setModelHistory.push(params.modelId)
       if (modelStyle === `agy`) {
         const meta = buildModelsMetadata()
         sendUpdate({
@@ -556,8 +678,11 @@ async function handleRequest(msg) {
       return
     }
     case `session/set_config_option`: {
+      setConfigHistory.push(`${params.configId}=${params.value}`)
       if (params.configId === `model`)
         currentModelId = params.value
+      if (params.configId === `thought_level` || params.configId === `reasoning_effort`)
+        currentThoughtLevel = params.value
       if (params.configId === `mode`) {
         currentModeId = params.value
         modeHistory.push(params.value)

@@ -9,6 +9,13 @@ const COMMAND_QUIET_WINDOW_MS = 600
 const COMMAND_POLL_MS = 25
 const MAX_COMMAND_WAIT_MS = 1_500
 const DEFAULT_PROBE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+// Bump when cached probe metadata changes shape so stale ungrouped entries refresh automatically.
+const PROBE_CACHE_SCHEMA_VERSION = 2
+
+interface PersistedProbeCache {
+  schemaVersion: number
+  entries: Record<string, AcpProbeResult>
+}
 
 export interface ProbeAgentOptions {
   agentId: string
@@ -71,6 +78,8 @@ export async function probeAcpAgent(options: ProbeAgentOptions): Promise<AcpProb
       agentId: options.agentId,
       models: session.models,
       currentModelId: session.currentModelId,
+      thinkingOptions: session.thinkingOptions,
+      currentThinkingLevel: session.currentThinkingLevel,
       modes: session.modes,
       currentModeId: session.currentModeId,
       commands: session.commands,
@@ -115,9 +124,15 @@ export class ProbeCache {
     this.loadPromise ??= (async () => {
       try {
         const raw = await fs.readFile(this.cachePath!, `utf8`)
-        const parsed = JSON.parse(raw) as Record<string, AcpProbeResult>
-        if (parsed && typeof parsed === `object`) {
-          for (const [agentId, entry] of Object.entries(parsed)) {
+        const parsed = JSON.parse(raw) as Partial<PersistedProbeCache>
+        if (
+          parsed
+          && typeof parsed === `object`
+          && parsed.schemaVersion === PROBE_CACHE_SCHEMA_VERSION
+          && parsed.entries
+          && typeof parsed.entries === `object`
+        ) {
+          for (const [agentId, entry] of Object.entries(parsed.entries)) {
             if (entry && typeof entry === `object` && this.isFresh(entry) && !this.cache.has(agentId))
               this.cache.set(agentId, entry)
           }
@@ -138,10 +153,14 @@ export class ProbeCache {
       return
     const targetPath = this.cachePath
     this.persistChain = this.persistChain.then(async () => {
-      const payload: Record<string, AcpProbeResult> = {}
+      const entries: Record<string, AcpProbeResult> = {}
       for (const [agentId, entry] of this.cache.entries()) {
         if (this.isFresh(entry))
-          payload[agentId] = entry
+          entries[agentId] = entry
+      }
+      const payload: PersistedProbeCache = {
+        schemaVersion: PROBE_CACHE_SCHEMA_VERSION,
+        entries,
       }
       await fs.mkdir(path.dirname(targetPath), { recursive: true })
       const tmpPath = `${targetPath}.${randomUUID()}.tmp`
@@ -167,6 +186,10 @@ export class ProbeCache {
       agentId: result.agentId,
       models: result.models.length > 0 ? result.models : (prev?.models ?? []),
       currentModelId: result.currentModelId ?? prev?.currentModelId ?? null,
+      thinkingOptions: result.thinkingOptions !== undefined ? result.thinkingOptions : prev?.thinkingOptions,
+      currentThinkingLevel: result.currentThinkingLevel !== undefined
+        ? result.currentThinkingLevel
+        : (prev?.currentThinkingLevel ?? null),
       modes: result.modes.length > 0 ? result.modes : (prev?.modes ?? []),
       currentModeId: result.currentModeId ?? prev?.currentModeId ?? null,
       commands: result.commands.length > 0 ? result.commands : (prev?.commands ?? []),

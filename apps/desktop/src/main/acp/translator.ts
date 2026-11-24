@@ -19,10 +19,16 @@ import type {
   AcpPermissionDecision,
   AcpPermissionRequest,
   AcpPlanEntry,
+  AcpThinkingOption,
   AcpToolCallItem,
   AcpToolKind,
   AcpToolStatus,
 } from '@md/shared/types'
+import {
+  groupVariantModels,
+  parseVariantModelId,
+  sortThinkingOptions,
+} from '@md/shared/utils/acp-thinking'
 import { computeCompactDiff } from '@md/shared/utils/compact-diff'
 
 export interface UnstableSessionModelState {
@@ -154,44 +160,153 @@ export function resolveCurrentModelFromConfigOptions(
   return currentModelId
 }
 
+export function deriveThinkingFromConfigOptions(
+  configOptions: SessionConfigOption[] | null | undefined,
+): {
+  configId: string | null
+  options: AcpThinkingOption[]
+  currentLevel: string | null
+} {
+  const thoughtOption = findSelectConfigOption(configOptions, `thought_level`)
+  if (!thoughtOption)
+    return { configId: null, options: [], currentLevel: null }
+
+  const flat = flattenSelectConfigOptions(thoughtOption.options)
+  const options = sortThinkingOptions(flat.map(opt => ({
+    id: opt.value,
+    name: opt.name || opt.value,
+    ...(opt.description ? { description: opt.description } : {}),
+  })))
+
+  return {
+    configId: thoughtOption.id,
+    options,
+    currentLevel: thoughtOption.currentValue?.trim() || null,
+  }
+}
+
 export function deriveModelsFromSessionResponse(response: ExtendedNewSessionResponse): {
   models: AcpModelInfo[]
+  rawModels: AcpModelInfo[]
+  hasVariants: boolean
   currentModelId: string | null
+  currentRawModelId: string | null
+  currentThinkingLevel: string | null
+  thinkingOptions: AcpThinkingOption[]
+  thinkingConfigId: string | null
   source: `models` | `configOptions` | `none`
 } {
+  const thoughtState = deriveThinkingFromConfigOptions(response.configOptions)
+  const modelConfig = findSelectConfigOption(response.configOptions, `model`)
+  const configModelOptions = modelConfig ? flattenSelectConfigOptions(modelConfig.options) : undefined
+
   if (response.models?.availableModels?.length) {
-    const currentModelId = response.models.currentModelId ?? null
+    const rawCurrentModelId = response.models.currentModelId ?? null
+    const rawModels: AcpModelInfo[] = response.models.availableModels.map(m => ({
+      id: m.modelId,
+      name: m.name || m.modelId,
+      description: m.description ?? undefined,
+      isDefault: rawCurrentModelId === m.modelId,
+    }))
+
+    const grouped = groupVariantModels({
+      rawModels,
+      configModelOptions,
+      thoughtConfigOptions: thoughtState.options,
+    })
+
+    if (grouped.hasVariants) {
+      const parsed = parseVariantModelId(rawCurrentModelId, grouped.models)
+      const currentModel = parsed.baseModelId
+        ? grouped.models.find(m => m.id === parsed.baseModelId)
+        : undefined
+      const currentThinkingLevel = currentModel?.thinkingVariantIds
+        ? (parsed.thinkingLevel ?? thoughtState.currentLevel ?? currentModel.defaultThinkingLevel ?? null)
+        : null
+      return {
+        models: grouped.models,
+        rawModels,
+        hasVariants: true,
+        currentModelId: parsed.baseModelId,
+        currentRawModelId: rawCurrentModelId,
+        currentThinkingLevel,
+        // Per-model variant lists are authoritative; never leak another model's configOption list.
+        thinkingOptions: [],
+        thinkingConfigId: thoughtState.configId,
+        source: `models`,
+      }
+    }
+
     return {
-      models: response.models.availableModels.map(m => ({
-        id: m.modelId,
-        name: m.name || m.modelId,
-        description: m.description ?? undefined,
-        isDefault: currentModelId === m.modelId,
-      })),
-      currentModelId,
+      models: grouped.models,
+      rawModels,
+      hasVariants: false,
+      currentModelId: rawCurrentModelId,
+      currentRawModelId: rawCurrentModelId,
+      currentThinkingLevel: thoughtState.currentLevel,
+      thinkingOptions: thoughtState.options,
+      thinkingConfigId: thoughtState.configId,
       source: `models`,
     }
   }
 
-  const modelConfig = findSelectConfigOption(response.configOptions, `model`)
-  if (modelConfig) {
-    const flat = flattenSelectConfigOptions(modelConfig.options)
-    const currentModelId = modelConfig.currentValue || null
+  if (modelConfig && configModelOptions) {
+    const rawCurrentModelId = modelConfig.currentValue || null
+    const rawModels: AcpModelInfo[] = configModelOptions.map(opt => ({
+      id: opt.value,
+      name: opt.name || opt.value,
+      description: opt.description ?? undefined,
+      isDefault: rawCurrentModelId === opt.value,
+    }))
+
+    const grouped = groupVariantModels({
+      rawModels,
+      thoughtConfigOptions: thoughtState.options,
+    })
+
+    if (grouped.hasVariants) {
+      const parsed = parseVariantModelId(rawCurrentModelId, grouped.models)
+      const currentModel = parsed.baseModelId
+        ? grouped.models.find(m => m.id === parsed.baseModelId)
+        : undefined
+      const currentThinkingLevel = currentModel?.thinkingVariantIds
+        ? (parsed.thinkingLevel ?? thoughtState.currentLevel ?? currentModel.defaultThinkingLevel ?? null)
+        : null
+      return {
+        models: grouped.models,
+        rawModels,
+        hasVariants: true,
+        currentModelId: parsed.baseModelId,
+        currentRawModelId: rawCurrentModelId,
+        currentThinkingLevel,
+        thinkingOptions: [],
+        thinkingConfigId: thoughtState.configId,
+        source: `configOptions`,
+      }
+    }
+
     return {
-      models: flat.map(opt => ({
-        id: opt.value,
-        name: opt.name || opt.value,
-        description: opt.description ?? undefined,
-        isDefault: currentModelId === opt.value,
-      })),
-      currentModelId,
+      models: grouped.models,
+      rawModels,
+      hasVariants: false,
+      currentModelId: rawCurrentModelId,
+      currentRawModelId: rawCurrentModelId,
+      currentThinkingLevel: thoughtState.currentLevel,
+      thinkingOptions: thoughtState.options,
+      thinkingConfigId: thoughtState.configId,
       source: `configOptions`,
     }
   }
 
   return {
     models: [],
+    rawModels: [],
+    hasVariants: false,
     currentModelId: null,
+    currentRawModelId: null,
+    currentThinkingLevel: thoughtState.currentLevel,
+    thinkingOptions: thoughtState.options,
+    thinkingConfigId: thoughtState.configId,
     source: `none`,
   }
 }
