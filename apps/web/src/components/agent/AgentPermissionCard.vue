@@ -48,6 +48,10 @@ const diff = computed(() =>
 
 const shortPath = computed(() => formatShortFilePath(props.request.filePath, props.request.title))
 const codeBody = computed(() => props.request.command || props.request.filePath || props.request.detail || props.request.title)
+const hasAllowOnceOption = computed(
+  () => props.request.options.length === 0
+    || props.request.options.some(opt => opt.kind === `allow_once` || (opt.kind.startsWith(`allow`) && opt.kind !== `allow_always`)),
+)
 
 const resolvedLabel = computed(() => {
   switch (props.resolvedOutcome) {
@@ -139,6 +143,7 @@ const resolvedLabel = computed(() => {
 
     <div v-if="!resolvedOutcome" class="flex items-center gap-2">
       <button
+        v-if="hasAllowOnceOption"
         type="button"
         class="inline-flex h-[30px] cursor-pointer items-center justify-center rounded-lg px-3 text-[12.5px] font-semibold transition-opacity hover:opacity-90"
         style="background-color: var(--dt-ink); color: var(--dt-on-ink)"

@@ -42,9 +42,11 @@ import {
   deriveModelsFromSessionResponse,
   deriveModesFromSessionResponse,
   findSelectConfigOption,
+  isMethodNotFoundError,
   mapPermissionRequest,
   mapPlanToEntries,
   mergeToolCallSnapshot,
+  resolveCurrentModelFromConfigOptions,
   selectAutoAcceptOption,
 } from './translator'
 
@@ -155,6 +157,7 @@ const DEFAULT_TIMEOUTS: Required<AcpSessionTimeouts> = {
 }
 
 const DEFAULT_TERMINAL_MAX_BYTES = 256 * 1024
+const MAX_TRACKED_TOOL_CALLS = 500
 
 export const DEFAULT_CLIENT_CAPABILITIES = {
   // Let the CLI read and write disk directly, matching Paseo's ACP defaults.
@@ -173,6 +176,7 @@ export class AcpSession {
   private child: ChildProcessWithoutNullStreams | null = null
   private connection: ClientConnection | null = null
   private agentCapabilities: AgentCapabilities | null = null
+  private authMethods: Array<{ id: string, name: string }> = []
   private _initializeMeta: Record<string, unknown> | null = null
   private stderrChunks: string[] = []
   private processFailureGuard: { promise: Promise<never>, dispose: () => void } | null = null
@@ -301,8 +305,9 @@ export class AcpSession {
       }
     }
     catch (error) {
+      const normalized = this.enrichAuthError(error)
       await this.close()
-      throw error
+      throw normalized
     }
   }
 
@@ -326,8 +331,9 @@ export class AcpSession {
       this.replayEarlyUpdates()
     }
     catch (error) {
+      const normalized = this.enrichAuthError(error)
       await this.close()
-      throw error
+      throw normalized
     }
   }
 
@@ -357,13 +363,14 @@ export class AcpSession {
     }
     catch (error) {
       this.activeTurn = false
-      const message = error instanceof Error ? error.message : String(error)
+      const normalized = this.enrichAuthError(error)
+      const message = normalized instanceof Error ? normalized.message : String(normalized)
       this.emit({
         type: `turn_error`,
         sessionId: this._sessionId,
         message,
       })
-      throw error
+      throw normalized
     }
   }
 
@@ -410,9 +417,9 @@ export class AcpSession {
         return { modelId: this._currentModelId }
       }
       catch (error) {
-        if (!modelOption)
+        if (!modelOption || !isMethodNotFoundError(error))
           throw error
-        // Fall through to session/set_config_option when session/set_model is unsupported.
+        // Fall through to session/set_config_option when session/set_model is unsupported (-32601).
       }
     }
 
@@ -476,9 +483,9 @@ export class AcpSession {
         return { modeId: this._currentModeId }
       }
       catch (error) {
-        if (!modeOption)
+        if (!modeOption || !isMethodNotFoundError(error))
           throw error
-        // Fall through to session/set_config_option when session/set_mode is unsupported.
+        // Fall through to session/set_config_option when session/set_mode is unsupported (-32601).
       }
     }
 
@@ -677,7 +684,23 @@ export class AcpSession {
     )
 
     this.agentCapabilities = initResponse.agentCapabilities ?? null
+    this.authMethods = (initResponse.authMethods ?? []).map(m => ({ id: m.id, name: m.name || m.id }))
     this._initializeMeta = (initResponse._meta as Record<string, unknown> | null | undefined) ?? null
+  }
+
+  private enrichAuthError(error: unknown): unknown {
+    const code = typeof error === `object` && error !== null && `code` in error
+      ? (error as { code?: unknown }).code
+      : undefined
+    const rawMessage = error instanceof Error ? error.message : String(error)
+    const isAuthRequired = code === -32000 || /authentication required|not logged in/i.test(rawMessage)
+    if (!isAuthRequired)
+      return error
+    const methodsHint = this.authMethods.length > 0
+      ? ` (${this.authMethods.map(m => m.name).join(`, `)})`
+      : ``
+    const cliName = path.basename(this.options.command)
+    return new Error(`Authentication required for ${cliName}${methodsHint}. Sign in via your terminal and try again.`)
   }
 
   private async runBoundedRequest<T>(
@@ -767,7 +790,14 @@ export class AcpSession {
       case `tool_call_update`: {
         const previous = this.toolCalls.get(update.toolCallId)
         const snapshot = mergeToolCallSnapshot(previous, update)
+        if (previous)
+          this.toolCalls.delete(update.toolCallId)
         this.toolCalls.set(update.toolCallId, snapshot)
+        if (this.toolCalls.size > MAX_TRACKED_TOOL_CALLS) {
+          const oldestId = this.toolCalls.keys().next().value
+          if (oldestId !== undefined)
+            this.toolCalls.delete(oldestId)
+        }
         this.emit({
           type: `tool_call`,
           sessionId: this._sessionId,
@@ -791,26 +821,46 @@ export class AcpSession {
       }
       case `config_option_update`: {
         this._configOptions = update.configOptions
-        const derived = deriveModelsFromSessionResponse({
-          sessionId: this._sessionId,
-          configOptions: update.configOptions,
-        })
-        if (derived.models.length > 0)
-          this._models = derived.models
-        if (derived.currentModelId !== this._currentModelId) {
-          this._currentModelId = derived.currentModelId
-          this.emit({
-            type: `model_changed`,
+        if (this._modelSource === `models`) {
+          // Keep `models.availableModels` intact when `configOptions` exposes split base model + thought_level.
+          const resolvedModelId = resolveCurrentModelFromConfigOptions(
+            update.configOptions,
+            this._models,
+            this._currentModelId,
+          )
+          if (resolvedModelId !== this._currentModelId) {
+            this._currentModelId = resolvedModelId
+            this.emit({
+              type: `model_changed`,
+              sessionId: this._sessionId,
+              modelId: this._currentModelId,
+            })
+          }
+        }
+        else {
+          const derived = deriveModelsFromSessionResponse({
             sessionId: this._sessionId,
-            modelId: this._currentModelId,
+            configOptions: update.configOptions,
           })
+          if (derived.models.length > 0) {
+            this._models = derived.models
+            this._modelSource = derived.source
+          }
+          if (derived.currentModelId !== this._currentModelId) {
+            this._currentModelId = derived.currentModelId
+            this.emit({
+              type: `model_changed`,
+              sessionId: this._sessionId,
+              modelId: this._currentModelId,
+            })
+          }
         }
 
         const derivedModes = deriveModesFromSessionResponse({
           sessionId: this._sessionId,
           configOptions: update.configOptions,
         })
-        if (derivedModes.modes.length > 0) {
+        if (this._modeSource !== `modes` && derivedModes.modes.length > 0) {
           this._modes = derivedModes.modes
           this._modeSource = derivedModes.source
         }

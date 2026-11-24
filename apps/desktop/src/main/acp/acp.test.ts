@@ -20,7 +20,7 @@ import { createSafeNdJsonStream } from './ndjson-stream'
 import { probeAcpAgent, ProbeCache } from './probe'
 import { AcpRegistry } from './registry'
 import { AcpSession, appendUtf8RingChunk, decodeUtf8Ring, DEFAULT_CLIENT_CAPABILITIES } from './session'
-import { selectAutoAcceptOption } from './translator'
+import { buildPermissionResponse, mergeToolCallSnapshot, resolveCurrentModelFromConfigOptions, selectAutoAcceptOption } from './translator'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FAKE_AGENT_SCRIPT = path.resolve(__dirname, `../../../scripts/fake-acp-agent.mjs`)
@@ -1059,7 +1059,194 @@ describe(`selectAutoAcceptOption`, () => {
   it(`auto-approves with allow once only, never a permanent grant`, () => {
     const once = { optionId: `once`, name: `Allow`, kind: `allow_once` } as const
     const always = { optionId: `always`, name: `Always`, kind: `allow_always` } as const
+    const reject = { optionId: `deny`, name: `Deny`, kind: `reject_once` } as const
     expect(selectAutoAcceptOption([always, once])?.optionId).toBe(`once`)
     expect(selectAutoAcceptOption([always])).toBeNull()
+    expect(buildPermissionResponse([always, reject], `allow_once`)).toEqual({ outcome: { outcome: `cancelled` } })
+    expect(buildPermissionResponse([always, reject], `allow_always`)).toEqual({
+      outcome: { outcome: `selected`, optionId: `always` },
+    })
+  })
+
+  it(`extracts Antigravity PascalCase tool inputs and string rawOutput errors`, () => {
+    const execSnap = mergeToolCallSnapshot(undefined, {
+      toolCallId: `tc-agy-exec`,
+      title: `Build check`,
+      kind: `execute`,
+      status: `pending`,
+      rawInput: { CommandLine: `pnpm test` },
+    })
+    expect(execSnap.command).toBe(`pnpm test`)
+
+    const editSnap = mergeToolCallSnapshot(undefined, {
+      toolCallId: `tc-agy-edit`,
+      title: `File article.md`,
+      kind: `edit`,
+      status: `pending`,
+      rawInput: {
+        Path: `/tmp/article.md`,
+        Target: `Old line`,
+        Replacement: ``,
+      },
+    })
+    expect(editSnap.filePath).toBe(`/tmp/article.md`)
+    expect(editSnap.unifiedDiff).toBe(`-Old line`)
+    expect(editSnap.diffStats).toEqual({ added: 0, removed: 1, hasChanges: true })
+
+    const failedSnap = mergeToolCallSnapshot(editSnap, {
+      toolCallId: `tc-agy-edit`,
+      status: `failed`,
+      rawOutput: `permission check failed for write_file`,
+    })
+    expect(failedSnap.error).toBe(`permission check failed for write_file`)
+
+    // Codex ACP bracketed reasoning effort (`gpt-6-astra[xhigh]`) also stays intact across config_option_update.
+    const codexResolved = resolveCurrentModelFromConfigOptions(
+      [
+        { id: `model`, name: `Model`, category: `model`, type: `select`, currentValue: `gpt-6-astra`, options: [] },
+        { id: `reasoning_effort`, name: `Reasoning`, category: `thought_level`, type: `select`, currentValue: `xhigh`, options: [] },
+      ],
+      [
+        { id: `gpt-6-astra[high]`, name: `6 Astra (High)` },
+        { id: `gpt-6-astra[xhigh]`, name: `6 Astra (Xhigh)` },
+      ],
+      `gpt-6-astra[xhigh]`,
+    )
+    expect(codexResolved).toBe(`gpt-6-astra[xhigh]`)
+  })
+})
+
+describe(`antigravity model preservation, client-side bypass rollback, and auth errors`, () => {
+  it(`preserves effort-suffixed models.availableModels IDs across config_option_update and remembers them`, async () => {
+    const dataDir = await makeTempDir(`md-acp-agy-model-`)
+    const events: AcpHostEvent[] = []
+    const host = new AcpHost({
+      dataDir,
+      extraBuiltinAgents: [
+        {
+          id: `fake-agy`,
+          name: `Fake Antigravity`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_MODEL_STYLE: `agy`,
+            FAKE_AGENT_MODES_STYLE: `agy`,
+            FAKE_AGENT_INITIAL_MODE: `default`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `A`, color: `#0F9D8A` },
+        },
+        {
+          id: `fake-agy-fail-mode`,
+          name: `Fake Antigravity Fail Mode`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_MODEL_STYLE: `agy`,
+            FAKE_AGENT_MODES_STYLE: `agy`,
+            FAKE_AGENT_INITIAL_MODE: `plan`,
+            FAKE_AGENT_FAIL_SET_MODE_ERROR: `1`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `F`, color: `#0F9D8A` },
+        },
+        {
+          id: `fake-unauth`,
+          name: `Fake Unauthenticated CLI`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: { FAKE_AGENT_REQUIRE_AUTH: `1` },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `U`, color: `#0F9D8A` },
+        },
+        {
+          id: `fake-agy-leave-default`,
+          name: `Fake Agy Leave Default`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0`,
+            FAKE_AGENT_MODES_STYLE: `agy`,
+            FAKE_AGENT_PUSH_MODE: `auto`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `L`, color: `#0F9D8A` },
+        },
+      ],
+      onEvent: ev => events.push(ev),
+    })
+    openHosts.push(host)
+
+    const started = await host.startSession({
+      agentId: `fake-agy`,
+      modelId: `gemini-3.8-flash-low`,
+      permissionLevel: `bypass`,
+      postId: `p-agy`,
+      postTitle: `Agy Test`,
+      content: `# Draft`,
+    })
+
+    // config_option_update emitted by set_model/set_mode must not clobber availableModels or strip `-low`.
+    expect(started.modelId).toBe(`gemini-3.8-flash-low`)
+    expect(started.models.some(m => m.id === `gemini-3.8-flash-low`)).toBe(true)
+    expect(started.permissionLevel).toBe(`bypass`)
+    expect(started.currentModeId).toBeNull()
+
+    const settings = await host.getSettings()
+    expect(settings.lastModelByAgent[`fake-agy`]).toBe(`gemini-3.8-flash-low`)
+
+    // Switching to agy's custom `auto` mode sets client policy to `ask` and exposes `auto`, then back to `bypass` runs on `default`.
+    const autoMode = await host.setPermissionMode({ sessionId: started.sessionId, modeId: `auto` })
+    expect(autoMode).toEqual({ permissionLevel: `ask`, modeId: `auto` })
+    const backToBypass = await host.setPermissionMode({ sessionId: started.sessionId, permissionLevel: `bypass`, modeId: null })
+    expect(backToBypass).toEqual({ permissionLevel: `bypass`, modeId: null })
+
+    // Adapter error during mode switch (e.g. plan -> bypass) must roll back permissionLevel and rethrow.
+    const failSess = await host.startSession({
+      agentId: `fake-agy-fail-mode`,
+      permissionLevel: `plan`,
+      postId: `p-fail`,
+      postTitle: `Fail Mode`,
+      content: `# Plan`,
+    })
+    await expect(
+      host.setPermissionMode({ sessionId: failSess.sessionId, permissionLevel: `bypass`, modeId: null }),
+    ).rejects.toThrow(/Adapter rejected mode transition/)
+
+    // Unauthenticated CLI surfaces advertised auth methods clearly without hanging.
+    await expect(
+      host.startSession({
+        agentId: `fake-unauth`,
+        postId: `p-unauth`,
+        postTitle: `Unauth`,
+        content: `# Hi`,
+      }),
+    ).rejects.toThrow(/Log in with Google/)
+
+    // Client-side bypass ends as soon as the agent leaves `default` (e.g. switches to `auto`).
+    events.length = 0
+    const leaveDefaultSess = await host.startSession({
+      agentId: `fake-agy-leave-default`,
+      permissionLevel: `bypass`,
+      postId: `p-leave`,
+      postTitle: `Leave Default`,
+      content: `# Bypass`,
+    })
+    expect(leaveDefaultSess.permissionLevel).toBe(`bypass`)
+    await host.prompt({
+      sessionId: leaveDefaultSess.sessionId,
+      text: `Leave default mode`,
+      content: `# Bypass`,
+      postTitle: `Leave Default`,
+    })
+    const leftBypassEvent = events.find(
+      (e): e is Extract<AcpHostEvent, { type: `mode_changed` }> =>
+        e.type === `mode_changed` && e.modeId === `auto`,
+    )
+    expect(leftBypassEvent?.permissionLevel).toBe(`ask`)
   })
 })

@@ -72,7 +72,9 @@ async function setAsDefault(agentId: string) {
 }
 
 async function refreshModels(agentId: string) {
-  await agentStore.probeAgent(agentId, true)
+  const result = await agentStore.probeAgent(agentId, true)
+  if (result?.error)
+    toast.error(result.error)
 }
 
 async function handleRemoveCustom(agentId: string) {
@@ -214,7 +216,7 @@ onMounted(() => {
             <span>{{ t('agent.settings.install') }}</span>
           </button>
 
-          <!-- Custom uninstalled: Configure -->
+          <!-- Uninstalled without npm package (custom or native installer): Configure -->
           <button
             v-else
             type="button"

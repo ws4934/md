@@ -42,12 +42,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === `object` && value !== null && !Array.isArray(value)
 }
 
+export function isMethodNotFoundError(error: unknown): boolean {
+  if (typeof error === `object` && error !== null && `code` in error && (error as { code?: unknown }).code === -32601)
+    return true
+  const msg = error instanceof Error ? error.message : String(error)
+  return /method not found/i.test(msg)
+}
+
 function readString(record: Record<string, unknown> | null, keys: string[]): string | undefined {
   if (!record)
     return undefined
   for (const key of keys) {
     const value = record[key]
     if (typeof value === `string` && value.trim())
+      return value
+  }
+  return undefined
+}
+
+function readStringAllowEmpty(record: Record<string, unknown> | null, keys: string[]): string | undefined {
+  if (!record)
+    return undefined
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === `string`)
       return value
   }
   return undefined
@@ -70,7 +88,7 @@ export function flattenSelectConfigOptions(
 
 export function findSelectConfigOption(
   configOptions: SessionConfigOption[] | null | undefined,
-  category: `model` | `mode`,
+  category: `model` | `mode` | `thought_level`,
 ): (SessionConfigOption & { type: `select` }) | null {
   if (!configOptions?.length)
     return null
@@ -88,6 +106,52 @@ export function findSelectConfigOption(
     return byId
 
   return null
+}
+
+/**
+ * Resolves the active `models.availableModels` ID after a `config_option_update` when
+ * the agent splits effort-parameterized model IDs (e.g. `gemini-3.8-flash-low` or
+ * `gpt-6-astra[xhigh]`) into separate `model` + `thought_level` config options.
+ */
+export function resolveCurrentModelFromConfigOptions(
+  configOptions: SessionConfigOption[] | null | undefined,
+  availableModels: readonly AcpModelInfo[],
+  currentModelId: string | null,
+): string | null {
+  const modelOption = findSelectConfigOption(configOptions, `model`)
+  const baseModel = modelOption?.currentValue?.trim() || null
+  if (!baseModel)
+    return currentModelId
+
+  const availableIds = new Set(availableModels.map(m => m.id))
+  const thoughtOption = findSelectConfigOption(configOptions, `thought_level`)
+  const thought = thoughtOption?.currentValue?.trim() || null
+
+  if (thought) {
+    const dashCandidate = `${baseModel}-${thought}`
+    if (availableIds.has(dashCandidate))
+      return dashCandidate
+    const bracketCandidate = `${baseModel}[${thought}]`
+    if (availableIds.has(bracketCandidate))
+      return bracketCandidate
+  }
+
+  if (
+    currentModelId
+    && availableIds.has(currentModelId)
+    && (
+      currentModelId === baseModel
+      || currentModelId.startsWith(`${baseModel}-`)
+      || currentModelId.startsWith(`${baseModel}[`)
+    )
+  ) {
+    return currentModelId
+  }
+
+  if (availableIds.has(baseModel))
+    return baseModel
+
+  return currentModelId
 }
 
 export function deriveModelsFromSessionResponse(response: ExtendedNewSessionResponse): {
@@ -236,7 +300,7 @@ function extractDiffFromToolContent(content: ToolCallContent[] | null | undefine
 function extractCommandFromRawInput(rawInput: Record<string, unknown> | null, kind: AcpToolKind): string | undefined {
   if (kind !== `execute`)
     return undefined
-  const direct = readString(rawInput, [`command`, `cmd`, `script`])
+  const direct = readString(rawInput, [`command`, `cmd`, `script`, `CommandLine`])
   if (!direct)
     return undefined
   const args = rawInput?.args
@@ -257,24 +321,27 @@ export function mergeToolCallSnapshot(
 
   const rawInput = isRecord(update.rawInput) ? update.rawInput : null
   const rawOutput = isRecord(update.rawOutput) ? update.rawOutput : null
+  const rawOutputText = typeof update.rawOutput === `string` && update.rawOutput.trim()
+    ? update.rawOutput
+    : undefined
   const diff = extractDiffFromToolContent(update.content)
   const contentText = extractTextFromToolContent(update.content)
 
   const filePath
     = diff?.path
       ?? update.locations?.[0]?.path
-      ?? readString(rawInput, [`path`, `filePath`, `file`, `target`])
+      ?? readString(rawInput, [`path`, `filePath`, `file`, `Path`, `target`])
       ?? previous?.filePath
 
   const command
     = extractCommandFromRawInput(rawInput, toolKind)
       ?? previous?.command
       ?? (toolKind === `execute` ? title || undefined : undefined)
-  const rawOldText = diff?.oldText ?? readString(rawInput, [`oldText`, `oldString`])
+  const rawOldText = diff?.oldText ?? readStringAllowEmpty(rawInput, [`oldText`, `oldString`, `Target`])
   const rawNewText
     = toolKind === `delete`
       ? ``
-      : (diff?.newText ?? readString(rawInput, [`newText`, `newString`, `content`]))
+      : (diff?.newText ?? readStringAllowEmpty(rawInput, [`newText`, `newString`, `content`, `Replacement`, `Content`]))
 
   let detail = contentText ?? previous?.detail
   if (!detail) {
@@ -308,7 +375,7 @@ export function mergeToolCallSnapshot(
 
   const error
     = status === `failed`
-      ? (readString(rawOutput, [`error`, `message`]) ?? contentText ?? previous?.error ?? `Tool call failed`)
+      ? (readString(rawOutput, [`error`, `message`]) ?? rawOutputText ?? contentText ?? previous?.error ?? `Tool call failed`)
       : undefined
 
   return {
@@ -380,8 +447,9 @@ export function buildPermissionResponse(
   }
 
   if (decision === `allow_once`) {
+    // Never fall back to `allow_always` when the user only approved once.
     const opt = options.find(o => o.kind === `allow_once`)
-      ?? options.find(o => o.kind.startsWith(`allow`))
+      ?? options.find(o => o.kind.startsWith(`allow`) && o.kind !== `allow_always`)
     if (opt)
       return { outcome: { outcome: `selected`, optionId: opt.optionId } }
   }

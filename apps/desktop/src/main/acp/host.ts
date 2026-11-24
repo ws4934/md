@@ -20,11 +20,13 @@ import {
   evaluatePermissionPolicy,
   isEditToolKind,
   mapAcpModeIdToPermissionLevel,
+  mapPermissionLevelToAcpModeId,
   resolveNativeModeIdForLevel,
 } from '@md/shared/utils/acp-permissions'
 import { ProbeCache } from './probe'
 import { AcpRegistry } from './registry'
 import { AcpSession } from './session'
+import { isMethodNotFoundError } from './translator'
 
 export interface AcpActiveSessionSummary {
   sessionId: string
@@ -44,6 +46,7 @@ interface ManagedSession {
   permissionState: {
     level: AcpPermissionLevel
     applyingHostMode: boolean
+    clientBypassModeId: string | null
   }
 }
 
@@ -179,7 +182,11 @@ export class AcpHost {
         ?? mapAcpModeIdToPermissionLevel(params.modeId)
         ?? settings.defaultPermissionLevel
     // Suppress boot-time mode clamping until initializeNewSession + initial setMode complete.
-    const permissionState = { level: initialLevel, applyingHostMode: true }
+    const permissionState = {
+      level: initialLevel,
+      applyingHostMode: true,
+      clientBypassModeId: null as string | null,
+    }
 
     const sessionRef: { current: AcpSession | null } = { current: null }
     const session = new AcpSession({
@@ -197,13 +204,17 @@ export class AcpHost {
       },
       onEvent: (event) => {
         if (event.type === `mode_changed`) {
-          // Client-side bypass holds while the agent stays on the native mode it runs on.
-          const onClientBypassMode = permissionState.level === `bypass`
-            && event.modeId === resolveNativeModeIdForLevel(`bypass`, sessionRef.current?.modes ?? [])
+          const modes = sessionRef.current?.modes ?? []
+          const isClientBypass = permissionState.level === `bypass`
+            && mapPermissionLevelToAcpModeId(`bypass`, modes) === null
+          // Client-side bypass holds while the agent stays on the native mode it entered bypass on.
+          const onClientBypassMode = isClientBypass && event.modeId === permissionState.clientBypassModeId
           if (!permissionState.applyingHostMode && !onClientBypassMode) {
             const mappedLevel = mapAcpModeIdToPermissionLevel(event.modeId)
             // Agent-originated mode updates may keep or restrict permissions, never escalate.
             permissionState.level = clampAgentModePermissionLevel(permissionState.level, mappedLevel)
+            if (permissionState.level !== `bypass`)
+              permissionState.clientBypassModeId = null
           }
           this.onEvent?.({
             ...event,
@@ -271,7 +282,7 @@ export class AcpHost {
 
     const targetModeId
       = (params.modeId && session.modes.some(m => m.id === params.modeId) ? params.modeId : null)
-        ?? resolveNativeModeIdForLevel(permissionState.level, session.modes)
+        ?? resolveNativeModeIdForLevel(permissionState.level, session.modes, session.currentModeId)
 
     try {
       if (targetModeId && targetModeId !== session.currentModeId) {
@@ -284,6 +295,10 @@ export class AcpHost {
       }
     }
     finally {
+      permissionState.clientBypassModeId
+        = permissionState.level === `bypass` && mapPermissionLevelToAcpModeId(`bypass`, session.modes) === null
+          ? session.currentModeId
+          : null
       permissionState.applyingHostMode = false
     }
 
@@ -424,26 +439,45 @@ export class AcpHost {
       throw new Error(`Unknown ACP session: ${params.sessionId}`)
 
     const previousLevel = managed.permissionState.level
+    const previousBypassModeId = managed.permissionState.clientBypassModeId
     let targetModeId: string | null = null
 
     if (params.permissionLevel) {
       managed.permissionState.level = params.permissionLevel
       targetModeId
         = (params.modeId && managed.session.modes.some(m => m.id === params.modeId) ? params.modeId : null)
-          ?? resolveNativeModeIdForLevel(params.permissionLevel, managed.session.modes)
+          ?? resolveNativeModeIdForLevel(
+            params.permissionLevel,
+            managed.session.modes,
+            managed.session.currentModeId,
+          )
 
       if (targetModeId && targetModeId !== managed.session.currentModeId) {
+        const leavingNativeBypass
+          = params.permissionLevel !== `bypass`
+            && mapAcpModeIdToPermissionLevel(managed.session.currentModeId) === `bypass`
         managed.permissionState.applyingHostMode = true
         try {
           await managed.session.setMode(targetModeId)
         }
-        catch {
-          // Keep client-side permission policy active when an agent exposes read-only modes.
+        catch (error) {
+          // Only tolerate `-32601 Method not found` for read-only mode lists when not stuck in native bypass.
+          if (!isMethodNotFoundError(error) || leavingNativeBypass) {
+            managed.permissionState.level = previousLevel
+            managed.permissionState.clientBypassModeId = previousBypassModeId
+            throw error
+          }
         }
         finally {
           managed.permissionState.applyingHostMode = false
         }
       }
+
+      managed.permissionState.clientBypassModeId
+        = managed.permissionState.level === `bypass`
+          && mapPermissionLevelToAcpModeId(`bypass`, managed.session.modes) === null
+          ? managed.session.currentModeId
+          : null
 
       return {
         permissionLevel: managed.permissionState.level,
@@ -459,6 +493,7 @@ export class AcpHost {
       const mapped = mapAcpModeIdToPermissionLevel(params.modeId)
       // Default unknown custom modes to `ask` so switching away from `bypass` stays safe.
       managed.permissionState.level = mapped ?? `ask`
+      managed.permissionState.clientBypassModeId = null
       if (managed.session.modes.some(m => m.id === params.modeId))
         targetModeId = params.modeId
 
@@ -469,6 +504,7 @@ export class AcpHost {
         }
         catch (error) {
           managed.permissionState.level = previousLevel
+          managed.permissionState.clientBypassModeId = previousBypassModeId
           throw error
         }
         finally {

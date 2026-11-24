@@ -653,6 +653,8 @@ export const useAgentStore = defineStore(`agent`, () => {
   }
 
   async function selectAgentAndModel(agentId: string, modelId?: string): Promise<void> {
+    if (selectedAgentId.value !== agentId)
+      draftModeId.value = null
     selectedAgentId.value = agentId
     if (modelId) {
       selectedModelByAgent.value = { ...selectedModelByAgent.value, [agentId]: modelId }

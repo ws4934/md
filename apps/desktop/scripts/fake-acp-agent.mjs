@@ -13,6 +13,8 @@ const hangMethod = process.env.FAKE_AGENT_HANG_METHOD || ``
 const earlyUpdate = process.env.FAKE_AGENT_EARLY_UPDATE === `1`
 const earlyModeUpdate = process.env.FAKE_AGENT_EARLY_MODE_UPDATE || ``
 const rejectSetMode = process.env.FAKE_AGENT_REJECT_SET_MODE === `1`
+const failSetModeError = process.env.FAKE_AGENT_FAIL_SET_MODE_ERROR === `1`
+const requireAuth = process.env.FAKE_AGENT_REQUIRE_AUTH === `1`
 const modelStyle = process.env.FAKE_AGENT_MODEL_STYLE || `models`
 const modesStyle = process.env.FAKE_AGENT_MODES_STYLE || `claude`
 const extraModes = process.env.FAKE_AGENT_EXTRA_MODES === `1`
@@ -84,6 +86,14 @@ function buildModesEntries() {
       { id: `plan`, name: `Plan`, description: `Read-only planning mode` },
     ]
   }
+  if (modesStyle === `agy`) {
+    return [
+      { id: `default`, name: `Default`, description: `Ask before edits and commands` },
+      { id: `accept-edits`, name: `Accept edits`, description: `Approve file edits without asking` },
+      { id: `auto`, name: `Auto`, description: `Approve edits and safe commands` },
+      { id: `plan`, name: `Plan`, description: `Plan before executing` },
+    ]
+  }
   const base = [
     { id: `default`, name: `Default`, description: `Ask before edits and commands` },
     { id: `acceptEdits`, name: `Accept Edits`, description: `Auto-accept file edits` },
@@ -141,6 +151,62 @@ function buildModelsMetadata() {
       }
     : {}
 
+  if (modelStyle === `agy`) {
+    const agyAvailable = [
+      { modelId: `gemini-4-neon-high`, name: `Gemini 4 Neon (High)` },
+      { modelId: `gemini-3.8-flash-high`, name: `Gemini 3.8 Flash (High)` },
+      { modelId: `gemini-3.8-flash-low`, name: `Gemini 3.8 Flash (Low)` },
+      { modelId: `claude-sonnet-5-5`, name: `Claude Sonnet 5.5` },
+    ]
+    const splitMatch = /^(.*)-(low|medium|high)$/.exec(currentModelId)
+    const baseModel = splitMatch && !currentModelId.startsWith(`claude-`) ? splitMatch[1] : currentModelId
+    const thoughtLevel = splitMatch && !currentModelId.startsWith(`claude-`) ? splitMatch[2] : `high`
+    const agyConfigOptions = [
+      {
+        id: `model`,
+        name: `Model`,
+        category: `model`,
+        type: `select`,
+        currentValue: baseModel,
+        options: [
+          { value: `gemini-4-neon`, name: `Gemini 4 Neon` },
+          { value: `gemini-3.8-flash`, name: `Gemini 3.8 Flash` },
+          { value: `claude-sonnet-5-5`, name: `Claude Sonnet 5.5` },
+        ],
+      },
+      {
+        id: `thought_level`,
+        name: `Thinking Level`,
+        category: `thought_level`,
+        type: `select`,
+        currentValue: thoughtLevel,
+        options: [
+          { value: `low`, name: `Low` },
+          { value: `medium`, name: `Medium` },
+          { value: `high`, name: `High` },
+        ],
+      },
+      ...(modeEntries.length > 0
+        ? [{
+            id: `mode`,
+            name: `Mode`,
+            category: `mode`,
+            type: `select`,
+            currentValue: currentModeId,
+            options: modeEntries.map(m => ({
+              value: m.id,
+              name: m.name,
+              description: m.description,
+            })),
+          }]
+        : []),
+    ]
+    return {
+      models: { currentModelId, availableModels: agyAvailable },
+      ...modesField,
+      configOptions: agyConfigOptions,
+    }
+  }
   if (modelStyle === `configOptions`)
     return { configOptions }
   if (modelStyle === `both`) {
@@ -381,6 +447,14 @@ async function handleRequest(msg) {
           sessionCapabilities: { close: {} },
         },
         agentInfo: { name: `fake-acp-agent`, version: `1.0.0` },
+        ...(requireAuth
+          ? {
+              authMethods: [
+                { id: `oauth-personal`, name: `Log in with Google`, description: `Google account` },
+                { id: `gemini-api-key`, name: `Gemini API key`, description: `API key` },
+              ],
+            }
+          : {}),
         _meta: {
           receivedClientCapabilities: params.clientCapabilities ?? null,
         },
@@ -388,6 +462,10 @@ async function handleRequest(msg) {
       return
     }
     case `session/new`: {
+      if (requireAuth) {
+        sendError(id, -32000, `Authentication required`)
+        return
+      }
       if (!params.cwd || !Array.isArray(params.mcpServers)) {
         sendError(id, -32602, `cwd and mcpServers are required`)
         return
@@ -442,10 +520,21 @@ async function handleRequest(msg) {
         return
       }
       currentModelId = params.modelId
+      if (modelStyle === `agy`) {
+        const meta = buildModelsMetadata()
+        sendUpdate({
+          sessionUpdate: `config_option_update`,
+          configOptions: meta.configOptions ?? [],
+        })
+      }
       sendResult(id, {})
       return
     }
     case `session/set_mode`: {
+      if (failSetModeError) {
+        sendError(id, -32603, `Adapter rejected mode transition`)
+        return
+      }
       if (rejectSetMode || modelStyle === `configOptions` || modesStyle === `none`) {
         sendError(id, -32601, `Method not found: session/set_mode`)
         return
@@ -456,6 +545,13 @@ async function handleRequest(msg) {
         sessionUpdate: `current_mode_update`,
         currentModeId,
       })
+      if (modelStyle === `agy`) {
+        const meta = buildModelsMetadata()
+        sendUpdate({
+          sessionUpdate: `config_option_update`,
+          configOptions: meta.configOptions ?? [],
+        })
+      }
       sendResult(id, {})
       return
     }
