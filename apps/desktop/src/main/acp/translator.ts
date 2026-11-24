@@ -133,6 +133,7 @@ export function deriveModelsFromSessionResponse(response: ExtendedNewSessionResp
 export function deriveModesFromSessionResponse(response: ExtendedNewSessionResponse): {
   modes: AcpModeInfo[]
   currentModeId: string | null
+  source: `modes` | `configOptions` | `none`
 } {
   if (response.modes?.availableModes?.length) {
     return {
@@ -142,6 +143,7 @@ export function deriveModesFromSessionResponse(response: ExtendedNewSessionRespo
         description: mode.description ?? undefined,
       })),
       currentModeId: response.modes.currentModeId ?? null,
+      source: `modes`,
     }
   }
 
@@ -155,12 +157,14 @@ export function deriveModesFromSessionResponse(response: ExtendedNewSessionRespo
         description: opt.description ?? undefined,
       })),
       currentModeId: modeConfig.currentValue || null,
+      source: `configOptions`,
     }
   }
 
   return {
     modes: [],
     currentModeId: null,
+    source: `none`,
   }
 }
 

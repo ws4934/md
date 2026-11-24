@@ -75,11 +75,12 @@ export interface AcpCommandOverride {
   env?: Record<string, string>
 }
 
+export type AcpPermissionLevel = `ask` | `auto_edits` | `plan` | `bypass`
+
 export interface AcpSettings {
   defaultAgentId: string
+  defaultPermissionLevel: AcpPermissionLevel
   lastModelByAgent: Record<string, string>
-  reviewEditsBeforeWriting: boolean
-  askBeforeRunningCommands: boolean
   customAgents: AcpAgentConfig[]
   commandOverrides: Record<string, AcpCommandOverride>
 }
@@ -155,6 +156,7 @@ export type AcpHostEvent
     | { type: `permission_resolved`, sessionId: string, requestId: string, decision: AcpPermissionDecision | `cancelled` }
     | { type: `article_synced`, sessionId: string, postId: string, content: string }
     | { type: `model_changed`, sessionId: string, modelId: string | null }
+    | { type: `mode_changed`, sessionId: string, modeId: string | null, permissionLevel?: AcpPermissionLevel }
     | { type: `commands_updated`, sessionId: string, commands: AcpSlashCommand[] }
     | { type: `install_progress`, agentId: string, percent: number, command: string, line: string, done?: boolean, error?: string }
     | { type: `agents_changed`, agents: AcpAgentStatus[] }
@@ -162,6 +164,8 @@ export type AcpHostEvent
 export interface AcpStartSessionParams {
   agentId: string
   modelId?: string | null
+  permissionLevel?: AcpPermissionLevel
+  modeId?: string | null
   postId: string
   postTitle: string
   content: string
@@ -171,6 +175,9 @@ export interface AcpStartSessionResult {
   sessionId: string
   modelId: string | null
   models: AcpModelInfo[]
+  modes: AcpModeInfo[]
+  currentModeId: string | null
+  permissionLevel: AcpPermissionLevel
   commands: AcpSlashCommand[]
 }
 
@@ -196,6 +203,11 @@ export interface DesktopAcpApi {
   prompt: (params: AcpPromptParams) => Promise<{ stopReason?: string }>
   cancelTurn: (sessionId: string) => Promise<void>
   setModel: (params: { sessionId: string, modelId: string }) => Promise<{ modelId: string | null }>
+  setPermissionMode: (params: {
+    sessionId: string
+    permissionLevel?: AcpPermissionLevel
+    modeId?: string | null
+  }) => Promise<{ permissionLevel: AcpPermissionLevel, modeId: string | null }>
   respondPermission: (params: {
     sessionId: string
     requestId: string

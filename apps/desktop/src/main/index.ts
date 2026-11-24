@@ -201,6 +201,7 @@ function registerIpc(host: AcpHost, publisher: WeChatPublisher): void {
   ipcMain.handle(IPC_CHANNELS.ACP_PROMPT, (_event, params) => host.prompt(params))
   ipcMain.handle(IPC_CHANNELS.ACP_CANCEL_TURN, (_event, sessionId) => host.cancelTurn(sessionId))
   ipcMain.handle(IPC_CHANNELS.ACP_SET_MODEL, (_event, params) => host.setModel(params))
+  ipcMain.handle(IPC_CHANNELS.ACP_SET_PERMISSION_MODE, (_event, params) => host.setPermissionMode(params))
   ipcMain.handle(IPC_CHANNELS.ACP_RESPOND_PERMISSION, (_event, params) => host.respondPermission(params))
   ipcMain.handle(IPC_CHANNELS.ACP_CLOSE_SESSION, (_event, sessionId) => host.closeSession(sessionId))
 }

@@ -63,8 +63,9 @@ export interface AcpSessionOptions {
   env?: Record<string, string>
   pathOverride?: string
   initialModelId?: string | null
+  initialModeId?: string | null
   timeouts?: AcpSessionTimeouts
-  shouldAutoAcceptPermission?: (toolKind: AcpToolKind, title: string) => boolean
+  resolveAutoPermission?: (toolKind: AcpToolKind, title: string) => `allow` | `reject` | `ask`
   onEvent?: (event: AcpHostEvent) => void
   onNonJsonStdout?: (line: string, error: unknown) => void
 }
@@ -126,6 +127,7 @@ export class AcpSession {
   private _modelSource: `models` | `configOptions` | `none` = `none`
   private _currentModelId: string | null = null
   private _modes: AcpModeInfo[] = []
+  private _modeSource: `modes` | `configOptions` | `none` = `none`
   private _currentModeId: string | null = null
   private _configOptions: SessionConfigOption[] = []
   private _commands: AcpSlashCommand[] = []
@@ -219,6 +221,15 @@ export class AcpSession {
         }
         catch {
           // Keep the agent's default model if the remembered model is no longer advertised.
+        }
+      }
+
+      if (this.options.initialModeId && this.options.initialModeId !== this._currentModeId) {
+        try {
+          await this.setMode(this.options.initialModeId)
+        }
+        catch {
+          // Keep the agent's default mode if the requested initial mode is not supported.
         }
       }
     }
@@ -371,6 +382,72 @@ export class AcpSession {
       modelId: this._currentModelId,
     })
     return { modelId: this._currentModelId }
+  }
+
+  async setMode(modeId: string): Promise<{ modeId: string | null }> {
+    if (!this.connection || !this._sessionId || this.closed)
+      throw new Error(`ACP session is not active`)
+
+    const modeOption = findSelectConfigOption(this._configOptions, `mode`)
+
+    if (this._modeSource === `modes` || !modeOption) {
+      try {
+        await this.runBoundedRequest(
+          this.connection.agent.request(`session/set_mode`, {
+            sessionId: this._sessionId,
+            modeId,
+          }),
+          this.timeouts.sessionNewMs,
+          `ACP session/set_mode timed out`,
+        )
+        this._currentModeId = modeId
+        this.emit({
+          type: `mode_changed`,
+          sessionId: this._sessionId,
+          modeId: this._currentModeId,
+        })
+        return { modeId: this._currentModeId }
+      }
+      catch (error) {
+        if (!modeOption)
+          throw error
+        // Fall through to session/set_config_option when session/set_mode is unsupported.
+      }
+    }
+
+    if (!modeOption)
+      throw new Error(`Agent does not expose mode selection`)
+
+    const response = await this.runBoundedRequest(
+      this.connection.agent.request(`session/set_config_option`, {
+        sessionId: this._sessionId,
+        configId: modeOption.id,
+        value: modeId,
+      }),
+      this.timeouts.sessionNewMs,
+      `ACP session/set_config_option timed out`,
+    )
+
+    if (response?.configOptions) {
+      this._configOptions = response.configOptions
+      const derived = deriveModesFromSessionResponse({
+        sessionId: this._sessionId,
+        configOptions: response.configOptions,
+      })
+      if (derived.modes.length > 0)
+        this._modes = derived.modes
+      this._currentModeId = derived.currentModeId ?? modeId
+    }
+    else {
+      this._currentModeId = modeId
+    }
+
+    this.emit({
+      type: `mode_changed`,
+      sessionId: this._sessionId,
+      modeId: this._currentModeId,
+    })
+    return { modeId: this._currentModeId }
   }
 
   respondPermission(requestId: string, decision: AcpPermissionDecision, optionId?: string): void {
@@ -551,6 +628,7 @@ export class AcpSession {
     const modeState = deriveModesFromSessionResponse(response)
     this._modes = modeState.modes
     this._currentModeId = modeState.currentModeId
+    this._modeSource = modeState.source
   }
 
   private replayEarlyUpdates(): void {
@@ -654,10 +732,32 @@ export class AcpSession {
             modelId: this._currentModelId,
           })
         }
+
+        const derivedModes = deriveModesFromSessionResponse({
+          sessionId: this._sessionId,
+          configOptions: update.configOptions,
+        })
+        if (derivedModes.modes.length > 0) {
+          this._modes = derivedModes.modes
+          this._modeSource = derivedModes.source
+        }
+        if (derivedModes.currentModeId !== null && derivedModes.currentModeId !== this._currentModeId) {
+          this._currentModeId = derivedModes.currentModeId
+          this.emit({
+            type: `mode_changed`,
+            sessionId: this._sessionId,
+            modeId: this._currentModeId,
+          })
+        }
         break
       }
       case `current_mode_update`: {
         this._currentModeId = update.currentModeId
+        this.emit({
+          type: `mode_changed`,
+          sessionId: this._sessionId,
+          modeId: this._currentModeId,
+        })
         break
       }
     }
@@ -670,11 +770,12 @@ export class AcpSession {
     const toolSnapshot = this.toolCalls.get(params.toolCall.toolCallId)
     const mapped = mapPermissionRequest(requestId, this._sessionId ?? params.sessionId, params, toolSnapshot)
 
-    const shouldAutoAccept
-      = this.alwaysAllowedKinds.has(mapped.toolKind)
-        || Boolean(this.options.shouldAutoAcceptPermission?.(mapped.toolKind, mapped.title))
+    const policy = this.options.resolveAutoPermission?.(mapped.toolKind, mapped.title) ?? `ask`
 
-    if (shouldAutoAccept) {
+    if (policy === `reject`)
+      return buildPermissionResponse(params.options, `reject`)
+
+    if (policy === `allow` || this.alwaysAllowedKinds.has(mapped.toolKind)) {
       const allowOpt = selectAutoAcceptOption(params.options)
       if (allowOpt) {
         return {

@@ -12,15 +12,20 @@ const junkStdout = process.env.FAKE_AGENT_JUNK_STDOUT === `1`
 const hangMethod = process.env.FAKE_AGENT_HANG_METHOD || ``
 const earlyUpdate = process.env.FAKE_AGENT_EARLY_UPDATE === `1`
 const modelStyle = process.env.FAKE_AGENT_MODEL_STYLE || `models`
+const modesStyle = process.env.FAKE_AGENT_MODES_STYLE || `claude`
+const extraModes = process.env.FAKE_AGENT_EXTRA_MODES === `1`
 const emitCommands = process.env.FAKE_AGENT_EMIT_COMMANDS === `1`
 const requirePermission = process.env.FAKE_AGENT_REQUIRE_PERMISSION === `1`
 const requireEditPermission = process.env.FAKE_AGENT_REQUIRE_EDIT_PERMISSION !== `0`
 const emitAllToolKinds = process.env.FAKE_AGENT_ALL_TOOL_KINDS === `1`
 const stringifyIds = process.env.FAKE_AGENT_STRINGIFY_IDS === `1`
 const directWriteWithoutEditTool = process.env.FAKE_AGENT_DIRECT_WRITE_ONLY === `1`
+const pushModeUpdate = process.env.FAKE_AGENT_PUSH_MODE || ``
 
 const SESSION_ID = `fake_sess_01`
 let currentModelId = `opus-5.5`
+let currentModeId = `default`
+const modeHistory = []
 let currentCwd = process.cwd()
 let nextClientRequestId = 1000
 const pendingClientRequests = new Map()
@@ -68,12 +73,28 @@ function sendUpdate(update) {
   })
 }
 
+function buildModesEntries() {
+  if (modesStyle === `none`)
+    return []
+  const base = [
+    { id: `default`, name: `Default`, description: `Ask before edits and commands` },
+    { id: `acceptEdits`, name: `Accept Edits`, description: `Auto-accept file edits` },
+    { id: `plan`, name: `Plan`, description: `Read-only planning mode` },
+    { id: `bypassPermissions`, name: `Bypass Permissions`, description: `Skip all permission prompts` },
+  ]
+  if (extraModes) {
+    base.push({ id: `deep_review`, name: `Deep Review`, description: `Editorial fact-check and tone audit` })
+  }
+  return base
+}
+
 function buildModelsMetadata() {
   const modelEntries = [
     { modelId: `opus-5.5`, name: `Opus 5.5`, description: `Best for long-form writing and reasoning` },
     { modelId: `sonnet-5.5`, name: `Sonnet 5.5`, description: `Balanced speed and quality` },
     { modelId: `haiku-5.5`, name: `Haiku 5.5`, description: `Fastest for quick edits and polishing` },
   ]
+  const modeEntries = buildModesEntries()
   const configOptions = [
     {
       id: `model`,
@@ -87,36 +108,43 @@ function buildModelsMetadata() {
         description: m.description,
       })),
     },
-    {
-      id: `mode`,
-      name: `Mode`,
-      category: `mode`,
-      type: `select`,
-      currentValue: `write`,
-      options: [
-        { value: `write`, name: `Write`, description: `Edit articles directly` },
-        { value: `plan`, name: `Plan`, description: `Draft outline first` },
-      ],
-    },
+    ...(modeEntries.length > 0
+      ? [{
+          id: `mode`,
+          name: `Mode`,
+          category: `mode`,
+          type: `select`,
+          currentValue: currentModeId,
+          options: modeEntries.map(m => ({
+            value: m.id,
+            name: m.name,
+            description: m.description,
+          })),
+        }]
+      : []),
   ]
+
+  const modesField = modeEntries.length > 0
+    ? {
+        modes: {
+          currentModeId,
+          availableModes: modeEntries,
+        },
+      }
+    : {}
 
   if (modelStyle === `configOptions`)
     return { configOptions }
   if (modelStyle === `both`) {
     return {
       models: { currentModelId, availableModels: modelEntries },
+      ...modesField,
       configOptions,
     }
   }
   return {
     models: { currentModelId, availableModels: modelEntries },
-    modes: {
-      currentModeId: `write`,
-      availableModes: [
-        { id: `write`, name: `Write`, description: `Edit articles directly` },
-        { id: `plan`, name: `Plan`, description: `Draft outline first` },
-      ],
-    },
+    ...modesField,
   }
 }
 
@@ -297,6 +325,14 @@ async function handlePrompt(id, params) {
     })
   }
 
+  if (pushModeUpdate) {
+    currentModeId = pushModeUpdate
+    sendUpdate({
+      sessionUpdate: `current_mode_update`,
+      currentModeId,
+    })
+  }
+
   sendUpdate({
     sessionUpdate: `plan`,
     entries: [
@@ -305,6 +341,13 @@ async function handlePrompt(id, params) {
       { content: `写入修改并校对`, status: `completed`, priority: `low` },
     ],
   })
+
+  if (modeHistory.length > 0) {
+    sendUpdate({
+      sessionUpdate: `agent_message_chunk`,
+      content: { type: `text`, text: `\n\n[modes:${modeHistory.join(`,`)}]` },
+    })
+  }
 
   sendResult(id, { stopReason: `end_turn` })
 }
@@ -386,9 +429,27 @@ async function handleRequest(msg) {
       sendResult(id, {})
       return
     }
+    case `session/set_mode`: {
+      if (modelStyle === `configOptions` || modesStyle === `none`) {
+        sendError(id, -32601, `Method not found: session/set_mode`)
+        return
+      }
+      currentModeId = params.modeId
+      modeHistory.push(params.modeId)
+      sendUpdate({
+        sessionUpdate: `current_mode_update`,
+        currentModeId,
+      })
+      sendResult(id, {})
+      return
+    }
     case `session/set_config_option`: {
       if (params.configId === `model`)
         currentModelId = params.value
+      if (params.configId === `mode`) {
+        currentModeId = params.value
+        modeHistory.push(params.value)
+      }
       const meta = buildModelsMetadata()
       sendResult(id, { configOptions: meta.configOptions ?? [] })
       return

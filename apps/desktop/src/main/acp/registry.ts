@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { migrateLegacyPermissionSettings } from '@md/shared/utils/acp-permissions'
 import { buildAgentEnv, resolveBinaryOnPath, resolveLoginShellPath, spawnAgentProcess, terminateProcessTree } from './process'
 
 export const BUILTIN_AGENTS: AcpAgentConfig[] = [
@@ -70,9 +71,8 @@ const CUSTOM_AVATAR_COLORS = [`#5B5BD6`, `#0A9E55`, `#D97757`, `#4C7DF0`, `#7A5A
 
 const DEFAULT_SETTINGS: AcpSettings = {
   defaultAgentId: `claude`,
+  defaultPermissionLevel: `ask`,
   lastModelByAgent: {},
-  reviewEditsBeforeWriting: true,
-  askBeforeRunningCommands: true,
   customAgents: [],
   commandOverrides: {},
 }
@@ -114,14 +114,22 @@ export class AcpRegistry {
     this.loaded = true
     try {
       const raw = await fs.readFile(this.settingsPath, `utf8`)
-      const parsed = JSON.parse(raw) as Partial<AcpSettings>
+      const parsed = JSON.parse(raw) as Partial<AcpSettings> & {
+        reviewEditsBeforeWriting?: unknown
+        askBeforeRunningCommands?: unknown
+      }
+      const { level, migrated } = migrateLegacyPermissionSettings(parsed)
       this.settings = {
-        ...structuredClone(DEFAULT_SETTINGS),
-        ...parsed,
+        defaultAgentId: typeof parsed.defaultAgentId === `string` && parsed.defaultAgentId.trim()
+          ? parsed.defaultAgentId
+          : DEFAULT_SETTINGS.defaultAgentId,
+        defaultPermissionLevel: level,
         lastModelByAgent: { ...(parsed.lastModelByAgent ?? {}) },
         customAgents: Array.isArray(parsed.customAgents) ? parsed.customAgents : [],
         commandOverrides: { ...(parsed.commandOverrides ?? {}) },
       }
+      if (migrated)
+        await this.persist().catch(() => undefined)
     }
     catch {
       this.settings = structuredClone(DEFAULT_SETTINGS)

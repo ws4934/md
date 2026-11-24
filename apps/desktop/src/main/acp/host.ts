@@ -4,16 +4,23 @@ import type {
   AcpAgentStatus,
   AcpHostEvent,
   AcpPermissionDecision,
+  AcpPermissionLevel,
   AcpProbeResult,
   AcpPromptParams,
   AcpSettings,
   AcpStartSessionParams,
   AcpStartSessionResult,
-  AcpToolKind,
 } from '@md/shared/types'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import {
+  agentHasPlanMode,
+  evaluatePermissionPolicy,
+  isEditToolKind,
+  mapAcpModeIdToPermissionLevel,
+  mapPermissionLevelToAcpModeId,
+} from '@md/shared/utils/acp-permissions'
 import { ProbeCache } from './probe'
 import { AcpRegistry } from './registry'
 import { AcpSession } from './session'
@@ -25,6 +32,9 @@ interface ManagedSession {
   articlePath: string
   lastSyncedContent: string
   syncChain: Promise<void>
+  permissionState: {
+    level: AcpPermissionLevel
+  }
 }
 
 export interface AcpHostOptions {
@@ -34,10 +44,6 @@ export interface AcpHostOptions {
   onEvent?: (event: AcpHostEvent) => void
 }
 
-function isEditToolKind(kind: AcpToolKind): boolean {
-  return kind === `edit` || kind === `delete` || kind === `move`
-}
-
 export class AcpHost {
   private readonly workspacesRoot: string
   private readonly pathOverride?: string
@@ -45,9 +51,6 @@ export class AcpHost {
   private readonly probeCache = new ProbeCache()
   private readonly sessions = new Map<string, ManagedSession>()
   private readonly onEvent?: (event: AcpHostEvent) => void
-
-  private currentReviewEdits = true
-  private currentAskBeforeCommands = true
 
   constructor(options: AcpHostOptions) {
     this.workspacesRoot = path.join(options.dataDir, `acp-workspaces`)
@@ -77,10 +80,7 @@ export class AcpHost {
   async updateSettings(patch: Partial<AcpSettings>): Promise<AcpSettings> {
     if (patch.commandOverrides)
       this.probeCache.invalidate()
-    const updated = await this.registry.updateSettings(patch)
-    this.currentReviewEdits = updated.reviewEditsBeforeWriting
-    this.currentAskBeforeCommands = updated.askBeforeRunningCommands
-    return updated
+    return this.registry.updateSettings(patch)
   }
 
   addCustomAgent(agent: {
@@ -124,8 +124,6 @@ export class AcpHost {
 
   async startSession(params: AcpStartSessionParams): Promise<AcpStartSessionResult> {
     const settings = await this.registry.getSettings()
-    this.currentReviewEdits = settings.reviewEditsBeforeWriting
-    this.currentAskBeforeCommands = settings.askBeforeRunningCommands
 
     const launch = await this.registry.resolveLaunchSpec(params.agentId)
     const workspaceId = randomUUID()
@@ -136,7 +134,13 @@ export class AcpHost {
     await fs.writeFile(articlePath, params.content, `utf8`)
 
     const initialModelId = params.modelId ?? settings.lastModelByAgent[params.agentId] ?? null
+    const initialLevel: AcpPermissionLevel
+      = params.permissionLevel
+        ?? mapAcpModeIdToPermissionLevel(params.modeId)
+        ?? settings.defaultPermissionLevel
+    const permissionState = { level: initialLevel }
 
+    const sessionRef: { current: AcpSession | null } = { current: null }
     const session = new AcpSession({
       agentId: params.agentId,
       command: launch.command,
@@ -145,16 +149,23 @@ export class AcpHost {
       env: launch.env,
       pathOverride: this.pathOverride,
       initialModelId,
-      shouldAutoAcceptPermission: (toolKind) => {
-        if (isEditToolKind(toolKind))
-          return !this.currentReviewEdits
-        if (toolKind === `execute`)
-          return !this.currentAskBeforeCommands
-        if (toolKind === `read` || toolKind === `search` || toolKind === `think`)
-          return true
-        return false
+      resolveAutoPermission: (toolKind) => {
+        return evaluatePermissionPolicy(permissionState.level, toolKind, {
+          agentHasPlanMode: agentHasPlanMode(sessionRef.current?.modes ?? []),
+        })
       },
       onEvent: (event) => {
+        if (event.type === `mode_changed`) {
+          const mappedLevel = mapAcpModeIdToPermissionLevel(event.modeId)
+          if (mappedLevel)
+            permissionState.level = mappedLevel
+          this.onEvent?.({
+            ...event,
+            permissionLevel: mappedLevel ?? permissionState.level,
+          })
+          return
+        }
+
         this.onEvent?.(event)
         // Read the article file back into the editor after an edit-kind tool completes.
         if (event.type === `tool_call` && event.tool.status === `completed` && isEditToolKind(event.tool.toolKind)) {
@@ -167,6 +178,7 @@ export class AcpHost {
         console.warn(`[acp:${params.agentId}] skipped non-JSON stdout:`, line.slice(0, 200))
       },
     })
+    sessionRef.current = session
 
     await session.initializeNewSession()
     const sessionId = session.sessionId!
@@ -177,7 +189,21 @@ export class AcpHost {
       articlePath,
       lastSyncedContent: params.content,
       syncChain: Promise.resolve(),
+      permissionState,
     })
+
+    const targetModeId
+      = (params.modeId && session.modes.some(m => m.id === params.modeId) ? params.modeId : null)
+        ?? mapPermissionLevelToAcpModeId(permissionState.level, session.modes)
+
+    if (targetModeId && targetModeId !== session.currentModeId) {
+      try {
+        await session.setMode(targetModeId)
+      }
+      catch {
+        // Keep client-side enforcement even if the agent declines the initial mode switch.
+      }
+    }
 
     if (session.currentModelId)
       await this.registry.rememberLastModel(params.agentId, session.currentModelId)
@@ -195,6 +221,9 @@ export class AcpHost {
       sessionId,
       modelId: session.currentModelId,
       models: session.models,
+      modes: session.modes,
+      currentModeId: session.currentModeId,
+      permissionLevel: permissionState.level,
       commands: session.commands,
     }
   }
@@ -231,10 +260,6 @@ export class AcpHost {
     const managed = this.sessions.get(params.sessionId)
     if (!managed)
       throw new Error(`Unknown ACP session: ${params.sessionId}`)
-
-    const settings = await this.registry.getSettings()
-    this.currentReviewEdits = settings.reviewEditsBeforeWriting
-    this.currentAskBeforeCommands = settings.askBeforeRunningCommands
 
     // Write the current editor content to the session's article file before each turn.
     await fs.writeFile(managed.articlePath, params.content, `utf8`)
@@ -282,6 +307,41 @@ export class AcpHost {
     if (result.modelId)
       await this.registry.rememberLastModel(managed.session.agentId, result.modelId)
     return result
+  }
+
+  async setPermissionMode(params: {
+    sessionId: string
+    permissionLevel?: AcpPermissionLevel
+    modeId?: string | null
+  }): Promise<{ permissionLevel: AcpPermissionLevel, modeId: string | null }> {
+    const managed = this.sessions.get(params.sessionId)
+    if (!managed)
+      throw new Error(`Unknown ACP session: ${params.sessionId}`)
+
+    let targetModeId: string | null = null
+
+    if (params.permissionLevel) {
+      managed.permissionState.level = params.permissionLevel
+      targetModeId
+        = (params.modeId && managed.session.modes.some(m => m.id === params.modeId) ? params.modeId : null)
+          ?? mapPermissionLevelToAcpModeId(params.permissionLevel, managed.session.modes)
+    }
+    else if (params.modeId) {
+      const mapped = mapAcpModeIdToPermissionLevel(params.modeId)
+      // Default unknown custom modes to `ask` so switching away from `bypass` stays safe.
+      managed.permissionState.level = mapped ?? `ask`
+      if (managed.session.modes.some(m => m.id === params.modeId))
+        targetModeId = params.modeId
+    }
+
+    if (targetModeId && targetModeId !== managed.session.currentModeId) {
+      await managed.session.setMode(targetModeId)
+    }
+
+    return {
+      permissionLevel: managed.permissionState.level,
+      modeId: managed.session.currentModeId,
+    }
   }
 
   respondPermission(params: {

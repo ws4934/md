@@ -50,6 +50,7 @@ const desktopBridge: DesktopBridge = {
     prompt: (params: AcpPromptParams) => ipcRenderer.invoke(IPC_CHANNELS.ACP_PROMPT, params),
     cancelTurn: sessionId => ipcRenderer.invoke(IPC_CHANNELS.ACP_CANCEL_TURN, sessionId),
     setModel: params => ipcRenderer.invoke(IPC_CHANNELS.ACP_SET_MODEL, params),
+    setPermissionMode: params => ipcRenderer.invoke(IPC_CHANNELS.ACP_SET_PERMISSION_MODE, params),
     respondPermission: (params: {
       sessionId: string
       requestId: string

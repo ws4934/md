@@ -1,9 +1,16 @@
-import type { AcpHostEvent } from '@md/shared/types'
+import type { AcpHostEvent, AcpPermissionLevel, AcpToolKind } from '@md/shared/types'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import {
+  evaluatePermissionPolicy,
+  getCustomExtraModes,
+  mapAcpModeIdToPermissionLevel,
+  mapPermissionLevelToAcpModeId,
+  migrateLegacyPermissionSettings,
+} from '@md/shared/utils/acp-permissions'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AcpHost } from './host'
 import { createSafeNdJsonStream } from './ndjson-stream'
@@ -170,7 +177,7 @@ describe(`acpSession`, () => {
       args: [FAKE_AGENT_SCRIPT],
       cwd,
       env: { FAKE_AGENT_REQUIRE_PERMISSION: `1` },
-      shouldAutoAcceptPermission: () => false,
+      resolveAutoPermission: () => `ask`,
       onEvent: (event) => {
         events.push(event)
         if (event.type === `permission_requested`)
@@ -276,22 +283,138 @@ describe(`acpSession`, () => {
   })
 })
 
-describe(`acpHost settings auto-accept & article disk sync`, () => {
-  it(`maps reviewEditsBeforeWriting and askBeforeRunningCommands toggles onto per-kind auto-accept`, async () => {
+describe(`acpHost permission levels, ACP modes & article disk sync`, () => {
+  it(`enforces the client permission policy matrix across every level and tool kind`, () => {
+    const toolKinds: AcpToolKind[] = [
+      `read`,
+      `search`,
+      `think`,
+      `edit`,
+      `delete`,
+      `move`,
+      `execute`,
+      `fetch`,
+      `switch_mode`,
+      `other`,
+    ]
+
+    const matrix = (level: AcpPermissionLevel, agentHasPlanMode = false) =>
+      Object.fromEntries(
+        toolKinds.map(kind => [kind, evaluatePermissionPolicy(level, kind, { agentHasPlanMode })]),
+      )
+
+    expect(matrix(`ask`)).toEqual({
+      read: `allow`,
+      search: `allow`,
+      think: `allow`,
+      edit: `ask`,
+      delete: `ask`,
+      move: `ask`,
+      execute: `ask`,
+      fetch: `ask`,
+      switch_mode: `ask`,
+      other: `ask`,
+    })
+
+    expect(matrix(`auto_edits`)).toEqual({
+      read: `allow`,
+      search: `allow`,
+      think: `allow`,
+      edit: `allow`,
+      delete: `allow`,
+      move: `allow`,
+      execute: `ask`,
+      fetch: `ask`,
+      switch_mode: `ask`,
+      other: `ask`,
+    })
+
+    expect(matrix(`plan`, false)).toEqual({
+      read: `allow`,
+      search: `allow`,
+      think: `allow`,
+      edit: `reject`,
+      delete: `reject`,
+      move: `reject`,
+      execute: `reject`,
+      fetch: `ask`,
+      switch_mode: `ask`,
+      other: `ask`,
+    })
+
+    expect(matrix(`plan`, true)).toEqual({
+      read: `allow`,
+      search: `allow`,
+      think: `allow`,
+      edit: `ask`,
+      delete: `ask`,
+      move: `ask`,
+      execute: `ask`,
+      fetch: `ask`,
+      switch_mode: `ask`,
+      other: `ask`,
+    })
+
+    expect(matrix(`bypass`)).toEqual({
+      read: `allow`,
+      search: `allow`,
+      think: `allow`,
+      edit: `allow`,
+      delete: `allow`,
+      move: `allow`,
+      execute: `allow`,
+      fetch: `allow`,
+      switch_mode: `allow`,
+      other: `allow`,
+    })
+  })
+
+  it(`switches ACP modes via session/set_mode, reflects current_mode_update, and enforces per-session permissions`, async () => {
     const dataDir = await makeTempDir(`md-acp-host-perm-`)
     const events: AcpHostEvent[] = []
     const host = new AcpHost({
       dataDir,
       extraBuiltinAgents: [
         {
-          id: `fake`,
-          name: `Fake`,
+          id: `fake-claude-modes`,
+          name: `Fake Claude Modes`,
           command: process.execPath,
           args: [FAKE_AGENT_SCRIPT],
-          env: { FAKE_AGENT_REQUIRE_PERMISSION: `1` },
+          env: {
+            FAKE_AGENT_REQUIRE_PERMISSION: `1`,
+            FAKE_AGENT_MODES_STYLE: `claude`,
+            FAKE_AGENT_EXTRA_MODES: `1`,
+          },
           detectBinaries: [process.execPath],
           builtin: true,
           avatar: { letter: `F`, color: `#5B5BD6` },
+        },
+        {
+          id: `fake-no-modes`,
+          name: `Fake No Modes`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_REQUIRE_PERMISSION: `1`,
+            FAKE_AGENT_MODES_STYLE: `none`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `N`, color: `#5B5BD6` },
+        },
+        {
+          id: `fake-push-mode`,
+          name: `Fake Push Mode`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0`,
+            FAKE_AGENT_MODES_STYLE: `claude`,
+            FAKE_AGENT_PUSH_MODE: `bypassPermissions`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `P`, color: `#5B5BD6` },
         },
       ],
       onEvent: (event) => {
@@ -302,40 +425,104 @@ describe(`acpHost settings auto-accept & article disk sync`, () => {
     })
     openHosts.push(host)
 
-    // Turn reviewEdits OFF, keep askCommands ON: edit should auto-accept, execute should prompt.
-    await host.updateSettings({ reviewEditsBeforeWriting: false, askBeforeRunningCommands: true })
+    // 1. Agent supporting modes: auto_edits switches ACP mode to acceptEdits, auto-allows edit, still asks for execute.
     const started = await host.startSession({
-      agentId: `fake`,
+      agentId: `fake-claude-modes`,
+      permissionLevel: `auto_edits`,
       postId: `p1`,
       postTitle: `Title`,
       content: `# Hello`,
     })
+    expect(started.currentModeId).toBe(`acceptEdits`)
+    expect(started.permissionLevel).toBe(`auto_edits`)
+    expect(getCustomExtraModes(started.modes).map(m => m.id)).toEqual([`deep_review`])
+    expect(mapPermissionLevelToAcpModeId(`plan`, started.modes)).toBe(`plan`)
+    expect(mapAcpModeIdToPermissionLevel(`bypassPermissions`)).toBe(`bypass`)
+
     await host.prompt({
       sessionId: started.sessionId,
       text: `Edit and run command`,
       content: `# Hello`,
       postTitle: `Title`,
     })
-
-    const promptedKinds = events
+    const promptedAutoEdits = events
       .filter((e): e is Extract<AcpHostEvent, { type: `permission_requested` }> => e.type === `permission_requested`)
       .map(e => e.request.toolKind)
-    expect(promptedKinds).toEqual([`execute`])
+    expect(promptedAutoEdits).toEqual([`execute`])
 
-    // Now turn reviewEdits ON, askCommands OFF: edit should prompt, execute should auto-accept.
+    // 2. Switching live session to bypass calls session/set_mode("bypassPermissions") and never prompts.
     events.length = 0
-    await host.updateSettings({ reviewEditsBeforeWriting: true, askBeforeRunningCommands: false })
+    const bypassed = await host.setPermissionMode({
+      sessionId: started.sessionId,
+      permissionLevel: `bypass`,
+    })
+    expect(bypassed).toEqual({ permissionLevel: `bypass`, modeId: `bypassPermissions` })
+
     await host.prompt({
       sessionId: started.sessionId,
-      text: `Edit and run command again`,
+      text: `Edit and run without prompts`,
       content: `# Hello 2`,
       postTitle: `Title`,
     })
+    expect(events.filter(e => e.type === `permission_requested`)).toHaveLength(0)
 
-    const secondPromptedKinds = events
-      .filter((e): e is Extract<AcpHostEvent, { type: `permission_requested` }> => e.type === `permission_requested`)
-      .map(e => e.request.toolKind)
-    expect(secondPromptedKinds).toEqual([`edit`])
+    const allMessageText = events
+      .filter((e): e is Extract<AcpHostEvent, { type: `message_chunk` }> => e.type === `message_chunk`)
+      .map(e => e.text)
+      .join(``)
+    expect(allMessageText).toContain(`[modes:acceptEdits,bypassPermissions]`)
+
+    // 3. Switching to a custom extra mode calls session/set_mode with that modeId and defaults client policy to ask.
+    const custom = await host.setPermissionMode({
+      sessionId: started.sessionId,
+      modeId: `deep_review`,
+    })
+    expect(custom).toEqual({ permissionLevel: `ask`, modeId: `deep_review` })
+
+    // 4. Plan mode on an agent WITHOUT a plan mode auto-rejects edit and execute without prompting.
+    events.length = 0
+    const noModeSess = await host.startSession({
+      agentId: `fake-no-modes`,
+      permissionLevel: `plan`,
+      postId: `p2`,
+      postTitle: `Plan Only`,
+      content: `# Original Plan Content`,
+    })
+    expect(noModeSess.modes).toEqual([])
+    await host.prompt({
+      sessionId: noModeSess.sessionId,
+      text: `Try edit and execute in plan mode`,
+      content: `# Original Plan Content`,
+      postTitle: `Plan Only`,
+    })
+    expect(events.filter(e => e.type === `permission_requested`)).toHaveLength(0)
+    expect(events.filter(e => e.type === `article_synced`)).toHaveLength(0)
+    const planText = events
+      .filter((e): e is Extract<AcpHostEvent, { type: `message_chunk` }> => e.type === `message_chunk`)
+      .map(e => e.text)
+      .join(``)
+    expect(planText).toContain(`[permission:opt_reject_once]`)
+
+    // 5. Agent-initiated current_mode_update reflects back to mode_changed with mapped permissionLevel.
+    events.length = 0
+    const pushSess = await host.startSession({
+      agentId: `fake-push-mode`,
+      permissionLevel: `ask`,
+      postId: `p3`,
+      postTitle: `Push Mode`,
+      content: `# Push`,
+    })
+    await host.prompt({
+      sessionId: pushSess.sessionId,
+      text: `Trigger mode update`,
+      content: `# Push`,
+      postTitle: `Push Mode`,
+    })
+    const modeChanged = events.find(
+      (e): e is Extract<AcpHostEvent, { type: `mode_changed` }> =>
+        e.type === `mode_changed` && e.modeId === `bypassPermissions`,
+    )
+    expect(modeChanged?.permissionLevel).toBe(`bypass`)
   })
 
   it(`syncs article back to editor on completed edit tool call and at turn end`, async () => {
@@ -445,7 +632,7 @@ describe(`probeAcpAgent and AcpRegistry`, () => {
     expect(detected.find(a => a.id === `gemini`)?.installed).toBe(true)
     expect(detected.find(a => a.id === `qwen`)?.installed).toBe(false)
 
-    await registry.updateSettings({ reviewEditsBeforeWriting: false })
+    await registry.updateSettings({ defaultPermissionLevel: `auto_edits` })
     const afterAdd = await registry.addCustomAgent({
       name: `My Local Agent`,
       command: fakeGemini,
@@ -460,8 +647,46 @@ describe(`probeAcpAgent and AcpRegistry`, () => {
       pathOverride: binDir,
     })
     const settings = await reloaded.getSettings()
-    expect(settings.reviewEditsBeforeWriting).toBe(false)
+    expect(settings.defaultPermissionLevel).toBe(`auto_edits`)
     expect(settings.customAgents).toHaveLength(1)
+  })
+
+  it(`migrates legacy two-toggle settings to defaultPermissionLevel once and strips old keys`, async () => {
+    expect(migrateLegacyPermissionSettings({ reviewEditsBeforeWriting: true, askBeforeRunningCommands: true }))
+      .toEqual({ level: `ask`, migrated: true })
+    expect(migrateLegacyPermissionSettings({ reviewEditsBeforeWriting: false, askBeforeRunningCommands: true }))
+      .toEqual({ level: `auto_edits`, migrated: true })
+    expect(migrateLegacyPermissionSettings({ reviewEditsBeforeWriting: false, askBeforeRunningCommands: false }))
+      .toEqual({ level: `bypass`, migrated: true })
+    expect(migrateLegacyPermissionSettings({ defaultPermissionLevel: `plan` }))
+      .toEqual({ level: `plan`, migrated: false })
+    expect(migrateLegacyPermissionSettings({}))
+      .toEqual({ level: `ask`, migrated: false })
+
+    const dir = await makeTempDir(`md-acp-migrate-`)
+    const settingsPath = path.join(dir, `acp-settings.json`)
+    await fs.writeFile(
+      settingsPath,
+      JSON.stringify({
+        defaultAgentId: `codex`,
+        reviewEditsBeforeWriting: false,
+        askBeforeRunningCommands: true,
+        lastModelByAgent: {},
+        customAgents: [],
+        commandOverrides: {},
+      }),
+      `utf8`,
+    )
+
+    const registry = new AcpRegistry({ settingsPath })
+    const loaded = await registry.getSettings()
+    expect(loaded.defaultAgentId).toBe(`codex`)
+    expect(loaded.defaultPermissionLevel).toBe(`auto_edits`)
+
+    const persistedRaw = JSON.parse(await fs.readFile(settingsPath, `utf8`)) as Record<string, unknown>
+    expect(persistedRaw.defaultPermissionLevel).toBe(`auto_edits`)
+    expect(`reviewEditsBeforeWriting` in persistedRaw).toBe(false)
+    expect(`askBeforeRunningCommands` in persistedRaw).toBe(false)
   })
 
   it(`streams npm install progress and supports cancellation`, async () => {
