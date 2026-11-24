@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AcpPermissionDecision, AcpPermissionRequest } from '@md/shared/types'
-import { FileEdit, ShieldAlert, Terminal } from '@lucide/vue'
+import { FilePenLine, ShieldAlert, Terminal } from '@lucide/vue'
 import { buildUnifiedDiff, formatShortFilePath } from '@/lib/agent/unified-diff'
 
 const props = defineProps<{
@@ -30,7 +30,7 @@ const iconComp = computed(() => {
   if (props.request.toolKind === `execute`)
     return Terminal
   if (isEditRequest.value)
-    return FileEdit
+    return FilePenLine
   return ShieldAlert
 })
 
@@ -79,20 +79,30 @@ const resolvedLabel = computed(() => {
           {{ headingText }}
         </span>
       </div>
-      <span
-        v-if="resolvedOutcome"
-        class="rounded-md px-2 py-0.5 text-[11px] font-medium"
-        :style="{
-          backgroundColor: resolvedOutcome === 'reject' || resolvedOutcome === 'cancelled'
-            ? 'var(--dt-red-soft)'
-            : 'var(--dt-green-soft)',
-          color: resolvedOutcome === 'reject' || resolvedOutcome === 'cancelled'
-            ? 'var(--dt-red)'
-            : 'var(--dt-green)',
-        }"
-      >
-        {{ resolvedLabel }}
-      </span>
+      <div class="flex items-center gap-2">
+        <span
+          v-if="diff.hasChanges"
+          class="flex shrink-0 items-center gap-1.5 text-xs font-medium"
+          style="font-family: var(--dt-mono)"
+        >
+          <span v-if="diff.added > 0" style="color: var(--dt-green)">+{{ diff.added }}</span>
+          <span v-if="diff.removed > 0" style="color: var(--dt-red)">−{{ diff.removed }}</span>
+        </span>
+        <span
+          v-if="resolvedOutcome"
+          class="rounded-md px-2 py-0.5 text-[11px] font-medium"
+          :style="{
+            backgroundColor: resolvedOutcome === 'reject' || resolvedOutcome === 'cancelled'
+              ? 'var(--dt-red-soft)'
+              : 'var(--dt-green-soft)',
+            color: resolvedOutcome === 'reject' || resolvedOutcome === 'cancelled'
+              ? 'var(--dt-red)'
+              : 'var(--dt-green)',
+          }"
+        >
+          {{ resolvedLabel }}
+        </span>
+      </div>
     </div>
 
     <!-- Diff preview for edit/delete/move permissions -->
@@ -102,15 +112,11 @@ const resolvedLabel = computed(() => {
       style="background-color: var(--dt-canvas); border: 1px solid var(--dt-line)"
     >
       <div
-        class="flex items-center justify-between gap-2 px-2.5 py-1.5 text-[11.5px]"
+        class="flex h-7 items-center px-2.5 text-[11.5px]"
         style="border-bottom: 1px solid var(--dt-line); font-family: var(--dt-mono)"
       >
         <span class="min-w-0 flex-1 truncate font-medium" style="color: var(--dt-ink2)" :title="request.filePath">
           {{ shortPath }}
-        </span>
-        <span class="flex shrink-0 items-center gap-1.5 font-medium">
-          <span v-if="diff.added > 0" style="color: var(--dt-green)">+{{ diff.added }}</span>
-          <span v-if="diff.removed > 0" style="color: var(--dt-red)">−{{ diff.removed }}</span>
         </span>
       </div>
       <div

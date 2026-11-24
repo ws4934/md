@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import type { AcpAgentStatus } from '@md/shared/types'
-import { Download, Plus, RefreshCw, Trash2 } from '@lucide/vue'
-import { Switch } from '@/components/ui/switch'
+import type { AcpAgentStatus, AcpPermissionLevel } from '@md/shared/types'
+import { Check, ChevronDown, Download, NotebookPen, Plus, RefreshCw, Shield, ShieldCheck, ShieldOff, Trash2 } from '@lucide/vue'
 import { useAgentStore } from '@/stores/agent'
 import AgentAvatar from './AgentAvatar.vue'
 
@@ -95,16 +94,68 @@ async function submitCustomAgent() {
   toast.success(t(`agent.settings.customAdded`))
 }
 
-async function toggleReviewEdits(value: boolean) {
-  await agentStore.updateSettings({ reviewEditsBeforeWriting: value })
+const isDefaultPermOpen = ref(false)
+const defaultPermRef = ref<HTMLElement | null>(null)
+
+const permissionLevelOptions = computed<Array<{
+  id: AcpPermissionLevel
+  icon: typeof Shield
+  title: string
+  desc: string
+  danger?: boolean
+}>>(() => [
+  {
+    id: `ask`,
+    icon: Shield,
+    title: t(`agent.permissionMode.askTitle`),
+    desc: t(`agent.permissionMode.askDesc`),
+  },
+  {
+    id: `auto_edits`,
+    icon: ShieldCheck,
+    title: t(`agent.permissionMode.autoEditsTitle`),
+    desc: t(`agent.permissionMode.autoEditsDesc`),
+  },
+  {
+    id: `plan`,
+    icon: NotebookPen,
+    title: t(`agent.permissionMode.planTitle`),
+    desc: t(`agent.permissionMode.planDesc`),
+  },
+  {
+    id: `bypass`,
+    icon: ShieldOff,
+    title: t(`agent.permissionMode.bypassTitle`),
+    desc: t(`agent.permissionMode.bypassDesc`),
+    danger: true,
+  },
+])
+
+const selectedDefaultPerm = computed(() =>
+  permissionLevelOptions.value.find(o => o.id === settings.value.defaultPermissionLevel)
+  ?? permissionLevelOptions.value[0],
+)
+
+async function selectDefaultPermission(level: AcpPermissionLevel) {
+  isDefaultPermOpen.value = false
+  await agentStore.updateSettings({ defaultPermissionLevel: level })
 }
 
-async function toggleAskCommands(value: boolean) {
-  await agentStore.updateSettings({ askBeforeRunningCommands: value })
+function onClickOutsidePermSelect(event: MouseEvent) {
+  if (!isDefaultPermOpen.value)
+    return
+  const target = event.target as Node | null
+  if (defaultPermRef.value && target && !defaultPermRef.value.contains(target))
+    isDefaultPermOpen.value = false
 }
 
 onMounted(() => {
   void handleRedetect()
+  document.addEventListener(`mousedown`, onClickOutsidePermSelect)
+})
+
+onUnmounted(() => {
+  document.removeEventListener(`mousedown`, onClickOutsidePermSelect)
 })
 </script>
 
@@ -433,35 +484,80 @@ onMounted(() => {
       <div class="flex items-center justify-between gap-4 py-3">
         <div class="min-w-0">
           <div class="text-[13.5px] font-medium" style="color: var(--dt-ink)">
-            {{ t('agent.settings.reviewEditsTitle') }}
+            {{ t('agent.settings.defaultPermissionTitle') }}
           </div>
           <p class="mt-0.5 text-xs" style="color: var(--dt-ink3)">
-            {{ t('agent.settings.reviewEditsDesc') }}
+            {{ t('agent.settings.defaultPermissionDesc') }}
           </p>
         </div>
-        <Switch
-          id="pref-agent-review-edits"
-          class="shrink-0"
-          :model-value="settings.reviewEditsBeforeWriting"
-          @update:model-value="toggleReviewEdits"
-        />
-      </div>
 
-      <div class="flex items-center justify-between gap-4 py-3">
-        <div class="min-w-0">
-          <div class="text-[13.5px] font-medium" style="color: var(--dt-ink)">
-            {{ t('agent.settings.askCommandsTitle') }}
+        <div ref="defaultPermRef" class="relative shrink-0">
+          <button
+            type="button"
+            data-testid="settings-default-permission-select"
+            class="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 text-[13px] transition-opacity hover:opacity-85"
+            style="
+              background-color: var(--dt-surface);
+              border: 1px solid var(--dt-line);
+              color: var(--dt-ink);
+            "
+            @click="isDefaultPermOpen = !isDefaultPermOpen"
+          >
+            <component
+              :is="selectedDefaultPerm.icon"
+              class="size-3.5 shrink-0"
+              :style="{ color: selectedDefaultPerm.danger ? 'var(--dt-red)' : 'var(--dt-ink2)' }"
+            />
+            <span :style="{ color: selectedDefaultPerm.danger ? 'var(--dt-red)' : 'var(--dt-ink)' }">
+              {{ selectedDefaultPerm.title }}
+            </span>
+            <ChevronDown class="size-3.5 shrink-0" style="color: var(--dt-ink3)" />
+          </button>
+
+          <div
+            v-if="isDefaultPermOpen"
+            class="absolute bottom-full right-0 z-50 mb-1.5 flex w-[300px] flex-col gap-0.5 rounded-xl p-1.5"
+            style="
+              background-color: var(--dt-surface);
+              border: 1px solid var(--dt-line);
+              box-shadow: 0 16px 40px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
+            "
+          >
+            <button
+              v-for="opt in permissionLevelOptions"
+              :key="opt.id"
+              type="button"
+              :data-testid="`settings-perm-option-${opt.id}`"
+              class="flex min-h-[48px] w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors"
+              :style="{
+                backgroundColor: settings.defaultPermissionLevel === opt.id ? 'var(--dt-subtle)' : 'transparent',
+              }"
+              @click="selectDefaultPermission(opt.id)"
+            >
+              <component
+                :is="opt.icon"
+                class="size-4 shrink-0"
+                :style="{ color: opt.danger ? 'var(--dt-red)' : 'var(--dt-ink2)' }"
+              />
+              <div class="min-w-0 flex-1">
+                <div
+                  class="truncate text-[13px] font-medium"
+                  :style="{ color: opt.danger ? 'var(--dt-red)' : 'var(--dt-ink)' }"
+                >
+                  {{ opt.title }}
+                </div>
+                <div class="truncate text-[11.5px]" style="color: var(--dt-ink3)">
+                  {{ opt.desc }}
+                </div>
+              </div>
+              <Check
+                v-if="settings.defaultPermissionLevel === opt.id"
+                class="size-[15px] shrink-0"
+                style="color: var(--dt-ink)"
+              />
+            </button>
           </div>
-          <p class="mt-0.5 text-xs" style="color: var(--dt-ink3)">
-            {{ t('agent.settings.askCommandsDesc') }}
-          </p>
         </div>
-        <Switch
-          id="pref-agent-ask-commands"
-          class="shrink-0"
-          :model-value="settings.askBeforeRunningCommands"
-          @update:model-value="toggleAskCommands"
-        />
       </div>
     </div>
   </div>

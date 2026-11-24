@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import type { AcpToolCallItem } from '@md/shared/types'
-import { Check, ChevronDown, ChevronRight, FileDiff, LoaderCircle, X } from '@lucide/vue'
+import { Check, ChevronDown, ChevronRight, LoaderCircle, PencilLine, X } from '@lucide/vue'
 import { buildUnifiedDiff, formatShortFilePath } from '@/lib/agent/unified-diff'
 
 const props = defineProps<{
   tool: AcpToolCallItem
 }>()
 
+const { t } = useI18n()
 const expanded = ref(false)
 
 const diff = computed(() =>
@@ -52,7 +53,11 @@ const displayPath = computed(() =>
         style="color: var(--dt-accent)"
       />
 
-      <FileDiff class="size-3.5 shrink-0" style="color: var(--dt-ink3)" />
+      <PencilLine class="size-3.5 shrink-0" style="color: var(--dt-ink3)" />
+
+      <span class="shrink-0 text-[12.5px]" style="color: var(--dt-ink2)">
+        {{ t('agent.editCard.label') }}
+      </span>
 
       <span
         class="min-w-0 flex-1 truncate font-medium"

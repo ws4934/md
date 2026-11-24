@@ -161,6 +161,7 @@ declare global {
   const useAIImageConfigStore: typeof import('./src/stores/aiImageConfig').useAIImageConfigStore
   const useAccountSyncBootstrap: typeof import('./src/composables/useAccountSyncBootstrap').useAccountSyncBootstrap
   const useActiveElement: typeof import('@vueuse/core').useActiveElement
+  const useAgentPanelHotkey: typeof import('./src/composables/useAgentPanelHotkey').useAgentPanelHotkey
   const useAgentStore: typeof import('./src/stores/agent').useAgentStore
   const useAnimate: typeof import('@vueuse/core').useAnimate
   const useArrayDifference: typeof import('@vueuse/shared').useArrayDifference

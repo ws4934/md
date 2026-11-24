@@ -150,12 +150,12 @@ onUnmounted(() => {
       @click="toggleMenu"
     >
       <AgentAvatar v-if="selectedAgent" :avatar="selectedAgent.avatar" :size="18" />
-      <span class="max-w-[110px] truncate font-medium">
+      <span class="max-w-[96px] truncate font-medium">
         {{ selectedAgent?.name ?? t('agent.composer.selectAgent') }}
       </span>
       <span
         v-if="selectedModel"
-        class="max-w-[96px] truncate"
+        class="max-w-[74px] truncate"
         style="color: var(--dt-ink3)"
       >
         · {{ selectedModel.name }}

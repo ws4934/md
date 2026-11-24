@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AcpPermissionDecision } from '@md/shared/types'
 import type { AgentTimelineItem } from '@/stores/agent'
-import { AlertCircle, Check, History, LoaderCircle, Plus, Trash2, X } from '@lucide/vue'
+import { AlertCircle, Check, History, LoaderCircle, PanelRightClose, Plus, Trash2, X } from '@lucide/vue'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -136,6 +136,18 @@ function onRespondPermission(requestId: string, decision: AcpPermissionDecision)
           @click="agentStore.startNewSession()"
         >
           <Plus class="size-4" />
+        </button>
+
+        <button
+          type="button"
+          data-testid="agent-panel-collapse"
+          :title="t('agent.panel.collapsePanel')"
+          :aria-label="t('agent.panel.collapsePanel')"
+          class="inline-flex size-[30px] cursor-pointer items-center justify-center rounded-lg transition-colors hover:opacity-80"
+          style="color: var(--dt-ink3)"
+          @click="agentStore.setPanelOpen(false)"
+        >
+          <PanelRightClose class="size-4" />
         </button>
       </div>
     </header>

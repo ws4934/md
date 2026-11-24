@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Palette, Send, Sparkles } from '@lucide/vue'
+import { ctrlSign } from '@md/shared/configs'
 import { useAgentStore } from '@/stores/agent'
 import { usePostStore } from '@/stores/post'
 import { useUIStore } from '@/stores/ui'
@@ -15,7 +16,11 @@ const agentStore = useAgentStore()
 
 const { currentPost } = storeToRefs(postStore)
 const { viewMode, isOpenRightSlider } = storeToRefs(uiStore)
-const { isPanelOpen } = storeToRefs(agentStore)
+const { isPanelOpen, isCurrentSessionRunning, isWaitingPermission } = storeToRefs(agentStore)
+const toggleShortcutHint = `${ctrlSign}J`
+const showCollapsedActivityDot = computed(
+  () => !isPanelOpen.value && (isCurrentSessionRunning.value || isWaitingPermission.value),
+)
 
 const isEditingTitle = ref(false)
 const titleDraft = ref(``)
@@ -109,16 +114,26 @@ function commitTitleEdit() {
 
       <button
         type="button"
-        :title="t('agent.panel.togglePanel')"
+        data-testid="desktop-agent-panel-toggle"
+        :title="`${t('agent.panel.togglePanel')} (${toggleShortcutHint})`"
         :aria-label="t('agent.panel.togglePanel')"
-        class="inline-flex size-[30px] cursor-pointer items-center justify-center rounded-lg transition-colors"
+        class="relative inline-flex size-[30px] cursor-pointer items-center justify-center rounded-lg transition-colors"
         :style="{
           backgroundColor: isPanelOpen ? 'var(--dt-accent-soft)' : 'transparent',
           color: isPanelOpen ? 'var(--dt-accent)' : 'var(--dt-ink2)',
         }"
-        @click="isPanelOpen = !isPanelOpen"
+        @click="agentStore.togglePanel()"
       >
         <Sparkles class="size-4" />
+        <span
+          v-if="showCollapsedActivityDot"
+          data-testid="toolbar-agent-status-dot"
+          class="absolute right-[3px] top-[4px] size-[7px] rounded-full"
+          :style="{
+            backgroundColor: isWaitingPermission ? 'var(--dt-amber)' : 'var(--dt-accent)',
+            boxShadow: '0 0 0 1.5px var(--dt-canvas)',
+          }"
+        />
       </button>
 
       <span class="w-1.5" />

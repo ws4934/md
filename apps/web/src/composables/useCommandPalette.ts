@@ -6,6 +6,7 @@ import { readSearchSeed } from '@/lib/editor/searchSeed'
 import { isAccountUiEnabled } from '@/services/account/config'
 import { isShareUiEnabled } from '@/services/share/client'
 import { isSyncUiEnabled } from '@/services/sync/client'
+import { useAgentStore } from '@/stores/agent'
 import { useEditorStore } from '@/stores/editor'
 import { useExportStore } from '@/stores/export'
 import { useLocaleStore } from '@/stores/locale'
@@ -27,6 +28,7 @@ export function useCommandPalette() {
   const exportStore = useExportStore()
   const postStore = usePostStore()
   const localeStore = useLocaleStore()
+  const agentStore = useAgentStore()
   const { formatContent } = useEditorDocumentActions()
 
   function withEditor(run: (view: EditorView) => void | Promise<void>) {
@@ -269,6 +271,17 @@ export function useCommandPalette() {
         group: t(`commandPalette.group.cloud`),
         keywords: [`分享`, `share`, `预览`],
         action: () => uiStore.openShareDialog(),
+      })
+    }
+
+    if (typeof window !== `undefined` && window.mdDesktop?.isDesktop) {
+      commands.push({
+        id: `toggle-agent-panel`,
+        label: t(`agent.panel.togglePanel`),
+        group: t(`commandPalette.group.panel`),
+        keywords: [`agent`, `acp`, `ai`, `面板`, `展开`, `收起`],
+        shortcut: [ctrlSign, `J`],
+        action: () => { agentStore.togglePanel() },
       })
     }
 

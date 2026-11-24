@@ -19,6 +19,7 @@ declare module 'vue' {
     AgentModelPicker: typeof import('./src/components/agent/AgentModelPicker.vue')['default']
     AgentPanel: typeof import('./src/components/agent/AgentPanel.vue')['default']
     AgentPermissionCard: typeof import('./src/components/agent/AgentPermissionCard.vue')['default']
+    AgentPermissionPicker: typeof import('./src/components/agent/AgentPermissionPicker.vue')['default']
     AgentPlanSteps: typeof import('./src/components/agent/AgentPlanSteps.vue')['default']
     AgentsSettingsTab: typeof import('./src/components/agent/AgentsSettingsTab.vue')['default']
     AIAssistantPanel: typeof import('./src/components/ai/chat-box/AIAssistantPanel.vue')['default']

@@ -16,12 +16,14 @@ function mod(...keys: string[]) {
 }
 
 export function buildKeyboardShortcutCategories(): ShortcutCategory[] {
+  const isDesktop = typeof window !== `undefined` && Boolean(window.mdDesktop?.isDesktop)
   return [
     {
       title: t(`keyboard.category.general`),
       items: [
         { label: t(`menu.commandPalette`), keys: mod(shiftSign, `.`) },
         { label: t(`menu.preferences`), keys: mod(`,`) },
+        ...(isDesktop ? [{ label: t(`agent.panel.togglePanel`), keys: mod(`J`) }] : []),
         { label: t(`keyboard.slashCommand`), keys: [`/`] },
         { label: t(`keyboard.closeSearchPanel`), keys: [`Esc`] },
       ],

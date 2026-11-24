@@ -1,14 +1,17 @@
 import type {
   AcpAgentStatus,
   AcpHostEvent,
+  AcpModeInfo,
   AcpModelInfo,
   AcpPermissionDecision,
+  AcpPermissionLevel,
   AcpPermissionRequest,
   AcpPlanEntry,
   AcpProbeResult,
   AcpSettings,
   AcpToolCallItem,
 } from '@md/shared/types'
+import { getCustomExtraModes, mapAcpModeIdToPermissionLevel } from '@md/shared/utils/acp-permissions'
 import { uuidv4 } from '@md/shared/utils/uuid'
 import { t } from '@/i18n/translate'
 import { store } from '@/storage'
@@ -34,6 +37,8 @@ export interface AgentConversationSession {
   acpSessionId: string | null
   agentId: string
   modelId: string | null
+  permissionLevel?: AcpPermissionLevel
+  modeId?: string | null
   postId: string
   title: string
   items: AgentTimelineItem[]
@@ -41,13 +46,13 @@ export interface AgentConversationSession {
 }
 
 const SESSIONS_STORAGE_KEY = `desktop_acp_sessions_v1`
+const PANEL_OPEN_STORAGE_KEY = `desktop_acp_panel_open_v1`
 const MAX_STORED_SESSIONS = 30
 
 const DEFAULT_SETTINGS: AcpSettings = {
   defaultAgentId: `claude`,
+  defaultPermissionLevel: `ask`,
   lastModelByAgent: {},
-  reviewEditsBeforeWriting: true,
-  askBeforeRunningCommands: true,
   customAgents: [],
   commandOverrides: {},
 }
@@ -65,9 +70,19 @@ export const useAgentStore = defineStore(`agent`, () => {
 
   const selectedAgentId = ref<string>(`claude`)
   const selectedModelByAgent = ref<Record<string, string>>({})
+  const draftPermissionLevel = ref<AcpPermissionLevel>(`ask`)
+  const draftModeId = ref<string | null>(null)
 
-  const isPanelOpen = ref<boolean>(true)
+  const isPanelOpen = store.reactive<boolean>(PANEL_OPEN_STORAGE_KEY, true)
   const isNewArticleHero = ref<boolean>(false)
+
+  function togglePanel(): void {
+    isPanelOpen.value = !isPanelOpen.value
+  }
+
+  function setPanelOpen(open: boolean): void {
+    isPanelOpen.value = open
+  }
 
   const sessions = ref<AgentConversationSession[]>([])
   const activeSessionId = ref<string | null>(null)
@@ -135,6 +150,55 @@ export const useAgentStore = defineStore(`agent`, () => {
       return null
     const found = probe?.models.find(m => m.id === chosenId)
     return found ?? { id: chosenId, name: chosenId }
+  })
+
+  const currentPermissionLevel = computed<AcpPermissionLevel>(
+    () => activeSession.value?.permissionLevel ?? draftPermissionLevel.value,
+  )
+
+  const currentModeId = computed<string | null>(
+    () => activeSession.value?.modeId ?? draftModeId.value,
+  )
+
+  const availableModes = computed<AcpModeInfo[]>(() => {
+    const agent = selectedAgent.value
+    if (!agent)
+      return []
+    return probeByAgent.value[agent.id]?.modes ?? []
+  })
+
+  const customExtraModes = computed<AcpModeInfo[]>(() => getCustomExtraModes(availableModes.value))
+
+  const activeCustomMode = computed<AcpModeInfo | null>(() => {
+    const modeId = currentModeId.value
+    if (!modeId)
+      return null
+    return customExtraModes.value.find(m => m.id === modeId) ?? null
+  })
+
+  const currentActivityLabel = computed<string>(() => {
+    const session = activeSession.value
+    if (!session)
+      return t(`agent.panel.writingBadge`)
+
+    const lastUserIdx = findLastIndex(session.items, item => item.type === `user`)
+    const lastPlanIdx = findLastIndex(session.items, item => item.type === `plan`)
+    if (lastPlanIdx > lastUserIdx) {
+      const planItem = session.items[lastPlanIdx]
+      if (planItem?.type === `plan`) {
+        const runningStep = planItem.entries.find(e => e.status === `in_progress`)
+        if (runningStep?.content)
+          return runningStep.content
+      }
+    }
+
+    for (let i = session.items.length - 1; i > lastUserIdx; i--) {
+      const item = session.items[i]
+      if (item.type === `tool_call` && (item.tool.status === `in_progress` || item.tool.status === `pending`))
+        return item.tool.title
+    }
+
+    return t(`agent.panel.writingBadge`)
   })
 
   async function persistSessions(): Promise<void> {
@@ -366,6 +430,16 @@ export const useAgentStore = defineStore(`agent`, () => {
         }
         break
       }
+      case `mode_changed`: {
+        const session = findSessionByAcpId(event.sessionId)
+        if (session) {
+          session.modeId = event.modeId
+          const mapped = event.permissionLevel ?? mapAcpModeIdToPermissionLevel(event.modeId)
+          if (mapped)
+            session.permissionLevel = mapped
+        }
+        break
+      }
       case `session_closed`: {
         const nextRunning = { ...runningAcpSessions.value }
         delete nextRunning[event.sessionId]
@@ -402,6 +476,7 @@ export const useAgentStore = defineStore(`agent`, () => {
 
     agents.value = loadedAgents
     settings.value = loadedSettings
+    draftPermissionLevel.value = loadedSettings.defaultPermissionLevel
     selectedModelByAgent.value = { ...loadedSettings.lastModelByAgent }
     sessions.value = savedSessions
     if (savedSessions.length > 0)
@@ -464,6 +539,50 @@ export const useAgentStore = defineStore(`agent`, () => {
     }
   }
 
+  async function setSessionPermissionMode(params: {
+    permissionLevel?: AcpPermissionLevel
+    modeId?: string | null
+  }): Promise<void> {
+    const session = activeSession.value
+
+    if (params.permissionLevel) {
+      draftPermissionLevel.value = params.permissionLevel
+      draftModeId.value = params.modeId ?? null
+      if (session) {
+        session.permissionLevel = params.permissionLevel
+        session.modeId = params.modeId ?? null
+      }
+    }
+    else if (params.modeId) {
+      const mapped = mapAcpModeIdToPermissionLevel(params.modeId)
+      const nextLevel = mapped ?? `ask`
+      draftPermissionLevel.value = nextLevel
+      draftModeId.value = params.modeId
+      if (session) {
+        session.permissionLevel = nextLevel
+        session.modeId = params.modeId
+      }
+    }
+
+    if (session?.acpSessionId && window.mdDesktop?.acp) {
+      try {
+        const result = await window.mdDesktop.acp.setPermissionMode({
+          sessionId: session.acpSessionId,
+          permissionLevel: params.permissionLevel,
+          modeId: params.modeId,
+        })
+        session.permissionLevel = result.permissionLevel
+        session.modeId = result.modeId
+      }
+      catch (error) {
+        toast.error(error instanceof Error ? error.message : String(error))
+      }
+    }
+
+    if (session)
+      void persistSessions()
+  }
+
   function createSessionRecord(title?: string): AgentConversationSession {
     const post = postStore.currentPost
     const session: AgentConversationSession = {
@@ -471,6 +590,8 @@ export const useAgentStore = defineStore(`agent`, () => {
       acpSessionId: null,
       agentId: selectedAgentId.value,
       modelId: selectedModel.value?.id ?? null,
+      permissionLevel: draftPermissionLevel.value,
+      modeId: draftModeId.value,
       postId: post?.id ?? ``,
       title: title || post?.title || t(`agent.panel.defaultTitle`),
       items: [],
@@ -485,6 +606,8 @@ export const useAgentStore = defineStore(`agent`, () => {
     const current = activeSession.value
     if (current?.acpSessionId && window.mdDesktop?.acp)
       await window.mdDesktop.acp.closeSession(current.acpSessionId).catch(() => undefined)
+    draftPermissionLevel.value = settings.value.defaultPermissionLevel
+    draftModeId.value = null
     createSessionRecord()
     await persistSessions()
   }
@@ -556,22 +679,26 @@ export const useAgentStore = defineStore(`agent`, () => {
         const started = await window.mdDesktop.acp.startSession({
           agentId: agent.id,
           modelId: selectedModel.value?.id ?? null,
+          permissionLevel: session.permissionLevel ?? draftPermissionLevel.value,
+          modeId: session.modeId ?? draftModeId.value,
           postId,
           postTitle,
           content,
         })
         session.acpSessionId = started.sessionId
         session.modelId = started.modelId
-        if (started.models.length > 0) {
+        session.permissionLevel = started.permissionLevel
+        session.modeId = started.currentModeId
+        if (started.models.length > 0 || started.modes.length > 0) {
           probeByAgent.value = {
             ...probeByAgent.value,
             [agent.id]: {
               agentId: agent.id,
-              models: started.models,
-              currentModelId: started.modelId,
-              modes: probeByAgent.value[agent.id]?.modes ?? [],
-              currentModeId: probeByAgent.value[agent.id]?.currentModeId ?? null,
-              commands: started.commands,
+              models: started.models.length > 0 ? started.models : (probeByAgent.value[agent.id]?.models ?? []),
+              currentModelId: started.modelId ?? probeByAgent.value[agent.id]?.currentModelId ?? null,
+              modes: started.modes.length > 0 ? started.modes : (probeByAgent.value[agent.id]?.modes ?? []),
+              currentModeId: started.currentModeId ?? probeByAgent.value[agent.id]?.currentModeId ?? null,
+              commands: started.commands.length > 0 ? started.commands : (probeByAgent.value[agent.id]?.commands ?? []),
               probedAt: Date.now(),
             },
           }
@@ -631,6 +758,14 @@ export const useAgentStore = defineStore(`agent`, () => {
     if (!window.mdDesktop?.acp)
       return
     settings.value = await window.mdDesktop.acp.updateSettings(patch)
+    if (patch.defaultPermissionLevel && !activeSession.value?.acpSessionId) {
+      draftPermissionLevel.value = settings.value.defaultPermissionLevel
+      draftModeId.value = null
+      if (activeSession.value && activeSession.value.items.length === 0) {
+        activeSession.value.permissionLevel = settings.value.defaultPermissionLevel
+        activeSession.value.modeId = null
+      }
+    }
     ensureValidSelectedAgent()
   }
 
@@ -699,11 +834,20 @@ export const useAgentStore = defineStore(`agent`, () => {
     isCurrentPostWriting,
     activePendingPermissions,
     isWaitingPermission,
+    currentPermissionLevel,
+    currentModeId,
+    availableModes,
+    customExtraModes,
+    activeCustomMode,
+    currentActivityLabel,
 
     init,
+    togglePanel,
+    setPanelOpen,
     detectAgents,
     probeAgent,
     selectAgentAndModel,
+    setSessionPermissionMode,
     startNewSession,
     switchSession,
     deleteSession,
