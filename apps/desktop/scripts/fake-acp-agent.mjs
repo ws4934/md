@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Minimal ACP JSON-RPC test/dev agent over stdio.
- * Controlled via env vars for deterministic unit tests and end-to-end UI flows.
+ * Reads/writes disk directly (matching default clientCapabilities.fs = false).
  */
+import fs from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import readline from 'node:readline'
@@ -13,8 +14,10 @@ const earlyUpdate = process.env.FAKE_AGENT_EARLY_UPDATE === `1`
 const modelStyle = process.env.FAKE_AGENT_MODEL_STYLE || `models`
 const emitCommands = process.env.FAKE_AGENT_EMIT_COMMANDS === `1`
 const requirePermission = process.env.FAKE_AGENT_REQUIRE_PERMISSION === `1`
+const requireEditPermission = process.env.FAKE_AGENT_REQUIRE_EDIT_PERMISSION !== `0`
 const emitAllToolKinds = process.env.FAKE_AGENT_ALL_TOOL_KINDS === `1`
 const stringifyIds = process.env.FAKE_AGENT_STRINGIFY_IDS === `1`
+const directWriteWithoutEditTool = process.env.FAKE_AGENT_DIRECT_WRITE_ONLY === `1`
 
 const SESSION_ID = `fake_sess_01`
 let currentModelId = `opus-5.5`
@@ -167,6 +170,26 @@ async function handlePrompt(id, params) {
     return
   }
 
+  const articlePath = path.join(currentCwd, `article.md`)
+  let existing = ``
+  try {
+    existing = await fs.readFile(articlePath, `utf8`)
+  }
+  catch {
+    existing = ``
+  }
+
+  if (directWriteWithoutEditTool) {
+    const nextText = `${existing.trimEnd()}\n\n<!-- turn-end-sync -->\n`
+    await fs.writeFile(articlePath, nextText, `utf8`)
+    sendUpdate({
+      sessionUpdate: `agent_message_chunk`,
+      content: { type: `text`, text: `Updated article directly on disk.` },
+    })
+    sendResult(id, { stopReason: `end_turn` })
+    return
+  }
+
   sendUpdate({
     sessionUpdate: `agent_thought_chunk`,
     content: { type: `text`, text: `Analyzing article context and reader tone.` },
@@ -176,28 +199,6 @@ async function handlePrompt(id, params) {
     sessionUpdate: `agent_message_chunk`,
     content: { type: `text`, text: `好的，先读取当前文章内容，然后按要求更新正文。` },
   })
-
-  sendUpdate({
-    sessionUpdate: `plan`,
-    entries: [
-      { content: `读取当前文章`, status: `in_progress`, priority: `high` },
-      { content: `整理段落与示例`, status: `pending`, priority: `medium` },
-      { content: `写入修改并校对`, status: `pending`, priority: `low` },
-    ],
-  })
-
-  const articlePath = path.join(currentCwd, `article.md`)
-  let existing = ``
-  try {
-    const readRes = await callClient(`fs/read_text_file`, {
-      sessionId: SESSION_ID,
-      path: articlePath,
-    })
-    existing = readRes?.content ?? ``
-  }
-  catch {
-    existing = ``
-  }
 
   sendUpdate({
     sessionUpdate: `plan`,
@@ -217,25 +218,53 @@ async function handlePrompt(id, params) {
     toolCallId: `edit-article-1`,
     title: `更新 article.md`,
     kind: `edit`,
-    status: `in_progress`,
+    status: `pending`,
     locations: [{ path: articlePath }],
-  })
-
-  await callClient(`fs/write_text_file`, {
-    sessionId: SESSION_ID,
-    path: articlePath,
-    content: updatedArticle,
-  })
-
-  sendUpdate({
-    sessionUpdate: `tool_call_update`,
-    toolCallId: `edit-article-1`,
-    status: `completed`,
     content: [{ type: `diff`, path: articlePath, oldText: existing, newText: updatedArticle }],
   })
 
-  const needsPerm = requirePermission || /permission|mermaid|命令|svg|run/i.test(text)
-  if (needsPerm) {
+  let editAllowed = true
+  if (requireEditPermission) {
+    const editPerm = await callClient(`session/request_permission`, {
+      sessionId: SESSION_ID,
+      toolCall: {
+        toolCallId: `edit-article-1`,
+        title: `更新 article.md`,
+        kind: `edit`,
+        status: `pending`,
+        locations: [{ path: articlePath }],
+        content: [{ type: `diff`, path: articlePath, oldText: existing, newText: updatedArticle }],
+      },
+      options: [
+        { optionId: `opt_allow_once`, name: `Allow once`, kind: `allow_once` },
+        { optionId: `opt_allow_always`, name: `Allow always`, kind: `allow_always` },
+        { optionId: `opt_reject_once`, name: `Reject`, kind: `reject_once` },
+      ],
+    })
+    const editOutcome = editPerm?.outcome
+    editAllowed = editOutcome?.outcome === `selected` && editOutcome.optionId !== `opt_reject_once`
+  }
+
+  if (editAllowed) {
+    await fs.writeFile(articlePath, updatedArticle, `utf8`)
+    sendUpdate({
+      sessionUpdate: `tool_call_update`,
+      toolCallId: `edit-article-1`,
+      status: `completed`,
+      content: [{ type: `diff`, path: articlePath, oldText: existing, newText: updatedArticle }],
+    })
+  }
+  else {
+    sendUpdate({
+      sessionUpdate: `tool_call_update`,
+      toolCallId: `edit-article-1`,
+      status: `failed`,
+      rawOutput: { error: `Edit rejected by user` },
+    })
+  }
+
+  const needsExecPerm = requirePermission || /permission|mermaid|命令|svg|run/i.test(text)
+  if (needsExecPerm) {
     sendUpdate({
       sessionUpdate: `agent_message_chunk`,
       content: { type: `text`, text: `\n\n正文已更新。接下来需要执行一条命令来渲染图表：` },
@@ -301,6 +330,9 @@ async function handleRequest(msg) {
           sessionCapabilities: { close: {} },
         },
         agentInfo: { name: `fake-acp-agent`, version: `1.0.0` },
+        _meta: {
+          receivedClientCapabilities: params.clientCapabilities ?? null,
+        },
       })
       return
     }

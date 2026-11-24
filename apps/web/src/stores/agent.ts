@@ -9,10 +9,8 @@ import type {
   AcpSettings,
   AcpToolCallItem,
 } from '@md/shared/types'
-import type { ArticleDiffHunk } from '@/lib/agent/diff-hunks'
 import { uuidv4 } from '@md/shared/utils/uuid'
 import { t } from '@/i18n/translate'
-import { applyDiffHunk, computeArticleDiffHunks, rejectDiffHunk } from '@/lib/agent/diff-hunks'
 import { store } from '@/storage'
 import { useEditorStore } from '@/stores/editor'
 import { usePostStore } from '@/stores/post'
@@ -40,16 +38,6 @@ export interface AgentConversationSession {
   title: string
   items: AgentTimelineItem[]
   updatedAt: number
-}
-
-export interface PendingArticleEdit {
-  editId: string
-  sessionId: string
-  postId: string
-  baseContent: string
-  proposedContent: string
-  hunks: ArticleDiffHunk[]
-  activeHunkIndex: number
 }
 
 const SESSIONS_STORAGE_KEY = `desktop_acp_sessions_v1`
@@ -84,7 +72,6 @@ export const useAgentStore = defineStore(`agent`, () => {
   const sessions = ref<AgentConversationSession[]>([])
   const activeSessionId = ref<string | null>(null)
   const runningAcpSessions = ref<Record<string, boolean>>({})
-  const pendingEdit = ref<PendingArticleEdit | null>(null)
 
   let initialized = false
   let unsubscribeEvents: (() => void) | null = null
@@ -150,13 +137,6 @@ export const useAgentStore = defineStore(`agent`, () => {
     return found ?? { id: chosenId, name: chosenId }
   })
 
-  const activeEditForCurrentPost = computed<PendingArticleEdit | null>(() => {
-    const edit = pendingEdit.value
-    if (!edit || edit.postId !== postStore.currentPostId || edit.hunks.length === 0)
-      return null
-    return edit
-  })
-
   async function persistSessions(): Promise<void> {
     const serializable = sessions.value.slice(0, MAX_STORED_SESSIONS).map(s => ({
       ...s,
@@ -172,13 +152,26 @@ export const useAgentStore = defineStore(`agent`, () => {
     return sessions.value.find(s => s.acpSessionId === acpSessionId)
   }
 
-  function applyContentToEditor(postId: string, content: string): void {
-    postStore.updatePostContent(postId, content)
+  /**
+   * Dispatches into CodeMirror BEFORE updating postStore so EditorPanel's content
+   * watcher sees an already-matching document and does not reset undo history.
+   */
+  function applySyncedArticleContent(postId: string, content: string): void {
     if (postStore.currentPostId === postId && editorStore.editor) {
-      const current = editorStore.getContent()
-      if (current !== content)
+      if (editorStore.getContent() !== content)
         editorStore.importContent(content)
     }
+    const existing = postStore.getPostById(postId)
+    if (existing && existing.content !== content)
+      postStore.updatePostContent(postId, content)
+  }
+
+  function findLastIndex<T>(arr: T[], predicate: (item: T) => boolean): number {
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (predicate(arr[i]))
+        return i
+    }
+    return -1
   }
 
   function handleHostEvent(event: AcpHostEvent): void {
@@ -290,7 +283,6 @@ export const useAgentStore = defineStore(`agent`, () => {
         const session = findSessionByAcpId(event.sessionId)
         if (!session)
           return
-        // Replace the latest plan block in the current turn rather than stacking duplicates.
         const existingIdx = findLastIndex(session.items, item => item.type === `plan`)
         const lastUserIdx = findLastIndex(session.items, item => item.type === `user`)
         if (existingIdx > lastUserIdx) {
@@ -301,7 +293,6 @@ export const useAgentStore = defineStore(`agent`, () => {
             return
           }
         }
-        // Finalize any streaming assistant bubble before inserting the plan block.
         const last = session.items[session.items.length - 1]
         if (last?.type === `assistant`)
           last.streaming = false
@@ -362,37 +353,8 @@ export const useAgentStore = defineStore(`agent`, () => {
           item.resolvedOutcome = event.decision
         break
       }
-      case `article_edit`: {
-        const { proposal } = event
-        if (proposal.autoApplied || !settings.value.reviewEditsBeforeWriting) {
-          applyContentToEditor(proposal.postId, proposal.proposedContent)
-          if (pendingEdit.value?.postId === proposal.postId)
-            pendingEdit.value = null
-          return
-        }
-
-        // Keep original base when stacking multiple unreviewed edits in one turn.
-        const currentBase
-          = pendingEdit.value?.postId === proposal.postId
-            ? pendingEdit.value.baseContent
-            : (postStore.currentPostId === proposal.postId
-                ? editorStore.getContent()
-                : proposal.baseContent)
-
-        const hunks = computeArticleDiffHunks(currentBase, proposal.proposedContent)
-        if (hunks.length === 0) {
-          pendingEdit.value = null
-          return
-        }
-        pendingEdit.value = {
-          editId: proposal.editId,
-          sessionId: proposal.sessionId,
-          postId: proposal.postId,
-          baseContent: currentBase,
-          proposedContent: proposal.proposedContent,
-          hunks,
-          activeHunkIndex: 0,
-        }
+      case `article_synced`: {
+        applySyncedArticleContent(event.postId, event.content)
         break
       }
       case `model_changed`: {
@@ -414,14 +376,6 @@ export const useAgentStore = defineStore(`agent`, () => {
         break
       }
     }
-  }
-
-  function findLastIndex<T>(arr: T[], predicate: (item: T) => boolean): number {
-    for (let i = arr.length - 1; i >= 0; i--) {
-      if (predicate(arr[i]))
-        return i
-    }
-    return -1
   }
 
   function ensureValidSelectedAgent(): void {
@@ -455,7 +409,6 @@ export const useAgentStore = defineStore(`agent`, () => {
 
     ensureValidSelectedAgent()
 
-    // Warm model list for the selected installed agent in the background.
     if (selectedAgent.value?.installed)
       void probeAgent(selectedAgent.value.id)
   }
@@ -578,7 +531,6 @@ export const useAgentStore = defineStore(`agent`, () => {
     const content = editorStore.editor ? editorStore.getContent() : (post?.content ?? ``)
 
     let session = activeSession.value
-    // Start a fresh session record if none exists or the user switched agents.
     if (!session || (session.acpSessionId && session.agentId !== agent.id)) {
       const derivedTitle = text.length > 22 ? `${text.slice(0, 22)}…` : text
       session = createSessionRecord(derivedTitle)
@@ -675,83 +627,6 @@ export const useAgentStore = defineStore(`agent`, () => {
     })
   }
 
-  function syncResolvedContentToAcp(sessionId: string, content: string): void {
-    void window.mdDesktop?.acp.syncArticleContent({ sessionId, content })
-  }
-
-  function selectDiffHunk(index: number): void {
-    if (!pendingEdit.value)
-      return
-    const clamped = Math.max(0, Math.min(index, pendingEdit.value.hunks.length - 1))
-    pendingEdit.value = { ...pendingEdit.value, activeHunkIndex: clamped }
-  }
-
-  function keepCurrentHunk(): void {
-    const edit = pendingEdit.value
-    if (!edit || edit.hunks.length === 0)
-      return
-    const hunk = edit.hunks[edit.activeHunkIndex] ?? edit.hunks[0]
-    const nextBase = applyDiffHunk(edit.baseContent, hunk)
-    applyContentToEditor(edit.postId, nextBase)
-
-    const remaining = computeArticleDiffHunks(nextBase, edit.proposedContent)
-    if (remaining.length === 0) {
-      syncResolvedContentToAcp(edit.sessionId, nextBase)
-      pendingEdit.value = null
-      toast.success(t(`agent.diff.keptToast`))
-      return
-    }
-
-    pendingEdit.value = {
-      ...edit,
-      baseContent: nextBase,
-      hunks: remaining,
-      activeHunkIndex: Math.min(edit.activeHunkIndex, remaining.length - 1),
-    }
-  }
-
-  function undoCurrentHunk(): void {
-    const edit = pendingEdit.value
-    if (!edit || edit.hunks.length === 0)
-      return
-    const hunk = edit.hunks[edit.activeHunkIndex] ?? edit.hunks[0]
-    const nextProposed = rejectDiffHunk(edit.proposedContent, hunk)
-    const remaining = computeArticleDiffHunks(edit.baseContent, nextProposed)
-    syncResolvedContentToAcp(edit.sessionId, nextProposed)
-
-    if (remaining.length === 0) {
-      pendingEdit.value = null
-      toast.success(t(`agent.diff.undoneToast`))
-      return
-    }
-
-    pendingEdit.value = {
-      ...edit,
-      proposedContent: nextProposed,
-      hunks: remaining,
-      activeHunkIndex: Math.min(edit.activeHunkIndex, remaining.length - 1),
-    }
-  }
-
-  function keepAllHunks(): void {
-    const edit = pendingEdit.value
-    if (!edit)
-      return
-    applyContentToEditor(edit.postId, edit.proposedContent)
-    syncResolvedContentToAcp(edit.sessionId, edit.proposedContent)
-    pendingEdit.value = null
-    toast.success(t(`agent.diff.keptToast`))
-  }
-
-  function undoAllHunks(): void {
-    const edit = pendingEdit.value
-    if (!edit)
-      return
-    syncResolvedContentToAcp(edit.sessionId, edit.baseContent)
-    pendingEdit.value = null
-    toast.success(t(`agent.diff.undoneToast`))
-  }
-
   async function updateSettings(patch: Partial<AcpSettings>): Promise<void> {
     if (!window.mdDesktop?.acp)
       return
@@ -824,8 +699,6 @@ export const useAgentStore = defineStore(`agent`, () => {
     isCurrentPostWriting,
     activePendingPermissions,
     isWaitingPermission,
-    pendingEdit,
-    activeEditForCurrentPost,
 
     init,
     detectAgents,
@@ -837,11 +710,6 @@ export const useAgentStore = defineStore(`agent`, () => {
     sendPrompt,
     stopTurn,
     respondPermission,
-    selectDiffHunk,
-    keepCurrentHunk,
-    undoCurrentHunk,
-    keepAllHunks,
-    undoAllHunks,
     updateSettings,
     addCustomAgent,
     removeCustomAgent,

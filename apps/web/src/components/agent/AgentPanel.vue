@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useAgentStore } from '@/stores/agent'
 import AgentComposer from './AgentComposer.vue'
+import AgentEditCard from './AgentEditCard.vue'
 import AgentPermissionCard from './AgentPermissionCard.vue'
 import AgentPlanSteps from './AgentPlanSteps.vue'
 
@@ -201,7 +202,13 @@ function onRespondPermission(requestId: string, decision: AcpPermissionDecision)
         <!-- Plan checklist -->
         <AgentPlanSteps v-else-if="item.type === 'plan'" :entries="item.entries" />
 
-        <!-- Compact tool call row -->
+        <!-- Edit / delete / move tool call card -->
+        <AgentEditCard
+          v-else-if="item.type === 'tool_call' && (item.tool.toolKind === 'edit' || item.tool.toolKind === 'delete' || item.tool.toolKind === 'move')"
+          :tool="item.tool"
+        />
+
+        <!-- Compact tool call row for other tool kinds -->
         <div
           v-else-if="item.type === 'tool_call'"
           class="flex h-6 items-center gap-2 text-[12.5px]"

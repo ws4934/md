@@ -112,6 +112,7 @@ export interface AcpToolCallItem {
   command?: string
   oldText?: string
   newText?: string
+  unifiedDiff?: string
   error?: string
 }
 
@@ -130,19 +131,13 @@ export interface AcpPermissionRequest {
   command?: string
   detail?: string
   filePath?: string
+  oldText?: string
+  newText?: string
+  unifiedDiff?: string
   options: AcpPermissionOption[]
 }
 
 export type AcpPermissionDecision = `allow_once` | `allow_always` | `reject`
-
-export interface AcpArticleEditProposal {
-  editId: string
-  sessionId: string
-  postId: string
-  baseContent: string
-  proposedContent: string
-  autoApplied: boolean
-}
 
 export type AcpHostEvent
   = | { type: `session_created`, sessionId: string, agentId: string, modelId: string | null, postId: string, title: string }
@@ -156,7 +151,7 @@ export type AcpHostEvent
     | { type: `tool_call`, sessionId: string, tool: AcpToolCallItem }
     | { type: `permission_requested`, sessionId: string, request: AcpPermissionRequest }
     | { type: `permission_resolved`, sessionId: string, requestId: string, decision: AcpPermissionDecision | `cancelled` }
-    | { type: `article_edit`, sessionId: string, proposal: AcpArticleEditProposal }
+    | { type: `article_synced`, sessionId: string, postId: string, content: string }
     | { type: `model_changed`, sessionId: string, modelId: string | null }
     | { type: `commands_updated`, sessionId: string, commands: AcpSlashCommand[] }
     | { type: `install_progress`, agentId: string, percent: number, command: string, line: string, done?: boolean, error?: string }
@@ -196,7 +191,6 @@ export interface DesktopAcpApi {
   cancelInstall: (agentId: string) => Promise<void>
   probeAgent: (agentId: string, options?: { force?: boolean }) => Promise<AcpProbeResult>
   startSession: (params: AcpStartSessionParams) => Promise<AcpStartSessionResult>
-  syncArticleContent: (params: { sessionId: string, content: string }) => Promise<void>
   prompt: (params: AcpPromptParams) => Promise<{ stopReason?: string }>
   cancelTurn: (sessionId: string) => Promise<void>
   setModel: (params: { sessionId: string, modelId: string }) => Promise<{ modelId: string | null }>

@@ -5,16 +5,18 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { AcpHost } from './host'
 import { createSafeNdJsonStream } from './ndjson-stream'
 import { probeAcpAgent } from './probe'
 import { AcpRegistry } from './registry'
-import { AcpSession } from './session'
+import { AcpSession, DEFAULT_CLIENT_CAPABILITIES } from './session'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FAKE_AGENT_SCRIPT = path.resolve(__dirname, `../../../scripts/fake-acp-agent.mjs`)
 
 const tempDirs: string[] = []
 const openSessions: AcpSession[] = []
+const openHosts: AcpHost[] = []
 
 async function makeTempDir(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix))
@@ -26,6 +28,10 @@ afterEach(async () => {
   while (openSessions.length > 0) {
     const s = openSessions.pop()!
     await s.close()
+  }
+  while (openHosts.length > 0) {
+    const h = openHosts.pop()!
+    await h.dispose()
   }
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop()!
@@ -61,23 +67,38 @@ describe(`createSafeNdJsonStream`, () => {
 })
 
 describe(`acpSession`, () => {
+  it(`defaults clientCapabilities.fs to readTextFile/writeTextFile false with terminal true`, async () => {
+    expect(DEFAULT_CLIENT_CAPABILITIES).toEqual({
+      fs: { readTextFile: false, writeTextFile: false },
+      terminal: true,
+    })
+
+    const cwd = await makeTempDir(`md-acp-caps-`)
+    const session = new AcpSession({
+      agentId: `fake-caps`,
+      command: process.execPath,
+      args: [FAKE_AGENT_SCRIPT],
+      cwd,
+    })
+    openSessions.push(session)
+
+    await session.initializeNewSession()
+    expect(session.initializeMeta?.receivedClientCapabilities).toEqual({
+      fs: { readTextFile: false, writeTextFile: false },
+      terminal: true,
+    })
+  })
+
   it(`skips junk stdout lines during a real handshake and prompt`, async () => {
     const cwd = await makeTempDir(`md-acp-junk-`)
-    const articlePath = path.join(cwd, `article.md`)
-    await fs.writeFile(articlePath, `# Hello`, `utf8`)
-
     const skippedLines: string[] = []
-    const events: AcpHostEvent[] = []
     const session = new AcpSession({
       agentId: `fake`,
       command: process.execPath,
       args: [FAKE_AGENT_SCRIPT],
       cwd,
-      articlePath,
-      initialArticleContent: `# Hello`,
       env: { FAKE_AGENT_JUNK_STDOUT: `1`, FAKE_AGENT_STRINGIFY_IDS: `1` },
       onNonJsonStdout: line => skippedLines.push(line),
-      onEvent: e => events.push(e),
     })
     openSessions.push(session)
 
@@ -138,10 +159,9 @@ describe(`acpSession`, () => {
     expect(replayed).toBeDefined()
   })
 
-  it(`round-trips session/request_permission and supports auto-accept`, async () => {
+  it(`round-trips session/request_permission with diff content and supports auto-accept by kind`, async () => {
     const cwd = await makeTempDir(`md-acp-perm-`)
-    const articlePath = path.join(cwd, `article.md`)
-    await fs.writeFile(articlePath, `# Draft`, `utf8`)
+    await fs.writeFile(path.join(cwd, `article.md`), `# Draft`, `utf8`)
 
     const events: AcpHostEvent[] = []
     const session = new AcpSession({
@@ -149,17 +169,12 @@ describe(`acpSession`, () => {
       command: process.execPath,
       args: [FAKE_AGENT_SCRIPT],
       cwd,
-      articlePath,
-      initialArticleContent: `# Draft`,
       env: { FAKE_AGENT_REQUIRE_PERMISSION: `1` },
       shouldAutoAcceptPermission: () => false,
       onEvent: (event) => {
         events.push(event)
-        if (event.type === `permission_requested`) {
-          expect(event.request.toolKind).toBe(`execute`)
-          expect(event.request.command).toContain(`npx mmdc`)
+        if (event.type === `permission_requested`)
           session.respondPermission(event.request.requestId, `allow_once`)
-        }
       },
     })
     openSessions.push(session)
@@ -168,40 +183,22 @@ describe(`acpSession`, () => {
     const result = await session.prompt([{ type: `text`, text: `Draw diagram` }])
     expect(result.stopReason).toBe(`end_turn`)
 
+    const permRequests = events
+      .filter((e): e is Extract<AcpHostEvent, { type: `permission_requested` }> => e.type === `permission_requested`)
+      .map(e => e.request)
+    expect(permRequests.map(r => r.toolKind)).toEqual([`edit`, `execute`])
+    expect(permRequests[0].oldText).toBe(`# Draft`)
+    expect(permRequests[0].newText).toContain(`ACP 协作示例`)
+    expect(permRequests[1].command).toContain(`npx mmdc`)
+
     const fullText = events
       .filter((e): e is Extract<AcpHostEvent, { type: `message_chunk` }> => e.type === `message_chunk`)
       .map(e => e.text)
       .join(``)
     expect(fullText).toContain(`[permission:opt_allow_once]`)
-    expect(events.some(e => e.type === `permission_requested`)).toBe(true)
-    expect(events.some(e => e.type === `permission_resolved` && e.decision === `allow_once`)).toBe(true)
-
-    // Now test auto-accept: no permission_requested event is emitted.
-    const autoEvents: AcpHostEvent[] = []
-    const autoSession = new AcpSession({
-      agentId: `fake-auto-perm`,
-      command: process.execPath,
-      args: [FAKE_AGENT_SCRIPT],
-      cwd,
-      articlePath,
-      initialArticleContent: `# Draft`,
-      env: { FAKE_AGENT_REQUIRE_PERMISSION: `1` },
-      shouldAutoAcceptPermission: kind => kind === `execute`,
-      onEvent: e => autoEvents.push(e),
-    })
-    openSessions.push(autoSession)
-
-    await autoSession.initializeNewSession()
-    await autoSession.prompt([{ type: `text`, text: `Draw diagram` }])
-    expect(autoEvents.some(e => e.type === `permission_requested`)).toBe(false)
-    const autoText = autoEvents
-      .filter((e): e is Extract<AcpHostEvent, { type: `message_chunk` }> => e.type === `message_chunk`)
-      .map(e => e.text)
-      .join(``)
-    expect(autoText).toContain(`[permission:opt_allow_once]`)
   })
 
-  it(`maps all tool_call kinds and plan updates accurately`, async () => {
+  it(`maps all tool_call kinds accurately`, async () => {
     const cwd = await makeTempDir(`md-acp-tools-`)
     const events: AcpHostEvent[] = []
 
@@ -241,21 +238,16 @@ describe(`acpSession`, () => {
     expect(byId.get(`tc-move`)?.toolKind).toBe(`move`)
   })
 
-  it(`routes open article writes to callback and supports both model switching protocols`, async () => {
+  it(`supports both unstable session/set_model and configOptions model switching`, async () => {
     const cwd = await makeTempDir(`md-acp-models-`)
-    const articlePath = path.join(cwd, `article.md`)
-    await fs.writeFile(articlePath, `# Original`, `utf8`)
+    await fs.writeFile(path.join(cwd, `article.md`), `# Original`, `utf8`)
 
-    const writes: Array<{ base: string, proposed: string }> = []
     const session = new AcpSession({
       agentId: `fake-models`,
       command: process.execPath,
       args: [FAKE_AGENT_SCRIPT],
       cwd,
-      articlePath,
-      initialArticleContent: `# Original`,
-      env: { FAKE_AGENT_MODEL_STYLE: `models` },
-      onArticleWrite: (base, proposed) => writes.push({ base, proposed }),
+      env: { FAKE_AGENT_MODEL_STYLE: `models`, FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0` },
     })
     openSessions.push(session)
 
@@ -265,11 +257,9 @@ describe(`acpSession`, () => {
     expect(session.currentModelId).toBe(`sonnet-5.5`)
 
     await session.prompt([{ type: `text`, text: `Update article` }])
-    expect(writes).toHaveLength(1)
-    expect(writes[0].base).toBe(`# Original`)
-    expect(writes[0].proposed).toContain(`sonnet-5.5`)
+    const written = await fs.readFile(path.join(cwd, `article.md`), `utf8`)
+    expect(written).toContain(`sonnet-5.5`)
 
-    // Also verify configOptions-based model switching.
     const cfgSession = new AcpSession({
       agentId: `fake-config-models`,
       command: process.execPath,
@@ -283,6 +273,138 @@ describe(`acpSession`, () => {
     expect(cfgSession.models.map(m => m.id)).toEqual([`opus-5.5`, `sonnet-5.5`, `haiku-5.5`])
     const switched = await cfgSession.setModel(`haiku-5.5`)
     expect(switched.modelId).toBe(`haiku-5.5`)
+  })
+})
+
+describe(`acpHost settings auto-accept & article disk sync`, () => {
+  it(`maps reviewEditsBeforeWriting and askBeforeRunningCommands toggles onto per-kind auto-accept`, async () => {
+    const dataDir = await makeTempDir(`md-acp-host-perm-`)
+    const events: AcpHostEvent[] = []
+    const host = new AcpHost({
+      dataDir,
+      extraBuiltinAgents: [
+        {
+          id: `fake`,
+          name: `Fake`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: { FAKE_AGENT_REQUIRE_PERMISSION: `1` },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `F`, color: `#5B5BD6` },
+        },
+      ],
+      onEvent: (event) => {
+        events.push(event)
+        if (event.type === `permission_requested`)
+          host.respondPermission({ sessionId: event.sessionId, requestId: event.request.requestId, decision: `allow_once` })
+      },
+    })
+    openHosts.push(host)
+
+    // Turn reviewEdits OFF, keep askCommands ON: edit should auto-accept, execute should prompt.
+    await host.updateSettings({ reviewEditsBeforeWriting: false, askBeforeRunningCommands: true })
+    const started = await host.startSession({
+      agentId: `fake`,
+      postId: `p1`,
+      postTitle: `Title`,
+      content: `# Hello`,
+    })
+    await host.prompt({
+      sessionId: started.sessionId,
+      text: `Edit and run command`,
+      content: `# Hello`,
+      postTitle: `Title`,
+    })
+
+    const promptedKinds = events
+      .filter((e): e is Extract<AcpHostEvent, { type: `permission_requested` }> => e.type === `permission_requested`)
+      .map(e => e.request.toolKind)
+    expect(promptedKinds).toEqual([`execute`])
+
+    // Now turn reviewEdits ON, askCommands OFF: edit should prompt, execute should auto-accept.
+    events.length = 0
+    await host.updateSettings({ reviewEditsBeforeWriting: true, askBeforeRunningCommands: false })
+    await host.prompt({
+      sessionId: started.sessionId,
+      text: `Edit and run command again`,
+      content: `# Hello 2`,
+      postTitle: `Title`,
+    })
+
+    const secondPromptedKinds = events
+      .filter((e): e is Extract<AcpHostEvent, { type: `permission_requested` }> => e.type === `permission_requested`)
+      .map(e => e.request.toolKind)
+    expect(secondPromptedKinds).toEqual([`edit`])
+  })
+
+  it(`syncs article back to editor on completed edit tool call and at turn end`, async () => {
+    const dataDir = await makeTempDir(`md-acp-host-sync-`)
+    const syncedEvents: Array<Extract<AcpHostEvent, { type: `article_synced` }>> = []
+    const host = new AcpHost({
+      dataDir,
+      extraBuiltinAgents: [
+        {
+          id: `fake-edit`,
+          name: `Fake Edit`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: { FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0` },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `F`, color: `#5B5BD6` },
+        },
+        {
+          id: `fake-direct`,
+          name: `Fake Direct`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: { FAKE_AGENT_DIRECT_WRITE_ONLY: `1` },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `D`, color: `#5B5BD6` },
+        },
+      ],
+      onEvent: (event) => {
+        if (event.type === `article_synced`)
+          syncedEvents.push(event)
+      },
+    })
+    openHosts.push(host)
+
+    // 1. Completed edit tool call syncs article once (turn-end read sees unchanged content -> no duplicate).
+    const s1 = await host.startSession({
+      agentId: `fake-edit`,
+      postId: `post-1`,
+      postTitle: `Sync Test`,
+      content: `# Initial`,
+    })
+    await host.prompt({
+      sessionId: s1.sessionId,
+      text: `Edit the article`,
+      content: `# Initial`,
+      postTitle: `Sync Test`,
+    })
+    expect(syncedEvents).toHaveLength(1)
+    expect(syncedEvents[0].postId).toBe(`post-1`)
+    expect(syncedEvents[0].content).toContain(`ACP 协作示例`)
+
+    // 2. Direct write without an edit tool call is still picked up by the turn-end read.
+    syncedEvents.length = 0
+    const s2 = await host.startSession({
+      agentId: `fake-direct`,
+      postId: `post-2`,
+      postTitle: `Direct Test`,
+      content: `# Base`,
+    })
+    await host.prompt({
+      sessionId: s2.sessionId,
+      text: `Write directly`,
+      content: `# Base`,
+      postTitle: `Direct Test`,
+    })
+    expect(syncedEvents).toHaveLength(1)
+    expect(syncedEvents[0].content).toContain(`<!-- turn-end-sync -->`)
   })
 })
 
@@ -333,7 +455,6 @@ describe(`probeAcpAgent and AcpRegistry`, () => {
     expect(custom).toBeDefined()
     expect(custom?.installed).toBe(true)
 
-    // Reload from disk to verify persistence.
     const reloaded = new AcpRegistry({
       settingsPath: path.join(dir, `acp-settings.json`),
       pathOverride: binDir,
@@ -348,7 +469,6 @@ describe(`probeAcpAgent and AcpRegistry`, () => {
     const binDir = path.join(dir, `bin`)
     await fs.mkdir(binDir, { recursive: true })
 
-    // Create a fake npm executable that emits progress lines and waits so cancel can interrupt it.
     const fakeNpm = path.join(binDir, `npm`)
     await fs.writeFile(
       fakeNpm,

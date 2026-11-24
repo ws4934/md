@@ -397,7 +397,7 @@ declare global {
   export type { Component, Slot, Slots, ComponentPublicInstance, ComputedRef, DirectiveBinding, ExtractDefaultPropTypes, ExtractPropTypes, ExtractPublicPropTypes, InjectionKey, PropType, Ref, ShallowRef, MaybeRef, MaybeRefOrGetter, VNode, WritableComputedRef } from 'vue'
   import('vue')
   // @ts-ignore
-  export type { AgentTimelineItem, AgentConversationSession, PendingArticleEdit } from './src/stores/agent'
+  export type { AgentTimelineItem, AgentConversationSession } from './src/stores/agent'
   import('./src/stores/agent')
   // @ts-ignore
   export type { CssContentConfig } from './src/stores/cssEditor'

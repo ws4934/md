@@ -10,7 +10,6 @@ export const IPC_CHANNELS = {
   ACP_CANCEL_INSTALL: `md:acp:cancel-install`,
   ACP_PROBE_AGENT: `md:acp:probe-agent`,
   ACP_START_SESSION: `md:acp:start-session`,
-  ACP_SYNC_ARTICLE_CONTENT: `md:acp:sync-article-content`,
   ACP_PROMPT: `md:acp:prompt`,
   ACP_CANCEL_TURN: `md:acp:cancel-turn`,
   ACP_SET_MODEL: `md:acp:set-model`,

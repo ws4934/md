@@ -5,7 +5,6 @@ import type {
   CreateTerminalRequest,
   KillTerminalRequest,
   PermissionOption,
-  ReadTextFileRequest,
   ReleaseTerminalRequest,
   RequestPermissionRequest,
   RequestPermissionResponse,
@@ -13,7 +12,6 @@ import type {
   SessionNotification,
   TerminalOutputRequest,
   WaitForTerminalExitRequest,
-  WriteTextFileRequest,
 } from '@agentclientprotocol/sdk/unstable'
 import type {
   AcpHostEvent,
@@ -28,7 +26,6 @@ import type { ChildProcess, ChildProcessWithoutNullStreams } from 'node:child_pr
 import type { ExtendedNewSessionResponse } from './translator'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
-import fs from 'node:fs/promises'
 import path from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { client as createAcpClient, PROTOCOL_VERSION, RequestError } from '@agentclientprotocol/sdk/unstable'
@@ -44,7 +41,6 @@ import {
   buildPermissionResponse,
   deriveModelsFromSessionResponse,
   deriveModesFromSessionResponse,
-
   findSelectConfigOption,
   mapPermissionRequest,
   mapPlanToEntries,
@@ -66,13 +62,9 @@ export interface AcpSessionOptions {
   cwd: string
   env?: Record<string, string>
   pathOverride?: string
-  articlePath?: string
-  initialArticleContent?: string
-  allowedReadPaths?: string[]
   initialModelId?: string | null
   timeouts?: AcpSessionTimeouts
   shouldAutoAcceptPermission?: (toolKind: AcpToolKind, title: string) => boolean
-  onArticleWrite?: (baseContent: string, proposedContent: string) => void
   onEvent?: (event: AcpHostEvent) => void
   onNonJsonStdout?: (line: string, error: unknown) => void
 }
@@ -108,6 +100,15 @@ const DEFAULT_TIMEOUTS: Required<AcpSessionTimeouts> = {
 
 const DEFAULT_TERMINAL_MAX_BYTES = 256 * 1024
 
+export const DEFAULT_CLIENT_CAPABILITIES = {
+  // Let the CLI read and write disk directly, matching Paseo's ACP defaults.
+  fs: {
+    readTextFile: false,
+    writeTextFile: false,
+  },
+  terminal: true,
+} as const
+
 export class AcpSession {
   readonly agentId: string
   private readonly options: AcpSessionOptions
@@ -116,6 +117,7 @@ export class AcpSession {
   private child: ChildProcessWithoutNullStreams | null = null
   private connection: ClientConnection | null = null
   private agentCapabilities: AgentCapabilities | null = null
+  private _initializeMeta: Record<string, unknown> | null = null
   private stderrChunks: string[] = []
   private processFailureGuard: { promise: Promise<never>, dispose: () => void } | null = null
 
@@ -134,9 +136,7 @@ export class AcpSession {
   private pendingPermissions = new Map<string, PendingPermission>()
   private alwaysAllowedKinds = new Set<AcpToolKind>()
   private terminals = new Map<string, ManagedTerminal>()
-  private allowedReadPaths = new Set<string>()
 
-  private articleContent: string
   private activeTurn = false
   private closed = false
 
@@ -149,9 +149,6 @@ export class AcpSession {
       sessionLoadMs: options.timeouts?.sessionLoadMs ?? DEFAULT_TIMEOUTS.sessionLoadMs,
       closeMs: options.timeouts?.closeMs ?? DEFAULT_TIMEOUTS.closeMs,
     }
-    this.articleContent = options.initialArticleContent ?? ``
-    for (const p of options.allowedReadPaths ?? [])
-      this.allowedReadPaths.add(path.resolve(p))
   }
 
   get sessionId(): string | null {
@@ -186,21 +183,16 @@ export class AcpSession {
     return this._configOptions
   }
 
+  get initializeMeta(): Record<string, unknown> | null {
+    return this._initializeMeta
+  }
+
   get isClosed(): boolean {
     return this.closed
   }
 
   get childProcess(): ChildProcess | null {
     return this.child
-  }
-
-  updateArticleContent(content: string): void {
-    this.articleContent = content
-  }
-
-  allowReadPaths(paths: string[]): void {
-    for (const p of paths)
-      this.allowedReadPaths.add(path.resolve(p))
   }
 
   async initializeNewSession(): Promise<void> {
@@ -500,12 +492,6 @@ export class AcpSession {
       .onRequest(`session/request_permission`, ({ params }) => {
         return this.handlePermissionRequest(params)
       })
-      .onRequest(`fs/read_text_file`, ({ params }) => {
-        return this.handleReadTextFile(params)
-      })
-      .onRequest(`fs/write_text_file`, ({ params }) => {
-        return this.handleWriteTextFile(params)
-      })
       .onRequest(`terminal/create`, ({ params }) => {
         return this.handleCreateTerminal(params)
       })
@@ -528,11 +514,8 @@ export class AcpSession {
       this.connection.agent.request(`initialize`, {
         protocolVersion: PROTOCOL_VERSION,
         clientCapabilities: {
-          fs: {
-            readTextFile: true,
-            writeTextFile: true,
-          },
-          terminal: true,
+          fs: { ...DEFAULT_CLIENT_CAPABILITIES.fs },
+          terminal: DEFAULT_CLIENT_CAPABILITIES.terminal,
         },
         clientInfo: {
           name: `doocs-md-desktop`,
@@ -544,6 +527,7 @@ export class AcpSession {
     )
 
     this.agentCapabilities = initResponse.agentCapabilities ?? null
+    this._initializeMeta = (initResponse._meta as Record<string, unknown> | null | undefined) ?? null
   }
 
   private async runBoundedRequest<T>(
@@ -738,56 +722,6 @@ export class AcpSession {
     const workspaceRoot = path.resolve(this.options.cwd)
     const resolved = path.resolve(workspaceRoot, targetPath)
     return resolved === workspaceRoot || resolved.startsWith(`${workspaceRoot}${path.sep}`)
-  }
-
-  private isArticlePath(targetPath: string): boolean {
-    if (!this.options.articlePath)
-      return false
-    const resolvedTarget = path.resolve(this.options.cwd, targetPath)
-    return resolvedTarget === path.resolve(this.options.articlePath)
-  }
-
-  private async handleReadTextFile(params: ReadTextFileRequest): Promise<{ content: string }> {
-    const resolved = path.resolve(this.options.cwd, params.path)
-    const isAllowed
-      = this.isArticlePath(resolved)
-        || this.isInsideWorkspace(resolved)
-        || this.allowedReadPaths.has(resolved)
-
-    if (!isAllowed)
-      throw RequestError.invalidParams(`Path is outside allowed workspace: ${params.path}`)
-
-    const raw = this.isArticlePath(resolved)
-      ? this.articleContent
-      : await fs.readFile(resolved, `utf8`)
-
-    if (!params.line && !params.limit)
-      return { content: raw }
-
-    const lines = raw.split(/\r?\n/)
-    const start = Math.max((params.line ?? 1) - 1, 0)
-    const end = params.limit ? start + params.limit : undefined
-    return { content: lines.slice(start, end).join(`\n`) }
-  }
-
-  private async handleWriteTextFile(params: WriteTextFileRequest): Promise<Record<string, never>> {
-    const resolved = path.resolve(this.options.cwd, params.path)
-
-    if (this.isArticlePath(resolved)) {
-      const baseContent = this.articleContent
-      this.articleContent = params.content
-      await fs.mkdir(path.dirname(resolved), { recursive: true })
-      await fs.writeFile(resolved, params.content, `utf8`)
-      this.options.onArticleWrite?.(baseContent, params.content)
-      return {}
-    }
-
-    if (!this.isInsideWorkspace(resolved))
-      throw RequestError.invalidParams(`Write rejected outside workspace directory: ${params.path}`)
-
-    await fs.mkdir(path.dirname(resolved), { recursive: true })
-    await fs.writeFile(resolved, params.content, `utf8`)
-    return {}
   }
 
   private async handleCreateTerminal(params: CreateTerminalRequest): Promise<{ terminalId: string }> {

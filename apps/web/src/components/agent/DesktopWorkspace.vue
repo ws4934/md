@@ -9,7 +9,6 @@ import { useUIStore } from '@/stores/ui'
 import AgentPanel from './AgentPanel.vue'
 import DesktopSidebar from './DesktopSidebar.vue'
 import DesktopToolbar from './DesktopToolbar.vue'
-import InlineDiffReview from './InlineDiffReview.vue'
 import NewArticlePrompt from './NewArticlePrompt.vue'
 import './desktop-theme.css'
 
@@ -54,7 +53,6 @@ const {
   isPanelOpen,
   isNewArticleHero,
   isCurrentPostWriting,
-  activeEditForCurrentPost,
 } = storeToRefs(agentStore)
 
 const editorPanelCompRef = ref<InstanceType<typeof EditorPanel> | null>(null)
@@ -143,22 +141,10 @@ onUnmounted(() => {
           >
             <!-- Subtle accent stripe while Agent is actively writing -->
             <div
-              v-if="isCurrentPostWriting && !activeEditForCurrentPost"
+              v-if="isCurrentPostWriting"
               class="pointer-events-none absolute bottom-6 left-4 top-4 z-10 w-0.5 rounded-full"
               style="background-color: var(--dt-accent)"
             />
-
-            <!-- Inline diff review card when "review edits before writing" is enabled -->
-            <div v-if="activeEditForCurrentPost" class="shrink-0 px-8 pt-2">
-              <InlineDiffReview
-                :edit="activeEditForCurrentPost"
-                @keep="agentStore.keepCurrentHunk()"
-                @undo="agentStore.undoCurrentHunk()"
-                @keep-all="agentStore.keepAllHunks()"
-                @undo-all="agentStore.undoAllHunks()"
-                @select-hunk="(idx) => agentStore.selectDiffHunk(idx)"
-              />
-            </div>
 
             <div class="min-h-0 flex-1 overflow-hidden">
               <EditorPanel ref="editorPanelCompRef" />

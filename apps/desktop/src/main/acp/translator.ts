@@ -282,6 +282,11 @@ export function mergeToolCallSnapshot(
       detail = filePath
   }
 
+  const unifiedDiff
+    = (toolKind === `edit` || toolKind === `delete` || toolKind === `move`)
+      ? (contentText ?? readString(rawInput, [`patch`, `diff`, `unifiedDiff`]) ?? previous?.unifiedDiff)
+      : previous?.unifiedDiff
+
   const error
     = status === `failed`
       ? (readString(rawOutput, [`error`, `message`]) ?? contentText ?? previous?.error ?? `Tool call failed`)
@@ -297,6 +302,7 @@ export function mergeToolCallSnapshot(
     command,
     oldText,
     newText,
+    unifiedDiff,
     error,
   }
 }
@@ -325,6 +331,9 @@ export function mapPermissionRequest(
     command: merged.command,
     detail: merged.detail,
     filePath: merged.filePath,
+    oldText: merged.oldText,
+    newText: merged.newText,
+    unifiedDiff: merged.unifiedDiff,
     options: params.options.map(opt => ({
       optionId: opt.optionId,
       name: opt.name,

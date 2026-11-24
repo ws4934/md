@@ -158,7 +158,6 @@ function registerIpc(host: AcpHost): void {
   ipcMain.handle(IPC_CHANNELS.ACP_CANCEL_INSTALL, (_event, agentId) => host.cancelInstall(agentId))
   ipcMain.handle(IPC_CHANNELS.ACP_PROBE_AGENT, (_event, agentId, options) => host.probeAgent(agentId, options))
   ipcMain.handle(IPC_CHANNELS.ACP_START_SESSION, (_event, params) => host.startSession(params))
-  ipcMain.handle(IPC_CHANNELS.ACP_SYNC_ARTICLE_CONTENT, (_event, params) => host.syncArticleContent(params))
   ipcMain.handle(IPC_CHANNELS.ACP_PROMPT, (_event, params) => host.prompt(params))
   ipcMain.handle(IPC_CHANNELS.ACP_CANCEL_TURN, (_event, sessionId) => host.cancelTurn(sessionId))
   ipcMain.handle(IPC_CHANNELS.ACP_SET_MODEL, (_event, params) => host.setModel(params))

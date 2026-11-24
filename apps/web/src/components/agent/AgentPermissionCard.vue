@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AcpPermissionDecision, AcpPermissionRequest } from '@md/shared/types'
 import { FileEdit, ShieldAlert, Terminal } from '@lucide/vue'
+import { buildUnifiedDiff, formatShortFilePath } from '@/lib/agent/unified-diff'
 
 const props = defineProps<{
   request: AcpPermissionRequest
@@ -13,10 +14,14 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
+const isEditRequest = computed(() =>
+  props.request.toolKind === `edit` || props.request.toolKind === `delete` || props.request.toolKind === `move`,
+)
+
 const headingText = computed(() => {
   if (props.request.toolKind === `execute`)
     return t(`agent.permission.titleExecute`)
-  if (props.request.toolKind === `edit` || props.request.toolKind === `delete`)
+  if (isEditRequest.value)
     return t(`agent.permission.titleEdit`)
   return props.request.title || t(`agent.permission.titleGeneric`)
 })
@@ -24,11 +29,22 @@ const headingText = computed(() => {
 const iconComp = computed(() => {
   if (props.request.toolKind === `execute`)
     return Terminal
-  if (props.request.toolKind === `edit` || props.request.toolKind === `delete`)
+  if (isEditRequest.value)
     return FileEdit
   return ShieldAlert
 })
 
+const diff = computed(() =>
+  isEditRequest.value
+    ? buildUnifiedDiff({
+        oldText: props.request.oldText,
+        newText: props.request.newText,
+        unifiedDiff: props.request.unifiedDiff,
+      })
+    : { lines: [], added: 0, removed: 0, hasChanges: false },
+)
+
+const shortPath = computed(() => formatShortFilePath(props.request.filePath, props.request.title))
 const codeBody = computed(() => props.request.command || props.request.filePath || props.request.detail || props.request.title)
 
 const resolvedLabel = computed(() => {
@@ -79,7 +95,68 @@ const resolvedLabel = computed(() => {
       </span>
     </div>
 
+    <!-- Diff preview for edit/delete/move permissions -->
     <div
+      v-if="diff.hasChanges"
+      class="overflow-hidden rounded-lg"
+      style="background-color: var(--dt-canvas); border: 1px solid var(--dt-line)"
+    >
+      <div
+        class="flex items-center justify-between gap-2 px-2.5 py-1.5 text-[11.5px]"
+        style="border-bottom: 1px solid var(--dt-line); font-family: var(--dt-mono)"
+      >
+        <span class="min-w-0 flex-1 truncate font-medium" style="color: var(--dt-ink2)" :title="request.filePath">
+          {{ shortPath }}
+        </span>
+        <span class="flex shrink-0 items-center gap-1.5 font-medium">
+          <span v-if="diff.added > 0" style="color: var(--dt-green)">+{{ diff.added }}</span>
+          <span v-if="diff.removed > 0" style="color: var(--dt-red)">−{{ diff.removed }}</span>
+        </span>
+      </div>
+      <div
+        class="max-h-[200px] overflow-auto py-1 text-[11.5px] leading-[19px]"
+        style="font-family: var(--dt-mono)"
+      >
+        <div
+          v-for="(line, idx) in diff.lines"
+          :key="idx"
+          class="flex items-start gap-2 px-2.5 py-px"
+          :style="{
+            backgroundColor: line.kind === 'add'
+              ? 'var(--dt-green-soft)'
+              : line.kind === 'remove'
+                ? 'var(--dt-red-soft)'
+                : 'transparent',
+          }"
+        >
+          <span
+            class="w-2.5 shrink-0 select-none"
+            :style="{
+              color: line.kind === 'add'
+                ? 'var(--dt-green)'
+                : line.kind === 'remove'
+                  ? 'var(--dt-red)'
+                  : 'var(--dt-ink3)',
+            }"
+          >
+            {{ line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : line.kind === 'ellipsis' ? '' : ' ' }}
+          </span>
+          <span
+            class="min-w-0 flex-1 whitespace-pre-wrap break-all"
+            :class="line.kind === 'remove' ? 'line-through' : ''"
+            :style="{
+              color: line.kind === 'remove' || line.kind === 'ellipsis'
+                ? 'var(--dt-ink3)'
+                : 'var(--dt-ink)',
+            }"
+          >{{ line.text || ' ' }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Command / detail box for non-diff permissions -->
+    <div
+      v-else
       class="w-full overflow-x-auto rounded-lg px-2.5 py-2 text-xs leading-[19px]"
       style="
         background-color: var(--dt-canvas);

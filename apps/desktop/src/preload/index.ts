@@ -30,7 +30,6 @@ const desktopBridge: DesktopBridge = {
     probeAgent: (agentId, options) => ipcRenderer.invoke(IPC_CHANNELS.ACP_PROBE_AGENT, agentId, options),
     startSession: (params: AcpStartSessionParams) =>
       ipcRenderer.invoke(IPC_CHANNELS.ACP_START_SESSION, params),
-    syncArticleContent: params => ipcRenderer.invoke(IPC_CHANNELS.ACP_SYNC_ARTICLE_CONTENT, params),
     prompt: (params: AcpPromptParams) => ipcRenderer.invoke(IPC_CHANNELS.ACP_PROMPT, params),
     cancelTurn: sessionId => ipcRenderer.invoke(IPC_CHANNELS.ACP_CANCEL_TURN, sessionId),
     setModel: params => ipcRenderer.invoke(IPC_CHANNELS.ACP_SET_MODEL, params),

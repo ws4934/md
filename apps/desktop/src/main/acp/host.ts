@@ -9,6 +9,7 @@ import type {
   AcpSettings,
   AcpStartSessionParams,
   AcpStartSessionResult,
+  AcpToolKind,
 } from '@md/shared/types'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
@@ -22,6 +23,8 @@ interface ManagedSession {
   postId: string
   workspaceDir: string
   articlePath: string
+  lastSyncedContent: string
+  syncChain: Promise<void>
 }
 
 export interface AcpHostOptions {
@@ -31,6 +34,10 @@ export interface AcpHostOptions {
   onEvent?: (event: AcpHostEvent) => void
 }
 
+function isEditToolKind(kind: AcpToolKind): boolean {
+  return kind === `edit` || kind === `delete` || kind === `move`
+}
+
 export class AcpHost {
   private readonly workspacesRoot: string
   private readonly pathOverride?: string
@@ -38,6 +45,9 @@ export class AcpHost {
   private readonly probeCache = new ProbeCache()
   private readonly sessions = new Map<string, ManagedSession>()
   private readonly onEvent?: (event: AcpHostEvent) => void
+
+  private currentReviewEdits = true
+  private currentAskBeforeCommands = true
 
   constructor(options: AcpHostOptions) {
     this.workspacesRoot = path.join(options.dataDir, `acp-workspaces`)
@@ -114,6 +124,9 @@ export class AcpHost {
 
   async startSession(params: AcpStartSessionParams): Promise<AcpStartSessionResult> {
     const settings = await this.registry.getSettings()
+    this.currentReviewEdits = settings.reviewEditsBeforeWriting
+    this.currentAskBeforeCommands = settings.askBeforeRunningCommands
+
     const launch = await this.registry.resolveLaunchSpec(params.agentId)
     const workspaceId = randomUUID()
     const workspaceDir = path.join(this.workspacesRoot, workspaceId)
@@ -131,43 +144,29 @@ export class AcpHost {
       cwd: workspaceDir,
       env: launch.env,
       pathOverride: this.pathOverride,
-      articlePath,
-      initialArticleContent: params.content,
       initialModelId,
       shouldAutoAcceptPermission: (toolKind) => {
+        if (isEditToolKind(toolKind))
+          return !this.currentReviewEdits
         if (toolKind === `execute`)
           return !this.currentAskBeforeCommands
         if (toolKind === `read` || toolKind === `search` || toolKind === `think`)
           return true
         return false
       },
-      onArticleWrite: (baseContent, proposedContent) => {
-        if (!session.sessionId)
-          return
-        this.onEvent?.({
-          type: `article_edit`,
-          sessionId: session.sessionId,
-          proposal: {
-            editId: randomUUID(),
-            sessionId: session.sessionId,
-            postId: params.postId,
-            baseContent,
-            proposedContent,
-            autoApplied: !this.currentReviewEdits,
-          },
-        })
-      },
       onEvent: (event) => {
         this.onEvent?.(event)
+        // Read the article file back into the editor after an edit-kind tool completes.
+        if (event.type === `tool_call` && event.tool.status === `completed` && isEditToolKind(event.tool.toolKind)) {
+          const managed = this.sessions.get(event.sessionId)
+          if (managed)
+            void this.syncArticleFromDisk(managed)
+        }
       },
       onNonJsonStdout: (line) => {
         console.warn(`[acp:${params.agentId}] skipped non-JSON stdout:`, line.slice(0, 200))
       },
     })
-
-    // Snapshot latest permission settings for synchronous permission checks.
-    this.currentReviewEdits = settings.reviewEditsBeforeWriting
-    this.currentAskBeforeCommands = settings.askBeforeRunningCommands
 
     await session.initializeNewSession()
     const sessionId = session.sessionId!
@@ -176,6 +175,8 @@ export class AcpHost {
       postId: params.postId,
       workspaceDir,
       articlePath,
+      lastSyncedContent: params.content,
+      syncChain: Promise.resolve(),
     })
 
     if (session.currentModelId)
@@ -198,15 +199,32 @@ export class AcpHost {
     }
   }
 
-  private currentReviewEdits = true
-  private currentAskBeforeCommands = true
-
-  async syncArticleContent(params: { sessionId: string, content: string }): Promise<void> {
-    const managed = this.sessions.get(params.sessionId)
-    if (!managed)
-      return
-    managed.session.updateArticleContent(params.content)
-    await fs.writeFile(managed.articlePath, params.content, `utf8`)
+  /**
+   * Reads `<workspace>/article.md` and emits `article_synced` only when disk content changed.
+   * Serialized per session so rapid edit completions never emit out-of-order snapshots.
+   */
+  private syncArticleFromDisk(managed: ManagedSession): Promise<void> {
+    managed.syncChain = managed.syncChain.then(async () => {
+      const sessionId = managed.session.sessionId
+      if (!sessionId)
+        return
+      try {
+        const diskContent = await fs.readFile(managed.articlePath, `utf8`)
+        if (diskContent === managed.lastSyncedContent)
+          return
+        managed.lastSyncedContent = diskContent
+        this.onEvent?.({
+          type: `article_synced`,
+          sessionId,
+          postId: managed.postId,
+          content: diskContent,
+        })
+      }
+      catch {
+        // Ignore missing/unreadable article file (e.g. session already disposed).
+      }
+    })
+    return managed.syncChain
   }
 
   async prompt(params: AcpPromptParams): Promise<{ stopReason?: string }> {
@@ -218,13 +236,11 @@ export class AcpHost {
     this.currentReviewEdits = settings.reviewEditsBeforeWriting
     this.currentAskBeforeCommands = settings.askBeforeRunningCommands
 
-    managed.session.updateArticleContent(params.content)
+    // Write the current editor content to the session's article file before each turn.
     await fs.writeFile(managed.articlePath, params.content, `utf8`)
+    managed.lastSyncedContent = params.content
 
     const attachments = params.attachments?.filter(Boolean) ?? []
-    if (attachments.length > 0)
-      managed.session.allowReadPaths(attachments)
-
     const contextHeader = [
       `[Context] You are editing the open Markdown article in doocs/md.`,
       `Article title: ${params.postTitle || `Untitled`}`,
@@ -232,7 +248,7 @@ export class AcpHost {
       ...(attachments.length > 0
         ? [`Attached reference files:\n${attachments.map(p => `- ${p}`).join(`\n`)}`]
         : []),
-      `Use read/write file tools on "${managed.articlePath}" to inspect and update the article directly.`,
+      `Edit "${managed.articlePath}" directly on disk to update the article.`,
     ].join(`\n`)
 
     const blocks: ContentBlock[] = [
@@ -242,7 +258,13 @@ export class AcpHost {
       },
     ]
 
-    return managed.session.prompt(blocks)
+    try {
+      return await managed.session.prompt(blocks)
+    }
+    finally {
+      // Read the article file back once more at turn end in case edits bypassed a tool_call update.
+      await this.syncArticleFromDisk(managed)
+    }
   }
 
   async cancelTurn(sessionId: string): Promise<void> {
