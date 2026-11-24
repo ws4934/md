@@ -174,7 +174,13 @@ function renderPlantUMLDiagram(
         const isError = !isSvgMarkup(svgContent)
         if (!isError)
           svgCache.set(cacheKey, svgContent)
-        placeholderElement.outerHTML = wrapPlantUmlSvgHtml(svgContent, options, isError)
+        // Mutate the placeholder in place so keyed DOM patching preserves element identity.
+        placeholderElement.removeAttribute(`data-placeholder`)
+        placeholderElement.setAttribute(
+          `data-md-diagram-state`,
+          isError ? MD_DIAGRAM_STATE.error : MD_DIAGRAM_STATE.ready,
+        )
+        placeholderElement.innerHTML = `\n      ${svgContent}\n    `
       }
     })
 

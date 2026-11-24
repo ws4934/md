@@ -30,7 +30,7 @@ const DEFAULT_KATEX_LOADING = `Loading formula…`
  * cached — pending placeholders must stay uncached so they resolve once MathJax
  * finishes loading.
  */
-const mathSvgCache = new LRUMap<string>(400)
+const mathSvgCache = new LRUMap<string>(2048)
 
 /** Drop memoized formula SVG (exported for tests and MathJax reloads). */
 export function clearMathSvgCache(): void {

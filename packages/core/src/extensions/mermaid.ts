@@ -52,7 +52,7 @@ function buildCacheKey(code: string, themeMode?: DiagramThemeMode): string {
   return simpleHash(`${code}-${diagramCacheThemeSuffix(themeMode)}`)
 }
 
-const svgCache = createSVGCache(50)
+const svgCache = createSVGCache(256)
 
 // A re-render while a diagram is still rendering (e.g. on `md:mathjax-ready`) would
 // start a second mermaid.render with the same element id; the two runs then measure

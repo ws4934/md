@@ -1,4 +1,12 @@
-import type { CollectedHeading, IOpts, RendererAPI } from '@md/shared/types'
+import type {
+  CollectedHeading,
+  IndexedTocHeading,
+  IOpts,
+  RenderBlockOptions,
+  RenderBlockResult,
+  RendererAPI,
+  TocHeadingEntry,
+} from '@md/shared/types'
 import type { FrontMatterData } from '@md/shared/types/front-matter'
 import type { ReadTimeResults } from '@md/shared/utils/readingTime'
 import type { RendererObject, Tokens } from 'marked'
@@ -197,6 +205,9 @@ export function initRenderer(opts: IOpts = {}): RendererAPI {
   const listOrderedStack: boolean[] = []
   const listCounters: number[] = []
   const headings: CollectedHeading[] = []
+  let citeTagMode = false
+  let externalTocHeadings: IndexedTocHeading[] | null = null
+  let blockTocHeadings: TocHeadingEntry[] | null = null
   const markdownParser = new Marked()
 
   markdownParser.setOptions({
@@ -403,7 +414,8 @@ export function initRenderer(opts: IOpts = {}): RendererAPI {
       }
       if (opts.citeStatus) {
         const ref = addFootnote(title || text, href)
-        return `<a href="${href}" title="${title || text}">${parsedText}<sup>[${ref}]</sup></a>`
+        const citeAttr = citeTagMode ? ` data-md-cite="${ref}"` : ``
+        return `<a href="${href}" title="${title || text}">${parsedText}<sup${citeAttr}>[${ref}]</sup></a>`
       }
       return `<a href="${href}" title="${title || text}">${parsedText}</a>`
     },
@@ -473,7 +485,12 @@ export function initRenderer(opts: IOpts = {}): RendererAPI {
   markdownParser.use(markedEmoji({
     resolveUrl: id => opts.assetResolver?.(id) ?? `about:blank`,
   }))
-  markdownParser.use(markedToc())
+  markdownParser.use(markedToc({
+    getExternalHeadings: () => externalTocHeadings,
+    onCollectHeading: (heading) => {
+      blockTocHeadings?.push(heading)
+    },
+  }))
   markdownParser.use(markedSlider())
   markdownParser.use(markedAlert({}))
   markdownParser.use(MDKatex({
@@ -496,6 +513,46 @@ export function initRenderer(opts: IOpts = {}): RendererAPI {
   })))
   markdownParser.use(markedRuby())
 
+  function renderBlock(markdown: string, blockOptions?: RenderBlockOptions): RenderBlockResult {
+    footnotes.length = 0
+    footnoteIndex = 0
+    listOrderedStack.length = 0
+    listCounters.length = 0
+    headings.length = 0
+    const collectedToc: TocHeadingEntry[] = []
+    blockTocHeadings = collectedToc
+    citeTagMode = Boolean(blockOptions?.tagCiteIndices)
+    externalTocHeadings = blockOptions?.tocHeadings ?? null
+
+    try {
+      const html = markdownParser.parse(markdown) as string
+      return {
+        html,
+        headings: [...headings],
+        tocHeadings: collectedToc,
+        citeLinks: footnotes.map(([localIndex, title, link]) => ({ localIndex, title, link })),
+      }
+    }
+    finally {
+      citeTagMode = false
+      externalTocHeadings = null
+      blockTocHeadings = null
+    }
+  }
+
+  function setCollectedState(state: {
+    headings: CollectedHeading[]
+    footnotes: [number, string, string][]
+  }): void {
+    headings.length = 0
+    headings.push(...state.headings)
+    footnotes.length = 0
+    for (const entry of state.footnotes) {
+      footnotes.push(entry)
+    }
+    footnoteIndex = state.footnotes.length
+  }
+
   return {
     buildAddition: () => ADDITION_STYLE,
     buildFootnotes,
@@ -505,6 +562,8 @@ export function initRenderer(opts: IOpts = {}): RendererAPI {
     renderMarkdownToHtml(markdown: string) {
       return markdownParser.parse(markdown) as string
     },
+    renderBlock,
+    setCollectedState,
     buildReadingTime,
     createContainer(content: string) {
       return styledContent(`container`, content, `section`)
