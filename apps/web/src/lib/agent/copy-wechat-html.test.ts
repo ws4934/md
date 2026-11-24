@@ -79,7 +79,7 @@ describe(`copyWeChatHtmlToClipboard`, () => {
     expect(mocks.toastError).toHaveBeenCalledWith(`agent.publish.errors.emptyContent`)
     expect(onStart).toHaveBeenCalledTimes(1)
     expect(onEnd).toHaveBeenCalledTimes(1)
-    expect(onRefresh).not.toHaveBeenCalled()
+    expect(onRefresh).toHaveBeenCalledTimes(1)
   })
 
   it(`writes HTML and plain text to clipboard and toasts success for non-empty content`, async () => {

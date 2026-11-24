@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ResizableHandle } from '@/components/ui/resizable'
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   disabled?: boolean
   testId?: string
 }>(), {
@@ -32,6 +32,13 @@ function handleKeydown(event: KeyboardEvent) {
   if (RESIZE_KEYS.has(event.key))
     emit(`keyboardResize`)
 }
+
+watch(() => props.disabled, (disabled) => {
+  if (disabled && isDragging) {
+    isDragging = false
+    emit(`dragging`, false)
+  }
+})
 
 onBeforeUnmount(() => {
   if (isDragging) {

@@ -26,6 +26,7 @@ export async function copyWeChatHtmlToClipboard(options: CopyWeChatHtmlOptions):
     const processed = await processClipboardContent(options.primaryColor)
     if (!processed.html.trim()) {
       toast.error(t(`agent.publish.errors.emptyContent`))
+      options.onRefresh?.()
       return false
     }
 

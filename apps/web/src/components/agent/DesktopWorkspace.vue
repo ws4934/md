@@ -279,7 +279,11 @@ function resetSplit(panel: keyof DesktopLayoutWidths) {
     resizePanelSafely(previewPanelRef, fallback)
 }
 
-watch([isSidebarOpen, showAgentPanel], () => {
+watch([isSidebarOpen, showAgentPanel], ([sidebarOpen, agentOpen]) => {
+  if (!sidebarOpen)
+    clearDraggingPanel(`sidebar`)
+  if (!agentOpen)
+    clearDraggingPanel(`agent`)
   flushPendingWidthSaves()
   syncOuterLayout()
 })
@@ -470,6 +474,7 @@ onUnmounted(() => {
 
       <DesktopSplitHandle
         v-show="isSidebarOpen"
+        :disabled="!isSidebarOpen"
         test-id="split-handle-sidebar"
         @dragging="(active) => onHandleDragging('sidebar', active)"
         @keyboard-resize="onHandleKeyboardResize('sidebar')"
@@ -544,6 +549,7 @@ onUnmounted(() => {
 
                 <DesktopSplitHandle
                   v-show="viewMode === 'split'"
+                  :disabled="viewMode !== 'split'"
                   test-id="split-handle-preview"
                   @dragging="(active) => onHandleDragging('preview', active)"
                   @keyboard-resize="onHandleKeyboardResize('preview')"
@@ -634,6 +640,7 @@ onUnmounted(() => {
 
       <DesktopSplitHandle
         v-show="showAgentPanel"
+        :disabled="!showAgentPanel"
         test-id="split-handle-agent"
         @dragging="(active) => onHandleDragging('agent', active)"
         @keyboard-resize="onHandleKeyboardResize('agent')"
