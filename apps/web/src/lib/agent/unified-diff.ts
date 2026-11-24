@@ -133,12 +133,17 @@ export function buildUnifiedDiff(input: {
   }
 }
 
+const UUID_SEGMENT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export function formatShortFilePath(filePath: string | undefined, fallback = ``): string {
   if (!filePath)
     return fallback
   const normalized = filePath.replace(/\\/g, `/`)
   const parts = normalized.split(`/`).filter(Boolean)
-  if (parts.length <= 2)
-    return parts.join(`/`)
+  if (parts.length <= 1)
+    return parts[0] ?? fallback
+  const parent = parts[parts.length - 2]
+  if (UUID_SEGMENT_RE.test(parent))
+    return parts[parts.length - 1]
   return parts.slice(-2).join(`/`)
 }

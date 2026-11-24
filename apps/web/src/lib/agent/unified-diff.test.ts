@@ -24,8 +24,9 @@ describe(`buildUnifiedDiff`, () => {
     expect(res.lines.find(l => l.kind === `ellipsis`)?.text).toBe(`@@ -1,2 +1,2 @@`)
   })
 
-  it(`shortens absolute file paths to the trailing two segments`, () => {
+  it(`shortens absolute file paths and hides UUID workspace directories`, () => {
     expect(formatShortFilePath(`/tmp/acp-workspaces/abc/article.md`)).toBe(`abc/article.md`)
+    expect(formatShortFilePath(`/tmp/acp-workspaces/042a5e49-9c90-484e-98e9-b52e03440cd9/article.md`)).toBe(`article.md`)
     expect(formatShortFilePath(`article.md`)).toBe(`article.md`)
   })
 })

@@ -165,7 +165,7 @@ onUnmounted(() => {
 
     <div
       v-if="isOpen"
-      class="absolute z-50 flex gap-1.5"
+      class="absolute z-40 flex gap-1.5"
       :class="placement === 'up' ? 'bottom-full mb-2 right-0 flex-row-reverse items-end' : 'top-full mt-2 left-0 flex-row items-start'"
     >
       <!-- Agent list menu -->
