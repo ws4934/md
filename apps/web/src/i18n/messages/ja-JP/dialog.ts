@@ -228,6 +228,7 @@ export default {
       general: `一般`,
       editor: `エディター`,
       preview: `プレビュー`,
+      agents: `Agents`,
     },
     language: {
       label: `言語`,

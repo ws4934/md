@@ -228,6 +228,7 @@ export default {
       general: `通用`,
       editor: `编辑`,
       preview: `预览`,
+      agents: `Agents`,
     },
     language: {
       label: `语言`,

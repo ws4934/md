@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AppLocale } from '@/i18n/types'
 import { Settings } from '@lucide/vue'
+import { defineAsyncComponent } from 'vue'
 import PanelDialog from '@/components/shared/panel-dialog/PanelDialog.vue'
 import PanelSelect from '@/components/shared/panel-dialog/PanelSelect.vue'
 import { Label } from '@/components/ui/label'
@@ -20,11 +21,15 @@ const emit = defineEmits<{
   'update:open': [value: boolean]
 }>()
 
+const AgentsSettingsTab = defineAsyncComponent(() => import('@/components/agent/AgentsSettingsTab.vue'))
+
 const { t } = useI18n()
 const localeStore = useLocaleStore()
 const uiStore = useUIStore()
 const themeStore = useThemeStore()
 const { editorRefresh } = useEditorRefresh()
+
+const isDesktop = Boolean(window.mdDesktop?.isDesktop)
 
 const dialogOpen = computed({
   get: () => props.open,
@@ -38,6 +43,7 @@ const {
   previewDevice,
   enableImageReupload,
   enableScrollSync,
+  preferencesInitialTab,
 } = storeToRefs(uiStore)
 
 const { isCountStatus } = storeToRefs(themeStore)
@@ -45,8 +51,15 @@ const { isCountStatus } = storeToRefs(themeStore)
 const activeTab = ref(`general`)
 
 watch(dialogOpen, (open) => {
-  if (!open)
+  if (open) {
+    activeTab.value = preferencesInitialTab.value === `agents` && !isDesktop
+      ? `general`
+      : preferencesInitialTab.value
+  }
+  else {
     activeTab.value = `general`
+    preferencesInitialTab.value = `general`
+  }
 })
 
 const viewModeOptions = computed(() => [
@@ -84,10 +97,10 @@ function onLocaleChange(value: string) {
     :title="t('preferences.title')"
     :description="t('preferences.description')"
     :icon="Settings"
-    size="lg"
+    :size="isDesktop ? '2xl' : 'lg'"
   >
     <Tabs v-model="activeTab" activation-mode="manual" class="px-4 py-4 sm:px-6">
-      <TabsList class="grid w-full grid-cols-3">
+      <TabsList class="grid w-full" :class="isDesktop ? 'grid-cols-4' : 'grid-cols-3'">
         <TabsTrigger value="general">
           {{ t('preferences.tab.general') }}
         </TabsTrigger>
@@ -96,6 +109,9 @@ function onLocaleChange(value: string) {
         </TabsTrigger>
         <TabsTrigger value="preview">
           {{ t('preferences.tab.preview') }}
+        </TabsTrigger>
+        <TabsTrigger v-if="isDesktop" value="agents">
+          {{ t('preferences.tab.agents') }}
         </TabsTrigger>
       </TabsList>
 
@@ -211,6 +227,10 @@ function onLocaleChange(value: string) {
             @update:model-value="setCountStatus($event)"
           />
         </div>
+      </TabsContent>
+
+      <TabsContent v-if="isDesktop" value="agents" class="mt-4">
+        <AgentsSettingsTab />
       </TabsContent>
     </Tabs>
   </PanelDialog>
