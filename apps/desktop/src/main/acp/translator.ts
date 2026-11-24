@@ -13,6 +13,7 @@ import type {
   ToolKind,
 } from '@agentclientprotocol/sdk/unstable'
 import type {
+  AcpDiffStats,
   AcpModeInfo,
   AcpModelInfo,
   AcpPermissionDecision,
@@ -22,6 +23,7 @@ import type {
   AcpToolKind,
   AcpToolStatus,
 } from '@md/shared/types'
+import { computeCompactDiff } from '@md/shared/utils/compact-diff'
 
 export interface UnstableSessionModelState {
   currentModelId?: string | null
@@ -268,11 +270,11 @@ export function mergeToolCallSnapshot(
     = extractCommandFromRawInput(rawInput, toolKind)
       ?? previous?.command
       ?? (toolKind === `execute` ? title || undefined : undefined)
-  const oldText = diff?.oldText ?? readString(rawInput, [`oldText`, `oldString`]) ?? previous?.oldText
-  const newText
+  const rawOldText = diff?.oldText ?? readString(rawInput, [`oldText`, `oldString`])
+  const rawNewText
     = toolKind === `delete`
       ? ``
-      : (diff?.newText ?? readString(rawInput, [`newText`, `newString`, `content`]) ?? previous?.newText)
+      : (diff?.newText ?? readString(rawInput, [`newText`, `newString`, `content`]))
 
   let detail = contentText ?? previous?.detail
   if (!detail) {
@@ -286,10 +288,23 @@ export function mergeToolCallSnapshot(
       detail = filePath
   }
 
-  const unifiedDiff
-    = (toolKind === `edit` || toolKind === `delete` || toolKind === `move`)
-      ? (contentText ?? readString(rawInput, [`patch`, `diff`, `unifiedDiff`]) ?? previous?.unifiedDiff)
-      : previous?.unifiedDiff
+  const isEditLike = toolKind === `edit` || toolKind === `delete` || toolKind === `move`
+  const rawUnifiedDiff = isEditLike
+    ? (contentText ?? readString(rawInput, [`patch`, `diff`, `unifiedDiff`]))
+    : undefined
+
+  let unifiedDiff = previous?.unifiedDiff
+  let diffStats: AcpDiffStats | undefined = previous?.diffStats
+
+  if (isEditLike && (rawOldText !== undefined || rawNewText !== undefined || rawUnifiedDiff !== undefined)) {
+    const compact = computeCompactDiff({
+      oldText: rawOldText,
+      newText: rawNewText,
+      unifiedDiff: rawUnifiedDiff,
+    })
+    unifiedDiff = compact.unifiedDiff || undefined
+    diffStats = compact.stats
+  }
 
   const error
     = status === `failed`
@@ -304,9 +319,8 @@ export function mergeToolCallSnapshot(
     detail,
     filePath,
     command,
-    oldText,
-    newText,
     unifiedDiff,
+    diffStats,
     error,
   }
 }
@@ -335,9 +349,8 @@ export function mapPermissionRequest(
     command: merged.command,
     detail: merged.detail,
     filePath: merged.filePath,
-    oldText: merged.oldText,
-    newText: merged.newText,
     unifiedDiff: merged.unifiedDiff,
+    diffStats: merged.diffStats,
     options: params.options.map(opt => ({
       optionId: opt.optionId,
       name: opt.name,

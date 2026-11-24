@@ -84,12 +84,67 @@ interface TerminalExitStatus {
 interface ManagedTerminal {
   id: string
   child: ChildProcessWithoutNullStreams
-  output: string
+  chunks: Buffer[]
+  totalBytes: number
   truncated: boolean
   outputByteLimit: number | null
   running: boolean
   exitStatus: TerminalExitStatus | null
   waitForExit: Promise<TerminalExitStatus>
+}
+
+/**
+ * Trims the head of a UTF-8 Buffer ring so total bytes stay within `limit`
+ * without splitting a multi-byte UTF-8 sequence.
+ */
+export function appendUtf8RingChunk(
+  ring: { chunks: Buffer[], totalBytes: number, truncated: boolean },
+  chunk: Buffer | string,
+  limit: number | null,
+): void {
+  const buf = typeof chunk === `string` ? Buffer.from(chunk, `utf8`) : chunk
+  if (buf.byteLength === 0)
+    return
+
+  ring.chunks.push(buf)
+  ring.totalBytes += buf.byteLength
+
+  if (limit === null || ring.totalBytes <= limit)
+    return
+
+  ring.truncated = true
+  let excess = ring.totalBytes - limit
+
+  while (excess > 0 && ring.chunks.length > 0) {
+    const head = ring.chunks[0]
+    if (head.byteLength <= excess) {
+      ring.chunks.shift()
+      ring.totalBytes -= head.byteLength
+      excess -= head.byteLength
+    }
+    else {
+      // Advance past any UTF-8 continuation bytes (10xxxxxx) so the first remaining byte starts a valid code point.
+      let cut = excess
+      while (cut < head.byteLength && (head[cut] & 0xC0) === 0x80)
+        cut++
+      if (cut >= head.byteLength) {
+        ring.chunks.shift()
+        ring.totalBytes -= head.byteLength
+      }
+      else {
+        ring.chunks[0] = head.subarray(cut)
+        ring.totalBytes -= cut
+      }
+      excess = 0
+    }
+  }
+}
+
+export function decodeUtf8Ring(chunks: Buffer[]): string {
+  if (chunks.length === 0)
+    return ``
+  const merged = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks)
+  return new TextDecoder(`utf-8`, { fatal: false }).decode(merged)
 }
 
 const DEFAULT_TIMEOUTS: Required<AcpSessionTimeouts> = {
@@ -564,6 +619,12 @@ export class AcpSession {
 
     this.processFailureGuard = createChildFailureGuard(child, this.stderrChunks)
 
+    // Clean up session state and emit `session_closed` if the CLI exits unexpectedly while idle.
+    child.once(`exit`, () => {
+      if (!this.closed && this._sessionId)
+        void this.close()
+    })
+
     const stream = createSafeNdJsonStream(
       Writable.toWeb(child.stdin) as unknown as WritableStream<Uint8Array>,
       Readable.toWeb(child.stdout) as unknown as ReadableStream<Uint8Array>,
@@ -855,7 +916,8 @@ export class AcpSession {
     const entry: ManagedTerminal = {
       id: terminalId,
       child,
-      output: ``,
+      chunks: [],
+      totalBytes: 0,
       truncated: false,
       outputByteLimit: params.outputByteLimit ?? DEFAULT_TERMINAL_MAX_BYTES,
       running: true,
@@ -864,12 +926,7 @@ export class AcpSession {
     }
 
     const appendOutput = (chunk: Buffer | string) => {
-      const text = chunk.toString()
-      entry.output += text
-      if (entry.outputByteLimit !== null && Buffer.byteLength(entry.output, `utf8`) > entry.outputByteLimit) {
-        entry.truncated = true
-        entry.output = entry.output.slice(-entry.outputByteLimit)
-      }
+      appendUtf8RingChunk(entry, chunk, entry.outputByteLimit)
     }
 
     child.stdout.on(`data`, appendOutput)
@@ -900,7 +957,7 @@ export class AcpSession {
   private async handleTerminalOutput(params: TerminalOutputRequest) {
     const entry = this.getTerminal(params.terminalId)
     return {
-      output: entry.output,
+      output: decodeUtf8Ring(entry.chunks),
       truncated: entry.truncated,
       exitStatus: entry.exitStatus ?? undefined,
     }

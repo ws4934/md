@@ -24,6 +24,9 @@ function normalizeIncomingMessage(raw: Record<string, unknown>): AnyMessage {
   return raw as AnyMessage
 }
 
+const MAX_NON_JSON_LINE_CHARS = 16 * 1024 * 1024
+const MAX_JSON_LINE_CHARS = 64 * 1024 * 1024
+
 /**
  * Wraps child stdio byte streams as an ACP NDJSON Stream, skipping and logging
  * non-JSON stdout lines (e.g. CLI banners or warnings) instead of crashing.
@@ -70,6 +73,22 @@ export function createSafeNdJsonStream(
             continue
 
           buffer += decoder.decode(value, { stream: true })
+
+          if (!buffer.includes(`\n`)) {
+            // Cap unbounded single-line accumulation (e.g. `\r` progress bars or runaway banners).
+            const trimmedStart = buffer.trimStart()
+            const looksLikeJson = trimmedStart.startsWith(`{`)
+            const limit = looksLikeJson ? MAX_JSON_LINE_CHARS : MAX_NON_JSON_LINE_CHARS
+            if (buffer.length > limit) {
+              options.onNonJsonLine?.(
+                buffer.slice(0, 200),
+                new Error(`Dropped stdout line exceeding ${limit} characters without newline`),
+              )
+              buffer = ``
+            }
+            continue
+          }
+
           const lines = buffer.split(`\n`)
           buffer = lines.pop() ?? ``
 
@@ -92,14 +111,50 @@ export function createSafeNdJsonStream(
     },
   })
 
+  // Hold a single writer across the stream's lifetime instead of acquiring/releasing per message.
+  let writer: WritableStreamDefaultWriter<Uint8Array> | null = null
+  const getWriter = () => {
+    if (!writer)
+      writer = output.getWriter()
+    return writer
+  }
+  const releaseWriter = () => {
+    if (!writer)
+      return
+    try {
+      writer.releaseLock()
+    }
+    catch {
+      // Ignore already-released writer.
+    }
+    writer = null
+  }
+
   const writable = new WritableStream<AnyMessage>({
+    start() {
+      getWriter()
+    },
     async write(message) {
-      const writer = output.getWriter()
+      await getWriter().write(encoder.encode(`${JSON.stringify(message)}\n`))
+    },
+    async close() {
+      if (!writer)
+        return
       try {
-        await writer.write(encoder.encode(`${JSON.stringify(message)}\n`))
+        await writer.close()
       }
       finally {
-        writer.releaseLock()
+        releaseWriter()
+      }
+    },
+    async abort(reason) {
+      if (!writer)
+        return
+      try {
+        await writer.abort(reason)
+      }
+      finally {
+        releaseWriter()
       }
     },
   })

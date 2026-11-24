@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { migrateLegacyPermissionSettings } from '@md/shared/utils/acp-permissions'
+import { createDefaultAcpSettings, DEFAULT_ACP_SETTINGS, migrateLegacyPermissionSettings } from '@md/shared/utils/acp-permissions'
 import { buildAgentEnv, resolveBinaryOnPath, resolveLoginShellPath, spawnAgentProcess, terminateProcessTree } from './process'
 
 export const BUILTIN_AGENTS: AcpAgentConfig[] = [
@@ -69,12 +69,15 @@ export const BUILTIN_AGENTS: AcpAgentConfig[] = [
 
 const CUSTOM_AVATAR_COLORS = [`#5B5BD6`, `#0A9E55`, `#D97757`, `#4C7DF0`, `#7A5AF8`, `#A86500`]
 
-const DEFAULT_SETTINGS: AcpSettings = {
-  defaultAgentId: `claude`,
-  defaultPermissionLevel: `ask`,
-  lastModelByAgent: {},
-  customAgents: [],
-  commandOverrides: {},
+const DIRECT_ADAPTER_BINARIES: Record<string, readonly string[]> = {
+  claude: [`claude-code-acp`, `claude-agent-acp`],
+  codex: [`codex-acp`],
+}
+
+interface DetectionEntry {
+  installed: boolean
+  resolvedPath?: string
+  directAdapterPath?: string
 }
 
 interface ActiveInstall {
@@ -96,10 +99,12 @@ export class AcpRegistry {
   private readonly extraBuiltinAgents: AcpAgentConfig[]
   private readonly onEvent?: (event: AcpHostEvent) => void
 
-  private settings: AcpSettings = structuredClone(DEFAULT_SETTINGS)
+  private settings: AcpSettings = createDefaultAcpSettings()
   private loaded = false
-  private detectionCache = new Map<string, { installed: boolean, resolvedPath?: string }>()
+  private loadPromise: Promise<void> | null = null
+  private detectionCache = new Map<string, DetectionEntry>()
   private activeInstalls = new Map<string, ActiveInstall>()
+  private persistChain: Promise<void> = Promise.resolve()
 
   constructor(options: AcpRegistryOptions) {
     this.settingsPath = options.settingsPath
@@ -111,36 +116,48 @@ export class AcpRegistry {
   async ensureLoaded(): Promise<void> {
     if (this.loaded)
       return
-    this.loaded = true
-    try {
-      const raw = await fs.readFile(this.settingsPath, `utf8`)
-      const parsed = JSON.parse(raw) as Partial<AcpSettings> & {
-        reviewEditsBeforeWriting?: unknown
-        askBeforeRunningCommands?: unknown
+    this.loadPromise ??= (async () => {
+      try {
+        const raw = await fs.readFile(this.settingsPath, `utf8`)
+        const parsed = JSON.parse(raw) as Partial<AcpSettings> & {
+          reviewEditsBeforeWriting?: unknown
+          askBeforeRunningCommands?: unknown
+        }
+        const { level, migrated } = migrateLegacyPermissionSettings(parsed)
+        this.settings = {
+          defaultAgentId: typeof parsed.defaultAgentId === `string` && parsed.defaultAgentId.trim()
+            ? parsed.defaultAgentId
+            : DEFAULT_ACP_SETTINGS.defaultAgentId,
+          defaultPermissionLevel: level,
+          lastModelByAgent: { ...(parsed.lastModelByAgent ?? {}) },
+          customAgents: Array.isArray(parsed.customAgents) ? parsed.customAgents : [],
+          commandOverrides: { ...(parsed.commandOverrides ?? {}) },
+        }
+        if (migrated)
+          await this.persist().catch(() => undefined)
       }
-      const { level, migrated } = migrateLegacyPermissionSettings(parsed)
-      this.settings = {
-        defaultAgentId: typeof parsed.defaultAgentId === `string` && parsed.defaultAgentId.trim()
-          ? parsed.defaultAgentId
-          : DEFAULT_SETTINGS.defaultAgentId,
-        defaultPermissionLevel: level,
-        lastModelByAgent: { ...(parsed.lastModelByAgent ?? {}) },
-        customAgents: Array.isArray(parsed.customAgents) ? parsed.customAgents : [],
-        commandOverrides: { ...(parsed.commandOverrides ?? {}) },
+      catch {
+        this.settings = createDefaultAcpSettings()
       }
-      if (migrated)
-        await this.persist().catch(() => undefined)
-    }
-    catch {
-      this.settings = structuredClone(DEFAULT_SETTINGS)
-    }
+      finally {
+        this.loaded = true
+      }
+    })()
+    await this.loadPromise
   }
 
-  private async persist(): Promise<void> {
+  private async writeAtomic(): Promise<void> {
+    const snapshot = `${JSON.stringify(this.settings, null, 2)}\n`
     await fs.mkdir(path.dirname(this.settingsPath), { recursive: true })
     const tmpPath = `${this.settingsPath}.${randomUUID()}.tmp`
-    await fs.writeFile(tmpPath, `${JSON.stringify(this.settings, null, 2)}\n`, `utf8`)
+    await fs.writeFile(tmpPath, snapshot, `utf8`)
     await fs.rename(tmpPath, this.settingsPath)
+  }
+
+  private persist(): Promise<void> {
+    // Serialize atomic writes so concurrent settings/lastModel updates never clobber newer state.
+    this.persistChain = this.persistChain.catch(() => undefined).then(() => this.writeAtomic())
+    return this.persistChain
   }
 
   async getSettings(): Promise<AcpSettings> {
@@ -206,20 +223,27 @@ export class AcpRegistry {
       }
     }
 
+    const detected = this.detectionCache.get(agentId)
+    if (detected) {
+      if (detected.directAdapterPath)
+        return { command: detected.directAdapterPath, args: [], env: config.env }
+      return {
+        command: config.command,
+        args: config.args,
+        env: config.env,
+      }
+    }
+
     const pathEnv = this.pathOverride ?? await resolveLoginShellPath()
 
     // Prefer a globally installed ACP adapter binary directly when available to avoid npx latency.
-    if (config.id === `claude`) {
-      for (const directBin of [`claude-code-acp`, `claude-agent-acp`]) {
+    const directBins = DIRECT_ADAPTER_BINARIES[config.id]
+    if (directBins) {
+      for (const directBin of directBins) {
         const resolved = await resolveBinaryOnPath(directBin, pathEnv)
         if (resolved)
           return { command: resolved, args: [], env: config.env }
       }
-    }
-    else if (config.id === `codex`) {
-      const resolved = await resolveBinaryOnPath(`codex-acp`, pathEnv)
-      if (resolved)
-        return { command: resolved, args: [], env: config.env }
     }
 
     return {
@@ -229,9 +253,9 @@ export class AcpRegistry {
     }
   }
 
-  async detectAgents(): Promise<AcpAgentStatus[]> {
+  async detectAgents(options: { forceShell?: boolean } = {}): Promise<AcpAgentStatus[]> {
     await this.ensureLoaded()
-    const pathEnv = this.pathOverride ?? await resolveLoginShellPath({ force: true })
+    const pathEnv = this.pathOverride ?? await resolveLoginShellPath({ force: options.forceShell === true })
     const configs = this.getAllConfigs()
 
     await Promise.all(
@@ -240,16 +264,24 @@ export class AcpRegistry {
         const binariesToCheck = override?.command
           ? [override.command]
           : (config.detectBinaries?.length ? config.detectBinaries : [config.command])
+        const directAdapterSet = override?.command
+          ? null
+          : (DIRECT_ADAPTER_BINARIES[config.id] ? new Set(DIRECT_ADAPTER_BINARIES[config.id]) : null)
 
         let resolvedPath: string | null = null
+        let directAdapterPath: string | undefined
         for (const bin of binariesToCheck) {
           resolvedPath = await resolveBinaryOnPath(bin, pathEnv)
-          if (resolvedPath)
+          if (resolvedPath) {
+            if (directAdapterSet?.has(bin))
+              directAdapterPath = resolvedPath
             break
+          }
         }
         this.detectionCache.set(config.id, {
           installed: Boolean(resolvedPath),
           resolvedPath: resolvedPath ?? undefined,
+          directAdapterPath,
         })
       }),
     )
@@ -262,7 +294,7 @@ export class AcpRegistry {
   async listAgents(): Promise<AcpAgentStatus[]> {
     await this.ensureLoaded()
     if (this.detectionCache.size === 0)
-      return this.detectAgents()
+      return this.detectAgents({ forceShell: false })
     return this.buildStatuses()
   }
 

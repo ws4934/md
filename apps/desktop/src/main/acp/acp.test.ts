@@ -1,4 +1,5 @@
 import type { AcpHostEvent, AcpPermissionLevel, AcpToolKind } from '@md/shared/types'
+import { Buffer } from 'node:buffer'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -12,11 +13,12 @@ import {
   migrateLegacyPermissionSettings,
 } from '@md/shared/utils/acp-permissions'
 import { afterEach, describe, expect, it } from 'vitest'
+import { AcpEventBatcher } from './event-batcher'
 import { AcpHost } from './host'
 import { createSafeNdJsonStream } from './ndjson-stream'
-import { probeAcpAgent } from './probe'
+import { probeAcpAgent, ProbeCache } from './probe'
 import { AcpRegistry } from './registry'
-import { AcpSession, DEFAULT_CLIENT_CAPABILITIES } from './session'
+import { AcpSession, appendUtf8RingChunk, decodeUtf8Ring, DEFAULT_CLIENT_CAPABILITIES } from './session'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FAKE_AGENT_SCRIPT = path.resolve(__dirname, `../../../scripts/fake-acp-agent.mjs`)
@@ -194,8 +196,10 @@ describe(`acpSession`, () => {
       .filter((e): e is Extract<AcpHostEvent, { type: `permission_requested` }> => e.type === `permission_requested`)
       .map(e => e.request)
     expect(permRequests.map(r => r.toolKind)).toEqual([`edit`, `execute`])
-    expect(permRequests[0].oldText).toBe(`# Draft`)
-    expect(permRequests[0].newText).toContain(`ACP 协作示例`)
+    expect(permRequests[0].oldText).toBeUndefined()
+    expect(permRequests[0].newText).toBeUndefined()
+    expect(permRequests[0].unifiedDiff).toContain(`ACP 协作示例`)
+    expect(permRequests[0].diffStats?.hasChanges).toBe(true)
     expect(permRequests[1].command).toContain(`npx mmdc`)
 
     const fullText = events
@@ -232,10 +236,11 @@ describe(`acpSession`, () => {
     expect(byId.get(`tc-search`)?.toolKind).toBe(`search`)
     expect(byId.get(`tc-search`)?.detail).toBe(`ACP`)
     expect(byId.get(`tc-edit`)?.toolKind).toBe(`edit`)
-    expect(byId.get(`tc-edit`)?.oldText).toBe(`old`)
-    expect(byId.get(`tc-edit`)?.newText).toBe(`new`)
+    expect(byId.get(`tc-edit`)?.oldText).toBeUndefined()
+    expect(byId.get(`tc-edit`)?.newText).toBeUndefined()
+    expect(byId.get(`tc-edit`)?.unifiedDiff).toBe(`-old\n+new`)
+    expect(byId.get(`tc-edit`)?.diffStats).toEqual({ added: 1, removed: 1, hasChanges: true })
     expect(byId.get(`tc-delete`)?.toolKind).toBe(`delete`)
-    expect(byId.get(`tc-delete`)?.newText).toBe(``)
     expect(byId.get(`tc-execute`)?.toolKind).toBe(`execute`)
     expect(byId.get(`tc-execute`)?.command).toBe(`npx mmdc -i a.mmd -o a.svg`)
     expect(byId.get(`tc-fetch`)?.toolKind).toBe(`fetch`)
@@ -742,5 +747,154 @@ describe(`probeAcpAgent and AcpRegistry`, () => {
     await session.close()
     expect(Date.now() - startedAt).toBeLessThan(3_000)
     expect(session.isClosed).toBe(true)
+  })
+})
+
+describe(`performance and reliability guards (P-1, P-2, O-1, O-2, O-5)`, () => {
+  it(`enforces UTF-8 byte limits on terminal output without splitting multibyte chars (O-1)`, () => {
+    const ring = { chunks: [] as Buffer[], totalBytes: 0, truncated: false }
+    // 100,000 CJK chars = 300,000 UTF-8 bytes (> 262,144)
+    const cjk = `中`.repeat(100_000)
+    appendUtf8RingChunk(ring, cjk, 262_144)
+    expect(ring.truncated).toBe(true)
+    expect(ring.totalBytes).toBeLessThanOrEqual(262_144)
+    const decoded = decodeUtf8Ring(ring.chunks)
+    expect(Buffer.byteLength(decoded, `utf8`)).toBeLessThanOrEqual(262_144)
+    expect(decoded.includes(`\uFFFD`)).toBe(false)
+    expect(decoded.startsWith(`中`)).toBe(true)
+  })
+
+  it(`coalesces consecutive chunks and flushes ahead of non-chunk events (P-1)`, async () => {
+    const emitted: AcpHostEvent[] = []
+    const batcher = new AcpEventBatcher({
+      batchMs: 25,
+      onEmit: ev => emitted.push(ev),
+    })
+
+    batcher.push({ type: `message_chunk`, sessionId: `s1`, text: `A` })
+    batcher.push({ type: `message_chunk`, sessionId: `s1`, text: `B` })
+    batcher.push({ type: `message_chunk`, sessionId: `s1`, text: `C` })
+    expect(emitted).toHaveLength(0)
+
+    // Non-chunk event must flush buffered chunks first to preserve ordering.
+    batcher.push({ type: `turn_finished`, sessionId: `s1`, stopReason: `end_turn` })
+    expect(emitted).toEqual([
+      { type: `message_chunk`, sessionId: `s1`, text: `ABC` },
+      { type: `turn_finished`, sessionId: `s1`, stopReason: `end_turn` },
+    ])
+
+    batcher.push({ type: `message_chunk`, sessionId: `s1`, text: `D` })
+    await new Promise(resolve => setTimeout(resolve, 45))
+    expect(emitted).toHaveLength(3)
+    expect(emitted[2]).toEqual({ type: `message_chunk`, sessionId: `s1`, text: `D` })
+    batcher.dispose()
+  })
+
+  it(`persists ProbeCache across restarts and expires entries after TTL (P-2)`, async () => {
+    const dir = await makeTempDir(`md-acp-probe-cache-`)
+    const cachePath = path.join(dir, `probe-cache.json`)
+
+    const cache1 = new ProbeCache({ cachePath, ttlMs: 60_000 })
+    cache1.seed({
+      agentId: `fake-seeded`,
+      models: [{ id: `m1`, name: `Model 1` }],
+      currentModelId: `m1`,
+      modes: [],
+      currentModeId: null,
+      commands: [],
+      probedAt: Date.now(),
+    })
+    await cache1.flush()
+
+    // New ProbeCache instance loads from disk without spawning a process.
+    const cache2 = new ProbeCache({ cachePath, ttlMs: 60_000 })
+    const hit = await cache2.probe({
+      agentId: `fake-seeded`,
+      command: `/nonexistent/should-not-spawn`,
+      args: [],
+    })
+    expect(hit.models).toEqual([{ id: `m1`, name: `Model 1` }])
+
+    // Expired TTL ignores stale disk cache and attempts fresh probe.
+    const expiredCache = new ProbeCache({ cachePath, ttlMs: -1 })
+    const miss = await expiredCache.probe({
+      agentId: `fake-seeded`,
+      command: `/nonexistent/binary`,
+      args: [],
+    })
+    expect(miss.error).toBeTruthy()
+  })
+
+  it(`sweeps stale acp-workspaces on startup and cleans up unexpected child exits (O-2)`, async () => {
+    const dataDir = await makeTempDir(`md-acp-sweep-`)
+    const staleDir = path.join(dataDir, `acp-workspaces`, `stale-crash-dir`)
+    await fs.mkdir(staleDir, { recursive: true })
+    await fs.writeFile(path.join(staleDir, `article.md`), `stale`, `utf8`)
+
+    const events: AcpHostEvent[] = []
+    const host = new AcpHost({
+      dataDir,
+      extraBuiltinAgents: [
+        {
+          id: `fake-exit`,
+          name: `Fake Exit`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `E`, color: `#5B5BD6` },
+        },
+      ],
+      onEvent: ev => events.push(ev),
+    })
+    openHosts.push(host)
+
+    // Wait briefly for startup sweep to remove the stale workspace folder.
+    await new Promise(resolve => setTimeout(resolve, 100))
+    await expect(fs.stat(staleDir)).rejects.toThrow()
+
+    const started = await host.startSession({
+      agentId: `fake-exit`,
+      postId: `p1`,
+      postTitle: `Exit Test`,
+      content: `# Hi`,
+    })
+    const remainingDirs = await fs.readdir(path.join(dataDir, `acp-workspaces`))
+    expect(remainingDirs).toHaveLength(1)
+    const activeWorkspace = path.join(dataDir, `acp-workspaces`, remainingDirs[0])
+
+    // Kill the underlying child process directly to simulate an unexpected CLI crash while idle.
+    const managed = (host as unknown as { sessions: Map<string, { session: AcpSession }> }).sessions.get(started.sessionId)
+    managed?.session.childProcess?.kill(`SIGKILL`)
+
+    // Wait for child exit cleanup to emit session_closed and delete workspaceDir.
+    for (let i = 0; i < 40; i++) {
+      if (events.some(e => e.type === `session_closed` && e.sessionId === started.sessionId))
+        break
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    expect(events.some(e => e.type === `session_closed` && e.sessionId === started.sessionId)).toBe(true)
+    await new Promise(resolve => setTimeout(resolve, 80))
+    await expect(fs.stat(activeWorkspace)).rejects.toThrow()
+  })
+
+  it(`serializes concurrent AcpRegistry persist writes so newest state always wins (O-5)`, async () => {
+    const dir = await makeTempDir(`md-acp-persist-`)
+    const settingsPath = path.join(dir, `acp-settings.json`)
+    const registry = new AcpRegistry({ settingsPath, pathOverride: process.env.PATH })
+
+    await Promise.all([
+      registry.rememberLastModel(`claude`, `model-1`),
+      registry.rememberLastModel(`codex`, `model-2`),
+      registry.updateSettings({ defaultPermissionLevel: `auto_edits` }),
+      registry.rememberLastModel(`claude`, `model-3`),
+    ])
+
+    const saved = JSON.parse(await fs.readFile(settingsPath, `utf8`))
+    expect(saved.defaultPermissionLevel).toBe(`auto_edits`)
+    expect(saved.lastModelByAgent).toEqual({
+      claude: `model-3`,
+      codex: `model-2`,
+    })
   })
 })

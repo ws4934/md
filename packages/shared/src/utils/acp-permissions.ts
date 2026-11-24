@@ -1,4 +1,22 @@
-import type { AcpModeInfo, AcpPermissionLevel, AcpToolKind } from '../types/desktop-acp'
+import type { AcpModeInfo, AcpPermissionLevel, AcpSettings, AcpToolKind } from '../types/desktop-acp'
+
+export const DEFAULT_ACP_SETTINGS: Readonly<AcpSettings> = {
+  defaultAgentId: `claude`,
+  defaultPermissionLevel: `ask`,
+  lastModelByAgent: {},
+  customAgents: [],
+  commandOverrides: {},
+}
+
+export function createDefaultAcpSettings(): AcpSettings {
+  return {
+    defaultAgentId: DEFAULT_ACP_SETTINGS.defaultAgentId,
+    defaultPermissionLevel: DEFAULT_ACP_SETTINGS.defaultPermissionLevel,
+    lastModelByAgent: {},
+    customAgents: [],
+    commandOverrides: {},
+  }
+}
 
 export const ACP_PERMISSION_LEVELS: readonly AcpPermissionLevel[] = [
   `ask`,

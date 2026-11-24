@@ -105,6 +105,13 @@ export type AcpToolKind
 
 export type AcpToolStatus = `pending` | `in_progress` | `completed` | `failed`
 
+export interface AcpDiffStats {
+  added: number
+  removed: number
+  hasChanges: boolean
+  truncated?: boolean
+}
+
 export interface AcpToolCallItem {
   id: string
   title: string
@@ -116,6 +123,7 @@ export interface AcpToolCallItem {
   oldText?: string
   newText?: string
   unifiedDiff?: string
+  diffStats?: AcpDiffStats
   error?: string
 }
 
@@ -137,6 +145,7 @@ export interface AcpPermissionRequest {
   oldText?: string
   newText?: string
   unifiedDiff?: string
+  diffStats?: AcpDiffStats
   options: AcpPermissionOption[]
 }
 

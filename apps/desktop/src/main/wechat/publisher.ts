@@ -151,7 +151,7 @@ function parseDataImageUri(dataUri: string): ImageBinary {
     : Buffer.from(decodeURIComponent(payload), `utf-8`)
   const ext = extensionForMime(mimeType)
   return {
-    buffer: Uint8Array.from(raw),
+    buffer: raw,
     mimeType,
     filename: `image${ext}`,
   }
@@ -164,7 +164,7 @@ async function defaultReadLocalFile(filePath: string): Promise<ImageBinary> {
     throw new Error(`Unsupported local image format: ${ext || `unknown`}`)
   const data = await fs.readFile(resolved)
   return {
-    buffer: Uint8Array.from(data),
+    buffer: data,
     mimeType: mimeForExtension(ext),
     filename: path.basename(resolved),
   }
@@ -366,7 +366,7 @@ export class WeChatPublisher {
         : mimeForExtension(urlExt)
       const ext = extensionForMime(mimeType)
       return {
-        buffer: Uint8Array.from(new Uint8Array(arrayBuf)),
+        buffer: new Uint8Array(arrayBuf),
         mimeType,
         filename: `image${ext}`,
       }
@@ -377,7 +377,7 @@ export class WeChatPublisher {
 
   private buildMediaForm(binary: ImageBinary): FormData {
     const form = new FormData()
-    const blob = new Blob([Uint8Array.from(binary.buffer)], { type: binary.mimeType })
+    const blob = new Blob([binary.buffer as BlobPart], { type: binary.mimeType })
     form.append(`media`, blob, binary.filename)
     return form
   }

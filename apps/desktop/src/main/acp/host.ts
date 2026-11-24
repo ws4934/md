@@ -56,29 +56,56 @@ export class AcpHost {
   private readonly workspacesRoot: string
   private readonly pathOverride?: string
   private readonly registry: AcpRegistry
-  private readonly probeCache = new ProbeCache()
+  private readonly probeCache: ProbeCache
   private readonly sessions = new Map<string, ManagedSession>()
+  private readonly activeWorkspaceDirs = new Set<string>()
   private readonly onEvent?: (event: AcpHostEvent) => void
 
   constructor(options: AcpHostOptions) {
     this.workspacesRoot = path.join(options.dataDir, `acp-workspaces`)
     this.pathOverride = options.pathOverride
     this.onEvent = options.onEvent
+    this.probeCache = new ProbeCache({
+      cachePath: path.join(options.dataDir, `acp-probe-cache.json`),
+    })
     this.registry = new AcpRegistry({
       settingsPath: path.join(options.dataDir, `acp-settings.json`),
       pathOverride: options.pathOverride,
       extraBuiltinAgents: options.extraBuiltinAgents,
       onEvent: options.onEvent,
     })
+    // Best-effort cleanup of orphaned workspace folders left by prior crashes / SIGKILLs.
+    void this.sweepStaleWorkspaces()
+  }
+
+  private async sweepStaleWorkspaces(): Promise<void> {
+    try {
+      const entries = await fs.readdir(this.workspacesRoot, { withFileTypes: true })
+      await Promise.all(
+        entries
+          .filter(entry => entry.isDirectory())
+          .map((entry) => {
+            const fullPath = path.join(this.workspacesRoot, entry.name)
+            if (this.activeWorkspaceDirs.has(fullPath))
+              return Promise.resolve()
+            return fs.rm(fullPath, { recursive: true, force: true }).catch(() => undefined)
+          }),
+      )
+    }
+    catch {
+      // Directory may not exist yet on first launch.
+    }
   }
 
   listAgents(): Promise<AcpAgentStatus[]> {
     return this.registry.listAgents()
   }
 
-  detectAgents(): Promise<AcpAgentStatus[]> {
-    this.probeCache.invalidate()
-    return this.registry.detectAgents()
+  detectAgents(options: { force?: boolean } = { force: true }): Promise<AcpAgentStatus[]> {
+    const force = options.force !== false
+    if (force)
+      this.probeCache.invalidate()
+    return this.registry.detectAgents({ forceShell: force })
   }
 
   getSettings(): Promise<AcpSettings> {
@@ -140,6 +167,7 @@ export class AcpHost {
     const workspaceDir = path.join(this.workspacesRoot, workspaceId)
     const articlePath = path.join(workspaceDir, `article.md`)
 
+    this.activeWorkspaceDirs.add(workspaceDir)
     await fs.mkdir(workspaceDir, { recursive: true })
     await fs.writeFile(articlePath, params.content, `utf8`)
 
@@ -176,6 +204,15 @@ export class AcpHost {
           return
         }
 
+        if (event.type === `session_closed`) {
+          const managed = this.sessions.get(event.sessionId)
+          if (managed) {
+            this.sessions.delete(event.sessionId)
+            this.activeWorkspaceDirs.delete(managed.workspaceDir)
+            void fs.rm(managed.workspaceDir, { recursive: true, force: true }).catch(() => undefined)
+          }
+        }
+
         this.onEvent?.(event)
         // Read the article file back into the editor after an edit-kind tool completes.
         if (event.type === `tool_call` && event.tool.status === `completed` && isEditToolKind(event.tool.toolKind)) {
@@ -190,7 +227,15 @@ export class AcpHost {
     })
     sessionRef.current = session
 
-    await session.initializeNewSession()
+    try {
+      await session.initializeNewSession()
+    }
+    catch (error) {
+      this.activeWorkspaceDirs.delete(workspaceDir)
+      await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined)
+      throw error
+    }
+
     const sessionId = session.sessionId!
     this.sessions.set(sessionId, {
       session,
@@ -202,6 +247,19 @@ export class AcpHost {
       syncChain: Promise.resolve(),
       permissionState,
     })
+
+    // Feed session capabilities into the persistent probe cache so picker opens skip re-probing.
+    if (session.models.length > 0 || session.modes.length > 0 || session.commands.length > 0) {
+      this.probeCache.seed({
+        agentId: params.agentId,
+        models: session.models,
+        currentModelId: session.currentModelId,
+        modes: session.modes,
+        currentModeId: session.currentModeId,
+        commands: session.commands,
+        probedAt: Date.now(),
+      })
+    }
 
     const targetModeId
       = (params.modeId && session.modes.some(m => m.id === params.modeId) ? params.modeId : null)
@@ -372,6 +430,7 @@ export class AcpHost {
     if (!managed)
       return
     this.sessions.delete(sessionId)
+    this.activeWorkspaceDirs.delete(managed.workspaceDir)
     await managed.session.close()
     await fs.rm(managed.workspaceDir, { recursive: true, force: true }).catch(() => undefined)
   }
@@ -398,5 +457,6 @@ export class AcpHost {
   async dispose(): Promise<void> {
     await this.registry.cancelAllInstalls()
     await Promise.all([...this.sessions.keys()].map(id => this.closeSession(id)))
+    await this.probeCache.flush()
   }
 }

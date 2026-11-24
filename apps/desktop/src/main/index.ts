@@ -1,11 +1,11 @@
 import type { AcpAgentConfig, AcpHostEvent, WeChatPublishProgressEvent, WeChatPublishRequest } from '@md/shared/types'
-import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, powerMonitor, protocol, shell } from 'electron'
 import { IPC_CHANNELS } from '../shared/ipc-channels'
+import { AcpEventBatcher } from './acp/event-batcher'
 import { AcpHost } from './acp/host'
 import { QuitGuard } from './quit-guard'
 import { mimeForExtension, WeChatPublisher } from './wechat/publisher'
@@ -43,7 +43,7 @@ function registerAppProtocol(): void {
   const rendererDir = resolveRendererDir()
   const resolvedRoot = path.resolve(rendererDir)
 
-  protocol.handle(APP_SCHEME, (request) => {
+  protocol.handle(APP_SCHEME, async (request) => {
     const url = new URL(request.url)
     let pathname = decodeURIComponent(url.pathname)
     if (pathname === `/` || pathname === ``)
@@ -54,9 +54,15 @@ function registerAppProtocol(): void {
     if (!candidate.startsWith(resolvedRoot))
       return new Response(`Forbidden`, { status: 403 })
 
-    const target = fs.existsSync(candidate) && fs.statSync(candidate).isFile()
-      ? candidate
-      : path.join(resolvedRoot, `index.html`)
+    let target = path.join(resolvedRoot, `index.html`)
+    try {
+      const stat = await fs.promises.stat(candidate)
+      if (stat.isFile())
+        target = candidate
+    }
+    catch {
+      // Missing asset falls back to SPA index.html.
+    }
 
     return net.fetch(pathToFileURL(target).toString())
   })
@@ -64,6 +70,7 @@ function registerAppProtocol(): void {
 
 let mainWindow: BrowserWindow | null = null
 let acpHost: AcpHost | null = null
+let acpEventBatcher: AcpEventBatcher | null = null
 let wechatPublisher: WeChatPublisher | null = null
 let quitGuard: QuitGuard | null = null
 
@@ -72,9 +79,16 @@ const testQuitResponses: Array<`cancel` | `confirm`> = (process.env.MD_DESKTOP_T
   .map(s => s.trim().toLowerCase())
   .filter((s): s is `cancel` | `confirm` => s === `cancel` || s === `confirm`)
 
-function broadcastAcpEvent(event: AcpHostEvent): void {
+function sendAcpEventImmediate(event: AcpHostEvent): void {
   if (mainWindow && !mainWindow.isDestroyed())
     mainWindow.webContents.send(IPC_CHANNELS.ACP_EVENT, event)
+}
+
+function broadcastAcpEvent(event: AcpHostEvent): void {
+  if (acpEventBatcher)
+    acpEventBatcher.push(event)
+  else
+    sendAcpEventImmediate(event)
 }
 
 function broadcastWeChatProgress(event: WeChatPublishProgressEvent): void {
@@ -190,7 +204,7 @@ function registerIpc(host: AcpHost, publisher: WeChatPublisher): void {
     return {
       path: filePath,
       name: path.basename(filePath),
-      dataUrl: `data:${mime};base64,${Buffer.from(raw).toString(`base64`)}`,
+      dataUrl: `data:${mime};base64,${raw.toString(`base64`)}`,
     }
   })
 
@@ -228,6 +242,10 @@ app.whenReady().then(() => {
   if (!DEV_SERVER_URL)
     registerAppProtocol()
 
+  acpEventBatcher = new AcpEventBatcher({
+    batchMs: 16,
+    onEmit: sendAcpEventImmediate,
+  })
   acpHost = new AcpHost({
     dataDir: app.getPath(`userData`),
     extraBuiltinAgents: buildOptionalFakeAgents(),
@@ -238,7 +256,10 @@ app.whenReady().then(() => {
   })
   quitGuard = new QuitGuard({
     getActiveSessions: () => acpHost?.getActiveSessions() ?? [],
-    dispose: () => acpHost?.dispose() ?? Promise.resolve(),
+    dispose: async () => {
+      acpEventBatcher?.dispose()
+      await acpHost?.dispose()
+    },
     confirmQuit: async (copy) => {
       // Allow automated CDP smoke runs to drive cancel/confirm without a native OS sheet.
       if (testQuitResponses.length > 0) {
