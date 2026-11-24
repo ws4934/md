@@ -1,5 +1,6 @@
+import type { RenderedBlock } from '@md/core/utils'
 import type { RendererAPI } from '@md/shared/types'
-import { postProcessHtml, renderMarkdown } from '@md/core/utils'
+import { assembleRenderedBlocksHtml, renderMarkdownIncremental } from '@md/core/utils'
 import { t } from '@/i18n/translate'
 import { resolveAssetUrl } from '@/services/emoji/urlResolver'
 import { useCustomComponentStore } from './customComponent'
@@ -14,8 +15,16 @@ export interface RenderOptions {
 
 /** Markdown rendering, HTML output, and heading extraction. */
 export const useRenderStore = defineStore(`render`, () => {
-  const output = ref(``)
+  const renderedBlocks = shallowRef<RenderedBlock[]>([])
+  const renderVersion = ref(0)
+  const hasRendered = ref(false)
   const isDirty = ref(false)
+
+  // Assembled lazily on demand so keystrokes never join multi-MB HTML strings
+  // unless an explicit consumer (copy / publish / export) reads `output`.
+  const output = computed(() =>
+    hasRendered.value ? assembleRenderedBlocksHtml(renderedBlocks.value) : ``,
+  )
 
   const readingTime = reactive({
     chars: 0,
@@ -100,30 +109,18 @@ export const useRenderStore = defineStore(`render`, () => {
       t(`store.render.unknownComponent`),
       t(`store.render.katexLoading`),
       t(`store.diagram.mermaidLoading`),
+      t(`store.diagram.mermaidError`),
+      t(`store.diagram.plantumlLoading`),
+      t(`store.diagram.plantumlError`),
+      t(`store.diagram.infographicLoading`),
+      t(`store.diagram.infographicError`),
     ].join(`\u0001`)
-  }
-
-  /**
-   * Inject heading anchor ids (`#0`, `#1`, …) used by outline navigation and
-   * fill the title list from headings collected during render. Pure string
-   * work — no DOM parse/serialize round-trip per render.
-   */
-  const extractTitles = (html: string): string => {
-    const headings = renderer!.getHeadings()
-    titleList.value = headings.map((heading, i) => ({
-      url: `#${i}`,
-      title: heading.text,
-      level: heading.level,
-    }))
-
-    let i = 0
-    return html.replace(/data-heading="true"/g, () => `data-heading="true" id="${i++}"`)
   }
 
   const render = (content: string, options?: RenderOptions) => {
     if (!renderer) {
       pendingRender = { content, options }
-      return output.value
+      return
     }
 
     const themeStore = useThemeStore()
@@ -134,7 +131,7 @@ export const useRenderStore = defineStore(`render`, () => {
 
     if (!options?.force && content === lastContent && optionsFingerprint === lastOptionsFingerprint) {
       isDirty.value = false
-      return output.value
+      return
     }
 
     // isUseIndent / isUseJustify are applied via CSS variables, not renderer options
@@ -152,19 +149,25 @@ export const useRenderStore = defineStore(`render`, () => {
       assetResolver: resolveAssetUrl,
     })
 
-    const { html: baseHtml, readingTime: readingTimeResult } = renderMarkdown(content, renderer)
+    const result = renderMarkdownIncremental(content, renderer, optionsFingerprint)
 
     readingTime.chars = content.length
-    readingTime.words = readingTimeResult.words
-    readingTime.minutes = Math.ceil(readingTimeResult.minutes)
+    readingTime.words = result.readingTime.words
+    readingTime.minutes = Math.ceil(result.readingTime.minutes)
 
-    output.value = extractTitles(postProcessHtml(baseHtml, readingTimeResult, renderer))
+    titleList.value = result.headings.map((heading, i) => ({
+      url: `#${i}`,
+      title: heading.text,
+      level: heading.level,
+    }))
+
+    renderedBlocks.value = result.blocks
+    hasRendered.value = true
+    renderVersion.value++
 
     lastContent = content
     lastOptionsFingerprint = optionsFingerprint
     isDirty.value = false
-
-    return output.value
   }
 
   function flushPendingRender() {
@@ -198,6 +201,8 @@ export const useRenderStore = defineStore(`render`, () => {
   return {
     // State
     output,
+    renderedBlocks,
+    renderVersion,
     isDirty,
     readingTime,
     titleList,

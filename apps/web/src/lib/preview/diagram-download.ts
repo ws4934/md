@@ -167,16 +167,41 @@ export function setupDiagramDownloadOverlay(outputEl: HTMLElement): DiagramDownl
   scan()
 
   let rafId: ReturnType<typeof requestAnimationFrame> | null = null
+  const pending = new Set<HTMLElement>()
 
-  const observer = new MutationObserver(() => {
+  const observer = new MutationObserver((mutations) => {
     if (paused)
       return
-    if (rafId !== null)
+    for (const m of mutations) {
+      if (m.target instanceof HTMLElement) {
+        const host = m.target.closest<HTMLElement>(DIAGRAM_SELECTORS)
+        if (host)
+          pending.add(host)
+      }
+      for (const node of m.addedNodes) {
+        if (node instanceof HTMLElement) {
+          if (node.matches(DIAGRAM_SELECTORS)) {
+            pending.add(node)
+          }
+          else if (node.childElementCount > 0) {
+            node.querySelectorAll<HTMLElement>(DIAGRAM_SELECTORS).forEach(el => pending.add(el))
+          }
+        }
+      }
+    }
+    if (pending.size === 0 || rafId !== null)
       return
     rafId = requestAnimationFrame(() => {
       rafId = null
-      if (!paused)
-        scan()
+      if (paused) {
+        pending.clear()
+        return
+      }
+      for (const el of pending) {
+        if (el.isConnected)
+          inject(el)
+      }
+      pending.clear()
     })
   })
 
@@ -186,6 +211,7 @@ export function setupDiagramDownloadOverlay(outputEl: HTMLElement): DiagramDownl
     cleanup: () => {
       if (rafId !== null)
         cancelAnimationFrame(rafId)
+      pending.clear()
       observer.disconnect()
     },
     pause: () => {
@@ -194,6 +220,7 @@ export function setupDiagramDownloadOverlay(outputEl: HTMLElement): DiagramDownl
         cancelAnimationFrame(rafId)
         rafId = null
       }
+      pending.clear()
       outputEl.querySelectorAll(`.diagram-download-bar`).forEach(el => el.remove())
     },
     resume: () => {

@@ -3,6 +3,7 @@ import type { DiagramDownloadOverlay } from '@/lib/preview/diagram-download'
 import { CONTENT_FONT_LANG } from '@/i18n/constants'
 import { setupDiagramDownloadOverlay } from '@/lib/preview/diagram-download'
 import { setupEmojiHydration } from '@/lib/preview/emoji-hydrate'
+import { patchPreviewDom, resetPreviewDomState } from '@/lib/preview/patch-preview-dom'
 import { useEditorStore } from '@/stores/editor'
 import { useRenderStore } from '@/stores/render'
 import { useThemeStore } from '@/stores/theme'
@@ -20,7 +21,6 @@ const renderStore = useRenderStore()
 const themeStore = useThemeStore()
 const uiStore = useUIStore()
 
-const { output } = storeToRefs(renderStore)
 const { isDark, isMobile, viewMode, previewDevice } = storeToRefs(uiStore)
 
 const effectivePreviewWidth = computed(() => {
@@ -30,10 +30,14 @@ const effectivePreviewWidth = computed(() => {
 })
 
 const previewRef = useTemplateRef<HTMLDivElement>(`previewRef`)
+const outputRef = useTemplateRef<HTMLElement>(`outputRef`)
 
-async function hydratePreviewDiagrams() {
-  const outputElement = document.getElementById(`output`)
-  if (!outputElement)
+async function hydratePreviewDiagrams(roots?: HTMLElement[]) {
+  const targets = roots && roots.length > 0
+    ? roots.filter(el => el.isConnected)
+    : [outputRef.value ?? document.getElementById(`output`)].filter((el): el is HTMLElement => Boolean(el))
+
+  if (targets.length === 0)
     return
 
   const [{ hljs }, { highlightPendingBlocks }, { hydratePendingInfographicDiagrams }] = await Promise.all([
@@ -42,23 +46,36 @@ async function hydratePreviewDiagrams() {
     import(`@md/core/extensions`),
   ])
 
-  highlightPendingBlocks(hljs, outputElement)
-  hydratePendingInfographicDiagrams(outputElement, {
-    themeMode: isDark.value ? `dark` : `light`,
-  })
+  const themeMode = isDark.value ? `dark` : `light`
+  for (const root of targets) {
+    if (!root.isConnected)
+      continue
+    highlightPendingBlocks(hljs, root)
+    hydratePendingInfographicDiagrams(root, { themeMode })
+  }
 }
 
-function scheduleHydratePreviewDiagrams() {
+function scheduleHydratePreviewDiagrams(roots?: HTMLElement[]) {
   nextTick(() => {
-    void hydratePreviewDiagrams().catch((error) => {
+    void hydratePreviewDiagrams(roots).catch((error) => {
       console.error(`[PreviewPanel] Failed to hydrate diagrams`, error)
     })
   })
 }
 
-watch(output, () => {
-  scheduleHydratePreviewDiagrams()
-})
+function syncPreviewDom(targetEl?: HTMLElement | null) {
+  const outputEl = targetEl ?? outputRef.value ?? document.getElementById(`output`)
+  if (!outputEl)
+    return
+  const result = patchPreviewDom(outputEl, renderStore.renderedBlocks)
+  if (result.needsHydration) {
+    scheduleHydratePreviewDiagrams(result.fullReset ? [outputEl] : result.addedElements)
+  }
+}
+
+watch(() => renderStore.renderVersion, () => {
+  syncPreviewDom()
+}, { flush: `post` })
 
 watch(viewMode, (mode) => {
   if (mode === `edit`)
@@ -67,7 +84,9 @@ watch(viewMode, (mode) => {
     themeStore.updateCodeTheme()
     renderStore.render(editorStore.getContent())
   }
-  scheduleHydratePreviewDiagrams()
+  else {
+    syncPreviewDom()
+  }
 })
 
 let diagramOverlay: DiagramDownloadOverlay | null = null
@@ -87,13 +106,11 @@ watch(() => props.isCoping, (coping) => {
 
 onMounted(() => {
   nextTick(() => {
-    const outputEl = document.getElementById(`output`)
+    const outputEl = outputRef.value ?? document.getElementById(`output`)
     if (outputEl) {
+      syncPreviewDom(outputEl)
       diagramOverlay = setupDiagramDownloadOverlay(outputEl)
       emojiCleanup = setupEmojiHydration(outputEl)
-      void hydratePreviewDiagrams().catch((error) => {
-        console.error(`[PreviewPanel] Failed to hydrate diagrams`, error)
-      })
     }
   })
 })
@@ -101,6 +118,7 @@ onMounted(() => {
 onUnmounted(() => {
   diagramOverlay?.cleanup()
   emojiCleanup?.()
+  resetPreviewDomState(outputRef.value)
 })
 
 defineExpose({
@@ -129,10 +147,10 @@ defineExpose({
         >
           <section
             id="output"
+            ref="outputRef"
             class="w-full"
             :lang="CONTENT_FONT_LANG"
             @click="onContentClick"
-            v-html="output"
           />
           <div v-if="isCoping" class="loading-mask">
             <div class="loading-mask-box">
