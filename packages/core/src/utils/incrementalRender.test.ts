@@ -572,4 +572,17 @@ describe(`renderMarkdownIncremental`, () => {
       expect(inc.headings).toEqual(ref.headings)
     }
   })
+
+  it(`splits large documents with thousands of unmatched \\[ tokens in linear time`, () => {
+    const md = Array.from(
+      { length: 15_000 },
+      (_, i) => `Paragraph ${i}: regex \\[a-z\\+ without closing bracket`,
+    ).join(`\n\n`)
+    const t0 = performance.now()
+    const res = splitMarkdownBlocks(md)
+    const elapsedMs = performance.now() - t0
+    expect(res.fallbackReason).toBeUndefined()
+    expect(res.blocks).toHaveLength(15_000)
+    expect(elapsedMs).toBeLessThan(100)
+  })
 })

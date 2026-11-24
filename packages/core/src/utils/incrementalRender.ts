@@ -309,6 +309,7 @@ export function splitMarkdownBlocks(markdown: string): SplitBlocksResult {
     lineStarts.push(cursor)
     cursor += lines[i].length + 1
   }
+  const lastCloseBracketIdx = normalized.lastIndexOf(`\\]`)
 
   const blocks: string[] = []
   let chunkStartIdx = 0
@@ -360,7 +361,7 @@ export function splitMarkdownBlocks(markdown: string): SplitBlocksResult {
       if (line.includes(`\\]`)) {
         const lastOpen = line.lastIndexOf(`\\[`)
         const lastClose = line.lastIndexOf(`\\]`)
-        if (lastClose > lastOpen || !normalized.includes(`\\]`, lineStarts[i] + lastOpen + 2))
+        if (lastClose > lastOpen || lastCloseBracketIdx < lineStarts[i] + lastOpen + 2)
           inLatexBlock = false
       }
       continue
@@ -437,7 +438,7 @@ export function splitMarkdownBlocks(markdown: string): SplitBlocksResult {
       const lastOpen = line.lastIndexOf(`\\[`)
       // Match katex.ts blockLatexKatex: `\[` (even mid-line or after an earlier `\[...\]`)
       // spans across blank lines iff a closing `\]` exists later in the document.
-      if (lastOpen > line.lastIndexOf(`\\]`) && normalized.includes(`\\]`, lineStarts[i] + lastOpen + 2)) {
+      if (lastOpen > line.lastIndexOf(`\\]`) && lastCloseBracketIdx >= lineStarts[i] + lastOpen + 2) {
         inLatexBlock = true
         continue
       }
