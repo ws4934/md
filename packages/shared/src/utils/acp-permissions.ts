@@ -54,10 +54,10 @@ export function clampAgentModePermissionLevel(
 }
 
 const MODE_ID_ALIASES: Record<AcpPermissionLevel, readonly string[]> = {
-  ask: [`default`, `ask`, `prompt`, `normal`, `standard`, `suggest`, `code`, `write`],
+  ask: [`default`, `ask`, `prompt`, `normal`, `standard`, `suggest`, `code`, `write`, `build`],
   auto_edits: [`acceptedits`, `accept_edits`, `accept-edits`, `autoedits`, `auto_edits`, `auto-edits`, `autoedit`, `auto_edit`, `auto-edit`, `edit`],
   plan: [`plan`, `planmode`, `plan_mode`, `plan-mode`, `architect`, `readonly`, `read_only`, `read-only`],
-  bypass: [`bypasspermissions`, `bypass_permissions`, `bypass-permissions`, `bypass`, `dontask`, `dont_ask`, `dont-ask`, `yolo`, `fullauto`, `full_auto`, `full-auto`, `fullaccess`, `full_access`, `full-access`],
+  bypass: [`bypasspermissions`, `bypass_permissions`, `bypass-permissions`, `bypass`, `dontask`, `dont_ask`, `dont-ask`, `yolo`, `fullauto`, `full_auto`, `full-auto`, `fullaccess`, `full_access`, `full-access`, `agentfullaccess`, `agent_full_access`, `agent-full-access`],
 }
 
 export function isAcpPermissionLevel(value: unknown): value is AcpPermissionLevel {
@@ -102,15 +102,48 @@ export function mapPermissionLevelToAcpModeId(
 }
 
 /**
- * Agent mode a permission level runs on. Agents without a native bypass mode (e.g. Antigravity)
- * run bypass on their ask mode, which prompts for everything, and the client approves each request.
+ * Agent mode a permission level runs on. Agents without a native `bypass` or `auto_edits`
+ * mode run on their `ask` mode (so the client policy enforces approvals), and when an agent
+ * exposes no `ask` alias either (e.g. Codex ACP `read-only` / `agent` / `agent-full-access`),
+ * leaving a conflicting `bypass` or `plan` mode falls back to a neutral non-bypass/non-plan mode.
  */
 export function resolveNativeModeIdForLevel(
   level: AcpPermissionLevel,
   modes: readonly AcpModeInfo[],
+  currentModeId?: string | null,
 ): string | null {
-  return mapPermissionLevelToAcpModeId(level, modes)
-    ?? (level === `bypass` ? mapPermissionLevelToAcpModeId(`ask`, modes) : null)
+  const direct = mapPermissionLevelToAcpModeId(level, modes)
+  if (direct)
+    return direct
+
+  if (level === `bypass` || level === `auto_edits`) {
+    const askMode = mapPermissionLevelToAcpModeId(`ask`, modes)
+    if (askMode)
+      return askMode
+  }
+
+  if (modes.length === 0)
+    return null
+
+  const currentMapped = mapAcpModeIdToPermissionLevel(currentModeId)
+  const mustLeaveBypass = level !== `bypass` && currentMapped === `bypass`
+  const mustLeavePlan = level !== `plan` && currentMapped === `plan`
+
+  if (mustLeaveBypass || mustLeavePlan || (level === `bypass` && !currentModeId)) {
+    const neutral = modes.find((mode) => {
+      const mapped = mapAcpModeIdToPermissionLevel(mode.id)
+      return mapped !== `bypass` && mapped !== `plan`
+    })
+    if (neutral)
+      return neutral.id
+    if (mustLeaveBypass) {
+      const nonBypass = modes.find(mode => mapAcpModeIdToPermissionLevel(mode.id) !== `bypass`)
+      if (nonBypass)
+        return nonBypass.id
+    }
+  }
+
+  return null
 }
 
 export function agentHasPlanMode(modes: readonly AcpModeInfo[]): boolean {
