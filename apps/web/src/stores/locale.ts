@@ -41,6 +41,7 @@ export const useLocaleStore = defineStore(`locale`, () => {
       setI18nLocale(value)
       syncDocumentLocale(value)
       syncLocaleBootCache(value)
+      void window.mdDesktop?.setLocale?.(value)
     },
     { immediate: true },
   )

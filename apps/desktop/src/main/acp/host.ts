@@ -25,8 +25,16 @@ import { ProbeCache } from './probe'
 import { AcpRegistry } from './registry'
 import { AcpSession } from './session'
 
+export interface AcpActiveSessionSummary {
+  sessionId: string
+  agentId: string
+  agentName: string
+  waitingPermission: boolean
+}
+
 interface ManagedSession {
   session: AcpSession
+  agentName: string
   postId: string
   workspaceDir: string
   articlePath: string
@@ -126,6 +134,8 @@ export class AcpHost {
     const settings = await this.registry.getSettings()
 
     const launch = await this.registry.resolveLaunchSpec(params.agentId)
+    const agentConfig = await this.registry.getAgentConfig(params.agentId)
+    const agentName = agentConfig?.name ?? params.agentId
     const workspaceId = randomUUID()
     const workspaceDir = path.join(this.workspacesRoot, workspaceId)
     const articlePath = path.join(workspaceDir, `article.md`)
@@ -184,6 +194,7 @@ export class AcpHost {
     const sessionId = session.sessionId!
     this.sessions.set(sessionId, {
       session,
+      agentName,
       postId: params.postId,
       workspaceDir,
       articlePath,
@@ -363,6 +374,25 @@ export class AcpHost {
     this.sessions.delete(sessionId)
     await managed.session.close()
     await fs.rm(managed.workspaceDir, { recursive: true, force: true }).catch(() => undefined)
+  }
+
+  getActiveSessions(): AcpActiveSessionSummary[] {
+    const active: AcpActiveSessionSummary[] = []
+    for (const [sessionId, managed] of this.sessions.entries()) {
+      if (!managed.session.isActive)
+        continue
+      active.push({
+        sessionId,
+        agentId: managed.session.agentId,
+        agentName: managed.agentName,
+        waitingPermission: managed.session.hasPendingPermission,
+      })
+    }
+    return active
+  }
+
+  hasActiveSession(): boolean {
+    return this.getActiveSessions().length > 0
   }
 
   async dispose(): Promise<void> {

@@ -4,9 +4,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, powerMonitor, protocol, shell } from 'electron'
 import { IPC_CHANNELS } from '../shared/ipc-channels'
 import { AcpHost } from './acp/host'
+import { QuitGuard } from './quit-guard'
 import { mimeForExtension, WeChatPublisher } from './wechat/publisher'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -14,6 +15,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const APP_SCHEME = `app`
 const APP_HOST = `md`
 const DEV_SERVER_URL = process.env.MD_DESKTOP_DEV_URL
+const QUIT_DISPOSE_TIMEOUT_MS = 4_000
+
+app.setName(`md`)
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -61,6 +65,12 @@ function registerAppProtocol(): void {
 let mainWindow: BrowserWindow | null = null
 let acpHost: AcpHost | null = null
 let wechatPublisher: WeChatPublisher | null = null
+let quitGuard: QuitGuard | null = null
+
+const testQuitResponses: Array<`cancel` | `confirm`> = (process.env.MD_DESKTOP_TEST_QUIT_RESPONSES ?? ``)
+  .split(`,`)
+  .map(s => s.trim().toLowerCase())
+  .filter((s): s is `cancel` | `confirm` => s === `cancel` || s === `confirm`)
 
 function broadcastAcpEvent(event: AcpHostEvent): void {
   if (mainWindow && !mainWindow.isDestroyed())
@@ -131,6 +141,10 @@ function createMainWindow(): BrowserWindow {
     void win.loadURL(`${APP_SCHEME}://${APP_HOST}/`)
   }
 
+  win.on(`close`, (event) => {
+    quitGuard?.handleWindowClose(event)
+  })
+
   win.on(`closed`, () => {
     if (mainWindow === win)
       mainWindow = null
@@ -185,6 +199,10 @@ function registerIpc(host: AcpHost, publisher: WeChatPublisher): void {
       await shell.openExternal(url.trim())
   })
 
+  ipcMain.handle(IPC_CHANNELS.SET_LOCALE, (_event, locale: string) => {
+    quitGuard?.setLocale(locale)
+  })
+
   ipcMain.handle(IPC_CHANNELS.WECHAT_PUBLISH, (_event, request: WeChatPublishRequest) =>
     publisher.publish(request))
 
@@ -218,36 +236,87 @@ app.whenReady().then(() => {
   wechatPublisher = new WeChatPublisher({
     onProgress: broadcastWeChatProgress,
   })
+  quitGuard = new QuitGuard({
+    getActiveSessions: () => acpHost?.getActiveSessions() ?? [],
+    dispose: () => acpHost?.dispose() ?? Promise.resolve(),
+    confirmQuit: async (copy) => {
+      // Allow automated CDP smoke runs to drive cancel/confirm without a native OS sheet.
+      if (testQuitResponses.length > 0) {
+        const decision = testQuitResponses.shift()!
+        console.log(`[md-desktop:quit-confirm] decision=${decision} title=${JSON.stringify(copy.title)} detail=${JSON.stringify(copy.detail)}`)
+        return decision === `confirm`
+      }
+      const owner = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+      const options: Electron.MessageBoxOptions = {
+        type: `warning`,
+        buttons: [copy.cancelLabel, copy.confirmLabel],
+        defaultId: 0,
+        cancelId: 0,
+        title: copy.title,
+        message: copy.title,
+        detail: copy.detail,
+        noLink: true,
+      }
+      const result = owner
+        ? await dialog.showMessageBox(owner, options)
+        : await dialog.showMessageBox(options)
+      return result.response === 1
+    },
+    quitApp: () => app.quit(),
+    forceExit: code => app.exit(code),
+    getFallbackLocale: () => app.getLocale(),
+    isSmokeRun: () => Number(process.env.MD_DESKTOP_SMOKE_EXIT_MS ?? 0) > 0,
+    disposeTimeoutMs: QUIT_DISPOSE_TIMEOUT_MS,
+  })
   registerIpc(acpHost, wechatPublisher)
   mainWindow = createMainWindow()
+
+  if (process.platform === `win32`) {
+    // Windows fires `session-end` on user logout / OS shutdown.
+    (powerMonitor as NodeJS.EventEmitter).on(`session-end`, () => {
+      quitGuard?.requestNonInteractiveQuit()
+    })
+  }
+  else {
+    powerMonitor.on(`shutdown`, () => {
+      quitGuard?.requestNonInteractiveQuit()
+    })
+  }
 
   const smokeExitMs = Number(process.env.MD_DESKTOP_SMOKE_EXIT_MS ?? 0)
   if (smokeExitMs > 0) {
     mainWindow.webContents.once(`did-finish-load`, () => {
       console.log(`[md-desktop] window finished loading`)
-      setTimeout(() => app.quit(), smokeExitMs)
+      setTimeout(() => quitGuard?.requestNonInteractiveQuit(), smokeExitMs)
     })
   }
 
-  app.on(`activate`, () => {
-    if (BrowserWindow.getAllWindows().length === 0)
-      mainWindow = createMainWindow()
-  })
+  // Register after app.whenReady() so libuv installs over Chromium's C signal handlers,
+  // preventing SIGINT/SIGTERM from routing into the interactive before-quit confirmation.
+  for (const signal of [`SIGINT`, `SIGTERM`] as const) {
+    process.on(signal, () => {
+      if (quitGuard)
+        quitGuard.requestNonInteractiveQuit()
+      else
+        app.quit()
+    })
+  }
+
+  // Automated test-only signals to trigger real main-process close / app.quit paths.
+  if (testQuitResponses.length > 0 && process.platform !== `win32`) {
+    process.on(`SIGUSR1`, () => {
+      mainWindow?.close()
+    })
+    process.on(`SIGUSR2`, () => {
+      app.quit()
+    })
+  }
 })
 
-let isQuitting = false
-
 app.on(`before-quit`, (event) => {
-  if (isQuitting || !acpHost)
-    return
-  isQuitting = true
-  event.preventDefault()
-  void acpHost.dispose().finally(() => {
-    app.quit()
-  })
+  quitGuard?.handleBeforeQuit(event)
 })
 
 app.on(`window-all-closed`, () => {
-  if (process.platform !== `darwin`)
-    app.quit()
+  app.quit()
 })

@@ -193,6 +193,18 @@ export class AcpSession {
     return this.closed
   }
 
+  get isTurnActive(): boolean {
+    return this.activeTurn
+  }
+
+  get hasPendingPermission(): boolean {
+    return this.pendingPermissions.size > 0
+  }
+
+  get isActive(): boolean {
+    return !this.closed && (this.activeTurn || this.pendingPermissions.size > 0)
+  }
+
   get childProcess(): ChildProcess | null {
     return this.child
   }

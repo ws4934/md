@@ -231,4 +231,5 @@ export interface DesktopBridge {
   pickFiles: () => Promise<DesktopPickedFile[]>
   pickImage: () => Promise<DesktopPickedImage | null>
   openExternal: (url: string) => Promise<void>
+  setLocale: (locale: string) => Promise<void>
 }

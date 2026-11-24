@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { terminateProcessTree } from '../src/main/acp/process'
 import { buildDesktopBundles } from './build'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -41,46 +42,69 @@ async function run(): Promise<void> {
       SERVER_ENV: `DESKTOP`,
     },
     stdio: `inherit`,
+    detached: process.platform !== `win32`,
     shell: process.platform === `win32`,
   })
 
   let electronProc: ReturnType<typeof spawn> | null = null
   let shuttingDown = false
 
-  const shutdown = (code = 0) => {
+  const shutdown = async (code = 0): Promise<void> => {
     if (shuttingDown)
       return
     shuttingDown = true
-    if (electronProc && !electronProc.killed)
-      electronProc.kill(`SIGTERM`)
-    if (!viteProc.killed)
-      viteProc.kill(`SIGTERM`)
+
+    const tasks: Promise<void>[] = []
+    if (electronProc) {
+      // Give Electron enough time for before-quit -> acpHost.dispose() before escalating.
+      tasks.push(terminateProcessTree(electronProc, { gracefulTimeoutMs: 4_500, forceTimeoutMs: 1_500 }))
+    }
+    tasks.push(terminateProcessTree(viteProc, { gracefulTimeoutMs: 2_000, forceTimeoutMs: 1_000 }))
+
+    await Promise.allSettled(tasks)
     process.exit(code)
   }
 
-  process.on(`SIGINT`, () => shutdown(0))
-  process.on(`SIGTERM`, () => shutdown(0))
+  for (const signal of [`SIGINT`, `SIGTERM`, `SIGHUP`] as const) {
+    process.on(signal, () => {
+      void shutdown(0)
+    })
+  }
 
   viteProc.once(`exit`, (code) => {
     if (!shuttingDown) {
       console.error(`[md-desktop] Vite dev server exited unexpectedly (${code ?? `null`})`)
-      shutdown(code ?? 1)
+      void shutdown(code ?? 1)
     }
   })
 
-  await waitForServer(DEV_URL)
+  try {
+    await waitForServer(DEV_URL)
+  }
+  catch (error) {
+    await shutdown(1)
+    throw error
+  }
 
-  electronProc = spawn(electronBinary, [desktopDir], {
+  if (shuttingDown)
+    return
+
+  const extraElectronArgs = process.env.MD_DESKTOP_ELECTRON_ARGS
+    ? process.env.MD_DESKTOP_ELECTRON_ARGS.split(/\s+/).filter(Boolean)
+    : []
+
+  electronProc = spawn(electronBinary, [desktopDir, ...extraElectronArgs], {
     cwd: desktopDir,
     env: {
       ...process.env,
       MD_DESKTOP_DEV_URL: DEV_URL,
     },
     stdio: `inherit`,
+    detached: process.platform !== `win32`,
   })
 
   electronProc.once(`exit`, (code) => {
-    shutdown(code ?? 0)
+    void shutdown(code ?? 0)
   })
 }
 

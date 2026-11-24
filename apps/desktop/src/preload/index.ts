@@ -21,6 +21,7 @@ const desktopBridge: DesktopBridge = {
   pickFiles: () => ipcRenderer.invoke(IPC_CHANNELS.PICK_FILES),
   pickImage: () => ipcRenderer.invoke(IPC_CHANNELS.PICK_IMAGE),
   openExternal: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.OPEN_EXTERNAL, url),
+  setLocale: (locale: string) => ipcRenderer.invoke(IPC_CHANNELS.SET_LOCALE, locale),
   wechat: {
     publish: (request: WeChatPublishRequest) =>
       ipcRenderer.invoke(IPC_CHANNELS.WECHAT_PUBLISH, request),
