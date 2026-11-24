@@ -26,8 +26,16 @@ const { writingPostIds } = storeToRefs(agentStore)
 const isMac = computed(() => window.mdDesktop?.platform === `darwin`)
 const sidebarShortcutHint = `${ctrlSign}\\`
 
+function toTimestamp(value: Date | string | number): number {
+  if (value instanceof Date)
+    return value.getTime()
+  if (typeof value === `number`)
+    return value
+  return Date.parse(value) || 0
+}
+
 const sortedPosts = computed(() =>
-  [...posts.value].sort((a, b) => +new Date(b.updateDatetime) - +new Date(a.updateDatetime)),
+  [...posts.value].sort((a, b) => toTimestamp(b.updateDatetime) - toTimestamp(a.updateDatetime)),
 )
 
 const renamingId = ref<string | null>(null)
@@ -73,7 +81,7 @@ function deletePost(post: Post) {
 
 function formatMeta(post: Post): string {
   void locale.value
-  const diffMs = Date.now() - +new Date(post.updateDatetime)
+  const diffMs = Date.now() - toTimestamp(post.updateDatetime)
   if (diffMs < 60_000)
     return t(`agent.sidebar.justNow`)
   return formatRelativeTime(post.updateDatetime)
@@ -134,6 +142,15 @@ function formatMeta(post: Post): string {
       <div
         v-for="post in sortedPosts"
         :key="post.id"
+        v-memo="[
+          post.id === currentPostId,
+          post.title,
+          toTimestamp(post.updateDatetime),
+          renamingId === post.id,
+          renamingId === post.id ? renameDraft : '',
+          writingPostIds.has(post.id),
+          locale,
+        ]"
         class="group relative flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-3 py-[9px] transition-colors"
         :style="{
           backgroundColor: post.id === currentPostId ? 'var(--dt-subtle)' : 'transparent',

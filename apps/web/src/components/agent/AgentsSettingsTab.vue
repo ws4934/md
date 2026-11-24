@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AcpAgentStatus, AcpPermissionLevel } from '@md/shared/types'
 import { Check, ChevronDown, Download, NotebookPen, Plus, RefreshCw, Shield, ShieldCheck, ShieldOff, Trash2 } from '@lucide/vue'
+import { formatCliArgs, parseCliArgs } from '@md/shared/utils/cli-args'
 import { useAgentStore } from '@/stores/agent'
 import AgentAvatar from './AgentAvatar.vue'
 
@@ -48,20 +49,19 @@ function toggleConfigure(agent: AcpAgentStatus) {
   }
   configuringAgentId.value = agent.id
   editCommand.value = agent.command
-  editArgs.value = agent.args.join(` `)
+  editArgs.value = formatCliArgs(agent.args)
 }
 
 async function saveAgentConfig(agent: AcpAgentStatus) {
   const command = editCommand.value.trim()
   if (!command)
     return
-  const args = editArgs.value.trim() ? editArgs.value.trim().split(/\s+/) : []
+  const args = parseCliArgs(editArgs.value)
   await agentStore.updateSettings({
     commandOverrides: {
       [agent.id]: { command, args, env: agent.env },
     },
   })
-  await agentStore.detectAgents()
   configuringAgentId.value = null
 }
 
@@ -85,7 +85,7 @@ async function submitCustomAgent() {
   const command = customCommand.value.trim()
   if (!name || !command)
     return
-  const args = customArgs.value.trim() ? customArgs.value.trim().split(/\s+/) : []
+  const args = parseCliArgs(customArgs.value)
   await agentStore.addCustomAgent({ name, command, args })
   customName.value = ``
   customCommand.value = ``
@@ -150,7 +150,8 @@ function onClickOutsidePermSelect(event: MouseEvent) {
 }
 
 onMounted(() => {
-  void handleRedetect()
+  // Use cached agent list on open; only explicit "Re-detect" invalidates probes and spawns a login shell.
+  void agentStore.refreshAgentsList()
   document.addEventListener(`mousedown`, onClickOutsidePermSelect)
 })
 

@@ -59,6 +59,10 @@ const activeModelIdForSubmenu = computed(() => {
     ?? null
 })
 
+const scheduleProbe = useDebounceFn((agentId: string) => {
+  void agentStore.probeAgent(agentId)
+}, 120)
+
 function toggleMenu() {
   if (props.disabled)
     return
@@ -66,8 +70,8 @@ function toggleMenu() {
   if (isOpen.value) {
     const initial = selectedAgent.value?.installed ? selectedAgent.value.id : agents.value.find(a => a.installed)?.id ?? null
     hoveredAgentId.value = initial
-    if (initial)
-      void agentStore.probeAgent(initial)
+    if (initial && !probeByAgent.value[initial])
+      scheduleProbe(initial)
   }
 }
 
@@ -78,8 +82,8 @@ function closeMenu() {
 function onHoverAgent(agent: AcpAgentStatus) {
   if (!agent.installed)
     return
+  // Never spawn CLI probes on pointer hover; probe only on menu open or explicit click.
   hoveredAgentId.value = agent.id
-  void agentStore.probeAgent(agent.id)
 }
 
 function onClickAgent(agent: AcpAgentStatus) {
@@ -91,7 +95,7 @@ function onClickAgent(agent: AcpAgentStatus) {
   hoveredAgentId.value = agent.id
   const probe = probeByAgent.value[agent.id]
   if (!probe) {
-    void agentStore.probeAgent(agent.id)
+    scheduleProbe(agent.id)
   }
   // If no selectable models exist, select the agent immediately and close.
   if (probe && probe.models.length === 0) {

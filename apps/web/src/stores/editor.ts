@@ -41,6 +41,45 @@ export const useEditorStore = defineStore(`editor`, () => {
     })
   }
 
+  /**
+   * Replaces only the minimal differing range (stripping common prefix/suffix)
+   * so CodeMirror preserves selection, scroll position, and incremental parse state.
+   */
+  const applyMinimalContent = (content: string) => {
+    const view = editor.value
+    if (!view)
+      return
+
+    const prev = view.state.doc.toString()
+    if (prev === content)
+      return
+
+    let prefix = 0
+    const minLen = Math.min(prev.length, content.length)
+    while (prefix < minLen && prev.charCodeAt(prefix) === content.charCodeAt(prefix))
+      prefix++
+
+    let suffix = 0
+    while (
+      suffix < minLen - prefix
+      && prev.charCodeAt(prev.length - 1 - suffix) === content.charCodeAt(content.length - 1 - suffix)
+    ) {
+      suffix++
+    }
+
+    const from = prefix
+    const to = prev.length - suffix
+    const insert = content.slice(prefix, content.length - suffix)
+    const prevScrollTop = view.scrollDOM.scrollTop
+
+    view.dispatch({
+      changes: { from, to, insert },
+    })
+
+    if (view.scrollDOM.scrollTop !== prevScrollTop)
+      view.scrollDOM.scrollTop = prevScrollTop
+  }
+
   const clearContent = () => {
     if (!editor.value)
       return
@@ -121,6 +160,7 @@ export const useEditorStore = defineStore(`editor`, () => {
     flushContentToPostStore,
     formatContent,
     importContent,
+    applyMinimalContent,
     clearContent,
     getContent,
     getSelection,

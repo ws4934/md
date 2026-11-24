@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AcpPermissionDecision } from '@md/shared/types'
-import type { AgentTimelineItem } from '@/stores/agent'
-import { AlertCircle, Check, History, LoaderCircle, PanelRightClose, Plus, Trash2, X } from '@lucide/vue'
+import type { AgentTimelineItem as TimelineItem } from '@/stores/agent'
+import { History, PanelRightClose, Plus, Trash2 } from '@lucide/vue'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,9 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useAgentStore } from '@/stores/agent'
 import AgentComposer from './AgentComposer.vue'
-import AgentEditCard from './AgentEditCard.vue'
-import AgentPermissionCard from './AgentPermissionCard.vue'
-import AgentPlanSteps from './AgentPlanSteps.vue'
+import AgentTimelineItem from './AgentTimelineItem.vue'
 
 const { t } = useI18n()
 const agentStore = useAgentStore()
@@ -20,50 +18,85 @@ const agentStore = useAgentStore()
 const {
   activeSession,
   sessions,
+  isPanelOpen,
   isCurrentSessionRunning,
   isWaitingPermission,
 } = storeToRefs(agentStore)
 
+const NEAR_BOTTOM_THRESHOLD_PX = 80
+
 const scrollRef = ref<HTMLElement | null>(null)
+const isNearBottom = ref(true)
+let savedScrollTop = 0
+let scrollRaf = 0
 
 const sessionTitle = computed(() => activeSession.value?.title || t(`agent.panel.defaultTitle`))
-const timelineItems = computed<AgentTimelineItem[]>(() => activeSession.value?.items ?? [])
+const timelineItems = computed<TimelineItem[]>(() => activeSession.value?.items ?? [])
 
-/**
- * Splits plain text into regular spans and `inline code` spans so messages
- * like `initialize → session/prompt` render with the accent mono style from the design.
- */
-function parseInlineSpans(text: string): Array<{ code: boolean, text: string }> {
-  const parts: Array<{ code: boolean, text: string }> = []
-  const regex = /`([^`\n]+)`/g
-  let lastIndex = 0
-  let match: RegExpExecArray | null = regex.exec(text)
-  while (match !== null) {
-    if (match.index > lastIndex)
-      parts.push({ code: false, text: text.slice(lastIndex, match.index) })
-    parts.push({ code: true, text: match[1] })
-    lastIndex = match.index + match[0].length
-    match = regex.exec(text)
-  }
-  if (lastIndex < text.length)
-    parts.push({ code: false, text: text.slice(lastIndex) })
-  return parts.length > 0 ? parts : [{ code: false, text }]
+function handleTimelineScroll() {
+  const el = scrollRef.value
+  if (!el || !isPanelOpen.value)
+    return
+  isNearBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_THRESHOLD_PX
 }
 
-function scrollToBottom() {
-  nextTick(() => {
+function scheduleScrollToBottom() {
+  if (!isPanelOpen.value || !isNearBottom.value)
+    return
+  if (scrollRaf)
+    return
+  scrollRaf = requestAnimationFrame(() => {
+    scrollRaf = 0
     const el = scrollRef.value
-    if (el)
+    if (el && isPanelOpen.value && isNearBottom.value)
       el.scrollTop = el.scrollHeight
   })
 }
 
+// Track only active tail changes (length + last item text) when the panel is open.
 watch(
-  () => timelineItems.value.map(i => (i.type === `assistant` ? i.text.length : i.id)).join(`,`),
-  () => scrollToBottom(),
+  () => {
+    if (!isPanelOpen.value)
+      return null
+    const items = timelineItems.value
+    const len = items.length
+    const last = len > 0 ? items[len - 1] : null
+    const tailSig = last?.type === `assistant` ? last.text.length : (last?.id ?? ``)
+    return `${len}:${tailSig}`
+  },
+  (sig) => {
+    if (sig !== null)
+      scheduleScrollToBottom()
+  },
 )
 
+watch(isPanelOpen, (open) => {
+  if (!open) {
+    if (scrollRef.value)
+      savedScrollTop = scrollRef.value.scrollTop
+    if (scrollRaf) {
+      cancelAnimationFrame(scrollRaf)
+      scrollRaf = 0
+    }
+    return
+  }
+  nextTick(() => {
+    const el = scrollRef.value
+    if (!el)
+      return
+    el.scrollTop = isNearBottom.value ? el.scrollHeight : savedScrollTop
+  })
+})
+
+onUnmounted(() => {
+  if (scrollRaf) {
+    cancelAnimationFrame(scrollRaf)
+    scrollRaf = 0
+  }
+})
+
 function onSend(payload: { text: string, attachments: string[] }) {
+  isNearBottom.value = true
   void agentStore.sendPrompt(payload.text, payload.attachments)
 }
 
@@ -150,125 +183,31 @@ function onRespondPermission(requestId: string, decision: AcpPermissionDecision)
       </div>
     </header>
 
-    <!-- Messages timeline -->
+    <!-- Messages timeline (skips DOM/reactive work entirely while collapsed) -->
     <div
       ref="scrollRef"
       class="flex min-h-0 flex-1 flex-col gap-[18px] overflow-y-auto px-5 pb-4 pt-2"
+      @scroll.passive="handleTimelineScroll"
     >
-      <div
-        v-if="timelineItems.length === 0"
-        class="my-auto flex flex-col items-center gap-2 px-4 text-center"
-      >
-        <p class="text-[14px] font-semibold" style="color: var(--dt-ink)">
-          {{ t('agent.panel.emptyTitle') }}
-        </p>
-        <p class="text-[12.5px] leading-relaxed" style="color: var(--dt-ink3)">
-          {{ t('agent.panel.emptyHint') }}
-        </p>
-      </div>
-
-      <template v-for="item in timelineItems" :key="item.id">
-        <!-- User bubble -->
-        <div v-if="item.type === 'user'" class="flex w-full flex-col items-end gap-1">
-          <div
-            class="max-w-[300px] whitespace-pre-wrap break-words rounded-[14px] px-3.5 py-2.5 text-[13.5px] leading-[22px]"
-            style="background-color: var(--dt-subtle); color: var(--dt-ink)"
-          >
-            {{ item.text }}
-          </div>
-          <div v-if="item.attachments?.length" class="flex flex-wrap justify-end gap-1">
-            <span
-              v-for="file in item.attachments"
-              :key="file"
-              class="rounded px-1.5 py-0.5 text-[11px]"
-              style="background-color: var(--dt-canvas); color: var(--dt-ink3)"
-            >
-              {{ file.split(/[\\/]/).pop() }}
-            </span>
-          </div>
-        </div>
-
-        <!-- Assistant text -->
+      <template v-if="isPanelOpen">
         <div
-          v-else-if="item.type === 'assistant'"
-          class="w-full whitespace-pre-wrap break-words text-[13.5px] leading-[23px]"
-          style="color: var(--dt-ink)"
+          v-if="timelineItems.length === 0"
+          class="my-auto flex flex-col items-center gap-2 px-4 text-center"
         >
-          <p v-if="!item.text && item.streaming" class="text-xs italic" style="color: var(--dt-ink3)">
-            {{ t('agent.panel.thinking') }}
+          <p class="text-[14px] font-semibold" style="color: var(--dt-ink)">
+            {{ t('agent.panel.emptyTitle') }}
           </p>
-          <template v-else>
-            <template v-for="(span, si) in parseInlineSpans(item.text)" :key="si">
-              <code
-                v-if="span.code"
-                class="text-[12.5px]"
-                style="font-family: var(--dt-mono); color: var(--dt-accent)"
-              >{{ span.text }}</code>
-              <span v-else>{{ span.text }}</span>
-            </template>
-          </template>
+          <p class="text-[12.5px] leading-relaxed" style="color: var(--dt-ink3)">
+            {{ t('agent.panel.emptyHint') }}
+          </p>
         </div>
 
-        <!-- Plan checklist -->
-        <AgentPlanSteps v-else-if="item.type === 'plan'" :entries="item.entries" />
-
-        <!-- Edit / delete / move tool call card -->
-        <AgentEditCard
-          v-else-if="item.type === 'tool_call' && (item.tool.toolKind === 'edit' || item.tool.toolKind === 'delete' || item.tool.toolKind === 'move')"
-          :tool="item.tool"
+        <AgentTimelineItem
+          v-for="item in timelineItems"
+          :key="item.id"
+          :item="item"
+          @respond-permission="onRespondPermission"
         />
-
-        <!-- Compact tool call row for other tool kinds -->
-        <div
-          v-else-if="item.type === 'tool_call'"
-          class="flex h-6 items-center gap-2 text-[12.5px]"
-        >
-          <Check
-            v-if="item.tool.status === 'completed'"
-            class="size-3.5 shrink-0"
-            style="color: var(--dt-ink3)"
-          />
-          <X
-            v-else-if="item.tool.status === 'failed'"
-            class="size-3.5 shrink-0"
-            style="color: var(--dt-red)"
-          />
-          <LoaderCircle
-            v-else
-            class="size-3.5 shrink-0 animate-spin"
-            style="color: var(--dt-accent)"
-          />
-          <span
-            class="min-w-0 flex-1 truncate"
-            :style="{
-              color: item.tool.status === 'failed'
-                ? 'var(--dt-red)'
-                : item.tool.status === 'in_progress'
-                  ? 'var(--dt-accent)'
-                  : 'var(--dt-ink2)',
-            }"
-          >
-            {{ item.tool.title }}
-          </span>
-        </div>
-
-        <!-- Inline permission card -->
-        <AgentPermissionCard
-          v-else-if="item.type === 'permission'"
-          :request="item.request"
-          :resolved-outcome="item.resolvedOutcome"
-          @respond="(decision) => onRespondPermission(item.request.requestId, decision)"
-        />
-
-        <!-- Error message -->
-        <div
-          v-else-if="item.type === 'error'"
-          class="flex items-start gap-2 rounded-lg px-3 py-2 text-xs leading-relaxed"
-          style="background-color: var(--dt-red-soft); color: var(--dt-red)"
-        >
-          <AlertCircle class="mt-0.5 size-3.5 shrink-0" />
-          <span class="break-words">{{ item.message }}</span>
-        </div>
       </template>
     </div>
 

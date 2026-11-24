@@ -178,8 +178,11 @@ export class AcpRegistry {
         : this.settings.commandOverrides,
     }
     await this.persist()
-    const agents = await this.listAgents()
-    this.onEvent?.({ type: `agents_changed`, agents })
+    const agents = patch.commandOverrides
+      ? await this.detectAgents({ forceShell: false })
+      : await this.listAgents()
+    if (!patch.commandOverrides)
+      this.onEvent?.({ type: `agents_changed`, agents })
     return structuredClone(this.settings)
   }
 

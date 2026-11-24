@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AcpToolCallItem } from '@md/shared/types'
 import { Check, ChevronDown, ChevronRight, LoaderCircle, PencilLine, X } from '@lucide/vue'
-import { buildUnifiedDiff, formatShortFilePath } from '@/lib/agent/unified-diff'
+import { formatShortFilePath, getDiffLines, getDiffStats } from '@/lib/agent/unified-diff'
 
 const props = defineProps<{
   tool: AcpToolCallItem
@@ -10,12 +10,24 @@ const props = defineProps<{
 const { t } = useI18n()
 const expanded = ref(false)
 
-const diff = computed(() =>
-  buildUnifiedDiff({
+const stats = computed(() =>
+  getDiffStats({
     oldText: props.tool.oldText,
     newText: props.tool.newText,
     unifiedDiff: props.tool.unifiedDiff,
+    diffStats: props.tool.diffStats,
   }),
+)
+
+// Parse diff rows lazily only when the card is actually expanded.
+const diffLines = computed(() =>
+  expanded.value && stats.value.hasChanges
+    ? getDiffLines({
+        oldText: props.tool.oldText,
+        newText: props.tool.newText,
+        unifiedDiff: props.tool.unifiedDiff,
+      })
+    : [],
 )
 
 const displayPath = computed(() =>
@@ -34,8 +46,8 @@ const displayPath = computed(() =>
     <button
       type="button"
       class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-2 text-left text-[12.5px] transition-opacity hover:opacity-85"
-      :disabled="!diff.hasChanges"
-      @click="diff.hasChanges && (expanded = !expanded)"
+      :disabled="!stats.hasChanges"
+      @click="stats.hasChanges && (expanded = !expanded)"
     >
       <Check
         v-if="tool.status === 'completed'"
@@ -67,21 +79,21 @@ const displayPath = computed(() =>
         {{ displayPath }}
       </span>
 
-      <span v-if="diff.hasChanges" class="flex shrink-0 items-center gap-1.5 text-[11.5px] font-medium" style="font-family: var(--dt-mono)">
-        <span v-if="diff.added > 0" style="color: var(--dt-green)">+{{ diff.added }}</span>
-        <span v-if="diff.removed > 0" style="color: var(--dt-red)">−{{ diff.removed }}</span>
+      <span v-if="stats.hasChanges" class="flex shrink-0 items-center gap-1.5 text-[11.5px] font-medium" style="font-family: var(--dt-mono)">
+        <span v-if="stats.added > 0" style="color: var(--dt-green)">+{{ stats.added }}</span>
+        <span v-if="stats.removed > 0" style="color: var(--dt-red)">−{{ stats.removed }}</span>
       </span>
 
       <component
         :is="expanded ? ChevronDown : ChevronRight"
-        v-if="diff.hasChanges"
+        v-if="stats.hasChanges"
         class="size-3.5 shrink-0"
         style="color: var(--dt-ink3)"
       />
     </button>
 
     <div
-      v-if="expanded && diff.hasChanges"
+      v-if="expanded && stats.hasChanges"
       class="max-h-[240px] overflow-auto py-1.5 text-[11.5px] leading-[19px]"
       style="
         background-color: var(--dt-surface);
@@ -90,7 +102,7 @@ const displayPath = computed(() =>
       "
     >
       <div
-        v-for="(line, idx) in diff.lines"
+        v-for="(line, idx) in diffLines"
         :key="idx"
         class="flex items-start gap-2 px-2.5 py-px"
         :style="{

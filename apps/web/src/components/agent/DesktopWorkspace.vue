@@ -9,13 +9,18 @@ import { ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { useAgentPanelHotkey } from '@/composables/useAgentPanelHotkey'
 import { useCursorSync } from '@/composables/useCursorSync'
 import { useDesktopSidebarHotkey } from '@/composables/useDesktopSidebarHotkey'
+import { useEditorRefresh } from '@/composables/useEditorRefresh'
 import { useScrollSync } from '@/composables/useScrollSync'
 import {
   computeEditorMinPercent,
   computeMainMinPercent,
   DESKTOP_LAYOUT_LIMITS,
 } from '@/lib/agent/desktop-layout'
+import { delay } from '@/lib/delay'
+import { clampGoToLineValue, jumpToLine } from '@/lib/markdown/headingNavigation'
+import { processClipboardContent } from '@/services/export'
 import { useAgentStore } from '@/stores/agent'
+import { useThemeStore } from '@/stores/theme'
 import { useUIStore } from '@/stores/ui'
 import AgentAvatar from './AgentAvatar.vue'
 import AgentPanel from './AgentPanel.vue'
@@ -44,6 +49,8 @@ const AboutDialog = defineAsyncComponent(() => import('@/components/editor/edito
 const { t } = useI18n()
 const uiStore = useUIStore()
 const agentStore = useAgentStore()
+const themeStore = useThemeStore()
+const { editorRefresh } = useEditorRefresh()
 useAgentPanelHotkey()
 useDesktopSidebarHotkey()
 
@@ -300,6 +307,72 @@ const isCoping = ref(false)
 const isShowPublishDialog = ref(false)
 let copyEndTimer: ReturnType<typeof setTimeout> | null = null
 
+const isGoToLineActive = ref(false)
+const goToLineInput = ref(``)
+const goToLineInputRef = ref<HTMLInputElement | null>(null)
+
+function openGoToLine() {
+  const view = getEditorView()
+  if (!view || isNewArticleHero.value)
+    return
+  const line = view.state.doc.lineAt(view.state.selection.main.head).number
+  goToLineInput.value = String(line)
+  isGoToLineActive.value = true
+  nextTick(() => goToLineInputRef.value?.select())
+}
+
+function submitGoToLine() {
+  const view = getEditorView()
+  if (view) {
+    const target = clampGoToLineValue(goToLineInput.value, view.state.doc.lines)
+    jumpToLine(view, target)
+    view.focus()
+  }
+  isGoToLineActive.value = false
+}
+
+function cancelGoToLine() {
+  isGoToLineActive.value = false
+  getEditorView()?.focus()
+}
+
+async function copyWeChatFromCommandPalette() {
+  if (isCoping.value)
+    return
+  startCopy()
+  try {
+    await nextTick()
+    await delay(100)
+    const processed = await processClipboardContent(themeStore.primaryColor)
+    const item = new ClipboardItem({
+      'text/html': new Blob([processed.html], { type: `text/html` }),
+      'text/plain': new Blob([processed.plainText], { type: `text/plain` }),
+    })
+    await navigator.clipboard.write([item])
+    toast.success(t(`agent.toolbar.copiedToWeChat`))
+    editorRefresh()
+  }
+  catch (error) {
+    toast.error(t(`toast.copyFailed`, { message: error instanceof Error ? error.message : String(error) }))
+    editorRefresh()
+  }
+  finally {
+    endCopy()
+  }
+}
+
+watch(() => uiStore.copyRequest, (tick) => {
+  if (!tick)
+    return
+  void copyWeChatFromCommandPalette()
+})
+
+watch(() => uiStore.goToLineRequest, (tick) => {
+  if (!tick)
+    return
+  openGoToLine()
+})
+
 function startCopy() {
   backLight.value = true
   isCoping.value = true
@@ -429,6 +502,29 @@ onUnmounted(() => {
                     class="pointer-events-none absolute bottom-6 left-4 top-4 z-10 w-0.5 rounded-full"
                     style="background-color: var(--dt-accent)"
                   />
+
+                  <!-- Floating Go-to-Line bar triggered by Mod-G / command palette -->
+                  <form
+                    v-if="isGoToLineActive"
+                    data-testid="desktop-goto-line"
+                    class="absolute left-1/2 top-3 z-30 flex -translate-x-1/2 items-center gap-2 rounded-lg px-2.5 py-1.5 shadow-lg"
+                    style="background-color: var(--dt-surface); border: 1px solid var(--dt-line)"
+                    @submit.prevent="submitGoToLine"
+                  >
+                    <span class="text-xs font-medium" style="color: var(--dt-ink2)">
+                      {{ t('footer.goToLine') }}
+                    </span>
+                    <input
+                      ref="goToLineInputRef"
+                      v-model="goToLineInput"
+                      type="text"
+                      inputmode="numeric"
+                      class="h-6 w-20 rounded px-2 text-xs outline-none"
+                      style="background-color: var(--dt-canvas); border: 1px solid var(--dt-line); color: var(--dt-ink); font-family: var(--dt-mono)"
+                      @keydown.escape.prevent="cancelGoToLine"
+                      @blur="isGoToLineActive = false"
+                    >
+                  </form>
 
                   <div class="min-h-0 flex-1 overflow-hidden">
                     <EditorPanel ref="editorPanelCompRef" />

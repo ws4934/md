@@ -40,6 +40,7 @@ const diff = computed(() =>
         oldText: props.request.oldText,
         newText: props.request.newText,
         unifiedDiff: props.request.unifiedDiff,
+        diffStats: props.request.diffStats,
       })
     : { lines: [], added: 0, removed: 0, hasChanges: false },
 )

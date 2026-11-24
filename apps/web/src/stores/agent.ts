@@ -12,7 +12,8 @@ import type {
   AcpToolCallItem,
 } from '@md/shared/types'
 import type { DesktopLayoutWidths } from '@/lib/agent/desktop-layout'
-import { getCustomExtraModes, mapAcpModeIdToPermissionLevel } from '@md/shared/utils/acp-permissions'
+import { createDefaultAcpSettings, getCustomExtraModes, mapAcpModeIdToPermissionLevel } from '@md/shared/utils/acp-permissions'
+import { computeCompactDiff } from '@md/shared/utils/compact-diff'
 import { uuidv4 } from '@md/shared/utils/uuid'
 import { t } from '@/i18n/translate'
 import {
@@ -57,13 +58,37 @@ const PANEL_OPEN_STORAGE_KEY = `desktop_acp_panel_open_v1`
 const SIDEBAR_OPEN_STORAGE_KEY = `desktop_acp_sidebar_open_v1`
 const LAYOUT_WIDTHS_STORAGE_KEY = `desktop_acp_layout_widths_v1`
 const MAX_STORED_SESSIONS = 30
+const MAX_STORED_ITEMS_PER_SESSION = 200
+const MAX_LIVE_ITEMS_PER_SESSION = 400
 
-const DEFAULT_SETTINGS: AcpSettings = {
-  defaultAgentId: `claude`,
-  defaultPermissionLevel: `ask`,
-  lastModelByAgent: {},
-  customAgents: [],
-  commandOverrides: {},
+function compactDiffPayload<T extends { oldText?: string, newText?: string, unifiedDiff?: string, diffStats?: AcpToolCallItem[`diffStats`] }>(
+  payload: T,
+): T {
+  if (payload.oldText === undefined && payload.newText === undefined)
+    return payload
+  const { oldText, newText, ...rest } = payload
+  if (rest.unifiedDiff && rest.diffStats)
+    return rest as T
+  const compact = computeCompactDiff({
+    oldText,
+    newText,
+    unifiedDiff: rest.unifiedDiff,
+  })
+  return {
+    ...rest,
+    unifiedDiff: compact.unifiedDiff || undefined,
+    diffStats: compact.stats,
+  } as T
+}
+
+function sanitizeItemForStorage(item: AgentTimelineItem): AgentTimelineItem {
+  if (item.type === `assistant`)
+    return { ...item, streaming: false }
+  if (item.type === `tool_call`)
+    return { ...item, tool: compactDiffPayload(item.tool) }
+  if (item.type === `permission`)
+    return { ...item, request: compactDiffPayload(item.request) }
+  return item
 }
 
 export const useAgentStore = defineStore(`agent`, () => {
@@ -73,7 +98,7 @@ export const useAgentStore = defineStore(`agent`, () => {
   const isDesktop = computed(() => Boolean(window.mdDesktop?.isDesktop))
 
   const agents = ref<AcpAgentStatus[]>([])
-  const settings = ref<AcpSettings>(structuredClone(DEFAULT_SETTINGS))
+  const settings = ref<AcpSettings>(createDefaultAcpSettings())
   const probeByAgent = ref<Record<string, AcpProbeResult>>({})
   const probingAgents = ref<Record<string, boolean>>({})
 
@@ -246,11 +271,14 @@ export const useAgentStore = defineStore(`agent`, () => {
     const serializable = sessions.value.slice(0, MAX_STORED_SESSIONS).map(s => ({
       ...s,
       acpSessionId: null,
-      items: s.items.map(item =>
-        item.type === `assistant` ? { ...item, streaming: false } : item,
-      ),
+      items: s.items.slice(-MAX_STORED_ITEMS_PER_SESSION).map(sanitizeItemForStorage),
     }))
     await store.setJSON(SESSIONS_STORAGE_KEY, serializable)
+  }
+
+  function trimLiveItems(session: AgentConversationSession): void {
+    if (session.items.length > MAX_LIVE_ITEMS_PER_SESSION)
+      session.items.splice(0, session.items.length - MAX_LIVE_ITEMS_PER_SESSION)
   }
 
   function findSessionByAcpId(acpSessionId: string): AgentConversationSession | undefined {
@@ -260,11 +288,12 @@ export const useAgentStore = defineStore(`agent`, () => {
   /**
    * Dispatches into CodeMirror BEFORE updating postStore so EditorPanel's content
    * watcher sees an already-matching document and does not reset undo history.
+   * Uses minimal changed range to preserve selection, scroll, and incremental parse state.
    */
   function applySyncedArticleContent(postId: string, content: string): void {
     if (postStore.currentPostId === postId && editorStore.editor) {
       if (editorStore.getContent() !== content)
-        editorStore.importContent(content)
+        editorStore.applyMinimalContent(content)
     }
     const existing = postStore.getPostById(postId)
     if (existing && existing.content !== content)
@@ -279,7 +308,104 @@ export const useAgentStore = defineStore(`agent`, () => {
     return -1
   }
 
+  // Coalesce high-frequency streaming deltas per animation frame to avoid per-token Vue updates.
+  const pendingChunks = new Map<string, { text: string, thought: string }>()
+  let chunkFlushHandle = 0
+
+  function applyChunkDelta(sessionId: string, textDelta: string, thoughtDelta: string): void {
+    const session = findSessionByAcpId(sessionId)
+    if (!session)
+      return
+
+    if (textDelta) {
+      const last = session.items[session.items.length - 1]
+      if (last?.type === `assistant` && last.streaming) {
+        last.text += textDelta
+      }
+      else {
+        session.items.push({
+          type: `assistant`,
+          id: uuidv4(),
+          text: textDelta,
+          streaming: true,
+          timestamp: Date.now(),
+        })
+        trimLiveItems(session)
+      }
+    }
+
+    if (thoughtDelta) {
+      const last = session.items[session.items.length - 1]
+      if (last?.type === `assistant` && last.streaming) {
+        last.thought = (last.thought ?? ``) + thoughtDelta
+      }
+      else {
+        session.items.push({
+          type: `assistant`,
+          id: uuidv4(),
+          text: ``,
+          thought: thoughtDelta,
+          streaming: true,
+          timestamp: Date.now(),
+        })
+        trimLiveItems(session)
+      }
+    }
+
+    session.updatedAt = Date.now()
+  }
+
+  function flushPendingChunks(sessionId?: string): void {
+    if (sessionId) {
+      const entry = pendingChunks.get(sessionId)
+      if (!entry)
+        return
+      pendingChunks.delete(sessionId)
+      applyChunkDelta(sessionId, entry.text, entry.thought)
+      if (pendingChunks.size === 0 && chunkFlushHandle && typeof cancelAnimationFrame === `function`) {
+        cancelAnimationFrame(chunkFlushHandle)
+        chunkFlushHandle = 0
+      }
+      return
+    }
+
+    chunkFlushHandle = 0
+    if (pendingChunks.size === 0)
+      return
+    const entries = [...pendingChunks.entries()]
+    pendingChunks.clear()
+    for (const [sid, entry] of entries)
+      applyChunkDelta(sid, entry.text, entry.thought)
+  }
+
+  function queueChunk(sessionId: string, kind: `text` | `thought`, delta: string): void {
+    const entry = pendingChunks.get(sessionId) ?? { text: ``, thought: `` }
+    entry[kind] += delta
+    pendingChunks.set(sessionId, entry)
+
+    if (typeof requestAnimationFrame !== `function`) {
+      flushPendingChunks(sessionId)
+      return
+    }
+    if (!chunkFlushHandle) {
+      chunkFlushHandle = requestAnimationFrame(() => flushPendingChunks())
+    }
+  }
+
   function handleHostEvent(event: AcpHostEvent): void {
+    if (event.type === `message_chunk`) {
+      queueChunk(event.sessionId, `text`, event.text)
+      return
+    }
+    if (event.type === `thought_chunk`) {
+      queueChunk(event.sessionId, `thought`, event.text)
+      return
+    }
+
+    // Flush any buffered chunks for this session before applying structural/terminal events.
+    if (`sessionId` in event && typeof event.sessionId === `string`)
+      flushPendingChunks(event.sessionId)
+
     switch (event.type) {
       case `agents_changed`: {
         agents.value = event.agents
@@ -341,46 +467,6 @@ export const useAgentStore = defineStore(`agent`, () => {
           })
           session.updatedAt = Date.now()
           void persistSessions()
-        }
-        break
-      }
-      case `message_chunk`: {
-        const session = findSessionByAcpId(event.sessionId)
-        if (!session)
-          return
-        const last = session.items[session.items.length - 1]
-        if (last?.type === `assistant` && last.streaming) {
-          last.text += event.text
-        }
-        else {
-          session.items.push({
-            type: `assistant`,
-            id: uuidv4(),
-            text: event.text,
-            streaming: true,
-            timestamp: Date.now(),
-          })
-        }
-        session.updatedAt = Date.now()
-        break
-      }
-      case `thought_chunk`: {
-        const session = findSessionByAcpId(event.sessionId)
-        if (!session)
-          return
-        const last = session.items[session.items.length - 1]
-        if (last?.type === `assistant` && last.streaming) {
-          last.thought = (last.thought ?? ``) + event.text
-        }
-        else {
-          session.items.push({
-            type: `assistant`,
-            id: uuidv4(),
-            text: ``,
-            thought: event.text,
-            streaming: true,
-            timestamp: Date.now(),
-          })
         }
         break
       }
@@ -527,6 +613,13 @@ export const useAgentStore = defineStore(`agent`, () => {
 
     if (selectedAgent.value?.installed)
       void probeAgent(selectedAgent.value.id)
+  }
+
+  async function refreshAgentsList(): Promise<void> {
+    if (!window.mdDesktop?.acp)
+      return
+    agents.value = await window.mdDesktop.acp.listAgents()
+    ensureValidSelectedAgent()
   }
 
   async function detectAgents(): Promise<void> {
@@ -696,6 +789,11 @@ export const useAgentStore = defineStore(`agent`, () => {
 
     let session = activeSession.value
     if (!session || (session.acpSessionId && session.agentId !== agent.id)) {
+      if (session?.acpSessionId && session.agentId !== agent.id) {
+        const staleSessionId = session.acpSessionId
+        session.acpSessionId = null
+        void window.mdDesktop.acp.closeSession(staleSessionId).catch(() => undefined)
+      }
       const derivedTitle = text.length > 22 ? `${text.slice(0, 22)}…` : text
       session = createSessionRecord(derivedTitle)
     }
@@ -851,6 +949,11 @@ export const useAgentStore = defineStore(`agent`, () => {
   }
 
   onScopeDispose(() => {
+    if (chunkFlushHandle && typeof cancelAnimationFrame === `function`) {
+      cancelAnimationFrame(chunkFlushHandle)
+      chunkFlushHandle = 0
+    }
+    pendingChunks.clear()
     unsubscribeEvents?.()
     unsubscribeEvents = null
   })
@@ -891,6 +994,7 @@ export const useAgentStore = defineStore(`agent`, () => {
     setSidebarOpen,
     setLayoutWidth,
     resetLayoutWidth,
+    refreshAgentsList,
     detectAgents,
     probeAgent,
     selectAgentAndModel,
