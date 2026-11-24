@@ -166,11 +166,11 @@ onUnmounted(() => {
     <div
       v-if="isOpen"
       class="absolute z-50 flex gap-1.5"
-      :class="placement === 'up' ? 'bottom-full mb-2 left-0' : 'top-full mt-2 left-0'"
+      :class="placement === 'up' ? 'bottom-full mb-2 right-0 flex-row-reverse items-end' : 'top-full mt-2 left-0 flex-row items-start'"
     >
       <!-- Agent list menu -->
       <div
-        class="w-[260px] rounded-xl p-1.5"
+        class="max-h-[340px] w-[260px] overflow-y-auto rounded-xl p-1.5"
         style="
           background-color: var(--dt-surface);
           border: 1px solid var(--dt-line);
@@ -223,7 +223,7 @@ onUnmounted(() => {
       <!-- Cascading models menu for hovered/selected installed agent -->
       <div
         v-if="activeSubmenuAgent"
-        class="w-[232px] self-start rounded-xl p-1.5"
+        class="max-h-[340px] w-[240px] overflow-y-auto rounded-xl p-1.5"
         style="
           background-color: var(--dt-surface);
           border: 1px solid var(--dt-line);
