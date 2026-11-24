@@ -469,4 +469,88 @@ describe(`renderMarkdownIncremental`, () => {
     expect(split.fallbackReason).toBeUndefined()
     expect(split.blocks).toHaveLength(6)
   })
+
+  it(`runs fallback checks inside unclosed math/alert regions and avoids false inLatexBlock on mid-line or inline-code \\[`, () => {
+    const opts: IOpts = { citeStatus: true, countStatus: false }
+    const renderer = initRenderer(opts)
+    const fp = fingerprintForOpts(opts)
+
+    // 1. Unclosed $$ followed by a link reference definition and reference usage -> fallback + parity.
+    const unclosedMathWithRef = [
+      `See [docs][docs] first.`,
+      ``,
+      `$$`,
+      `a + b`,
+      ``,
+      `[docs]: https://example.com/docs`,
+    ].join(`\n`)
+    renderer.reset(opts)
+    const mathRefInc = renderMarkdownIncremental(unclosedMathWithRef, renderer, fp)
+    const mathRefFull = renderFullReference(unclosedMathWithRef, opts)
+    expect(mathRefInc.usedIncremental).toBe(false)
+    expect(mathRefInc.fallbackReason).toBe(`link-ref-def`)
+    expect(assembleRenderedBlocksHtml(mathRefInc.blocks)).toBe(mathRefFull.html)
+
+    // 2. ::: alert container with link reference definition inside -> fallback + parity.
+    const alertWithRef = [
+      `Read [guide][g].`,
+      ``,
+      `:::note`,
+      `[g]: https://example.com/guide`,
+      `:::`,
+    ].join(`\n`)
+    renderer.reset(opts)
+    const alertRefInc = renderMarkdownIncremental(alertWithRef, renderer, fp)
+    const alertRefFull = renderFullReference(alertWithRef, opts)
+    expect(alertRefInc.usedIncremental).toBe(false)
+    expect(alertRefInc.fallbackReason).toBe(`link-ref-def`)
+    expect(assembleRenderedBlocksHtml(alertRefInc.blocks)).toBe(alertRefFull.html)
+
+    // 3. Prose with mid-line `Escaped \[` or inline code `\[` must NOT trap subsequent paragraphs.
+    const proseWithLatexChars = [
+      `Escaped \\[ in prose stays inline.`,
+      ``,
+      `Inline code \`\\[\` also stays inline.`,
+      ``,
+      `Paragraph 3.`,
+      ``,
+      `Paragraph 4.`,
+      ``,
+      `Paragraph 5.`,
+    ].join(`\n`)
+    const split = splitMarkdownBlocks(proseWithLatexChars)
+    expect(split.fallbackReason).toBeUndefined()
+    expect(split.blocks.length).toBeGreaterThan(1)
+    expect(split.blocks).toHaveLength(5)
+
+    renderer.reset(opts)
+    const proseInc = renderMarkdownIncremental(proseWithLatexChars, renderer, fp)
+    const proseFull = renderFullReference(proseWithLatexChars, opts)
+    expect(proseInc.usedIncremental).toBe(true)
+    expect(assembleRenderedBlocksHtml(proseInc.blocks)).toBe(proseFull.html)
+  })
+
+  it(`keeps [TOC] inside blockquotes, lists, and alert containers identical to full render`, () => {
+    const opts: IOpts = { citeStatus: false, countStatus: false }
+    const renderer = initRenderer(opts)
+    const fp = fingerprintForOpts(opts)
+
+    const cases = [
+      `# Title\n\n> [TOC]\n\n## Alpha\n\n### Beta`,
+      `# Title\n\n- [TOC]\n\n## Alpha\n\n## Gamma`,
+      `# Title\n\n1. [TOC]\n\n## First\n\n### Nested`,
+      `# Title\n\n:::note\n[TOC]\n:::\n\n## Inside Alert`,
+    ]
+
+    for (const md of cases) {
+      renderer.reset(opts)
+      const inc = renderMarkdownIncremental(md, renderer, fp)
+      const ref = renderFullReference(md, opts)
+      const incHtml = assembleRenderedBlocksHtml(inc.blocks)
+
+      expect(incHtml).toContain(`markdown-toc`)
+      expect(incHtml).toBe(ref.html)
+      expect(inc.headings).toEqual(ref.headings)
+    }
+  })
 })

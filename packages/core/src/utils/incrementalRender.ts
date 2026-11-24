@@ -138,8 +138,9 @@ const LIST_ITEM_RE = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/
 const ALERT_OPEN_RE = /^:::[ \t]*\S+/
 const ALERT_CLOSE_RE = /^:::[ \t]*$/
 const MATH_DOLLAR_FENCE_RE = /^\s{0,3}(\${1,2})[ \t]*$/
+const LATEX_BLOCK_OPEN_RE = /^ {0,3}\\\[/
 const COMPONENT_OPEN_RE = /^<([A-Z]\w*)(?=[\s/>]|$)/
-const STANDALONE_TOC_RE = /^[ \t]*\[TOC\][ \t]*$/
+const BLOCK_TOC_LINE_RE = /^(?:[ \t>]|[-*+][ \t]|\d{1,9}[.)][ \t])*\[TOC\][ \t]*$/
 const RAW_DANGEROUS_TAG_RE = /<(?:style|script|iframe|textarea|pre)(?=[\s>/]|$)/i
 const LOWERCASE_HTML_TAG_RE = /<(\/?)([a-z][a-z0-9-]*)(?:\s[^>]*?)?(\/?)>/gi
 const HEADING_MARKER_RE = /data-heading="true"/g
@@ -334,6 +335,19 @@ export function splitMarkdownBlocks(markdown: string): SplitBlocksResult {
       continue
     }
 
+    // Run document-scoped fallback checks on every non-fenced line, including
+    // lines inside unclosed math/alert/component regions.
+    if (!blank) {
+      if (line.includes(`[^`))
+        return { blocks: [], fallbackReason: `footnotes` }
+      if (LINK_REF_DEF_RE.test(line))
+        return { blocks: [], fallbackReason: `link-ref-def` }
+      if (line.includes(`<`) && RAW_DANGEROUS_TAG_RE.test(stripInlineCodeSpans(line)))
+        return { blocks: [], fallbackReason: `raw-html-block` }
+      if (line.includes(`<!--`) && stripInlineCodeSpans(line).includes(`<!--`))
+        return { blocks: [], fallbackReason: `raw-html-comment` }
+    }
+
     if (mathFence) {
       const m = MATH_DOLLAR_FENCE_RE.exec(line)
       if (m && m[1] === mathFence)
@@ -401,14 +415,6 @@ export function splitMarkdownBlocks(markdown: string): SplitBlocksResult {
     // Non-blank line outside any fenced/multiline block.
     chunkHasContent = true
 
-    // Check document-scoped constructs that require full-document parsing.
-    if (line.includes(`[^`))
-      return { blocks: [], fallbackReason: `footnotes` }
-    if (LINK_REF_DEF_RE.test(line))
-      return { blocks: [], fallbackReason: `link-ref-def` }
-    if (line.includes(`<`) && RAW_DANGEROUS_TAG_RE.test(stripInlineCodeSpans(line)))
-      return { blocks: [], fallbackReason: `raw-html-block` }
-
     const openedFence = opensCodeFence(line)
     if (openedFence) {
       fenceChar = openedFence.char
@@ -422,19 +428,17 @@ export function splitMarkdownBlocks(markdown: string): SplitBlocksResult {
       continue
     }
 
-    if (line.includes(`\\[`) && !line.includes(`\\]`, line.indexOf(`\\[`))) {
-      inLatexBlock = true
-      continue
+    if (line.includes(`\\[`)) {
+      const stripped = stripInlineCodeSpans(line)
+      if (LATEX_BLOCK_OPEN_RE.test(stripped) && !stripped.includes(`\\]`, stripped.indexOf(`\\[`))) {
+        inLatexBlock = true
+        continue
+      }
     }
 
     if (ALERT_OPEN_RE.test(line)) {
       alertOpen = true
       continue
-    }
-
-    if (line.includes(`<!--`) && stripInlineCodeSpans(line).includes(`<!--`)) {
-      // Raw HTML comments are stripped by DOMPurify and can shift whitespace across chunks.
-      return { blocks: [], fallbackReason: `raw-html-comment` }
     }
 
     const openedComp = detectMultilineComponentOpen(line)
@@ -481,7 +485,7 @@ function countHeadingMarkers(html: string): number {
   }
 }
 
-function blockContainsStandaloneToc(block: string): boolean {
+function blockContainsToc(block: string): boolean {
   if (!block.includes(`[TOC]`))
     return false
   let fenceChar = ``
@@ -500,7 +504,7 @@ function blockContainsStandaloneToc(block: string): boolean {
       fenceLength = opened.length
       continue
     }
-    if (STANDALONE_TOC_RE.test(line))
+    if (line.includes(`[TOC]`) && BLOCK_TOC_LINE_RE.test(stripInlineCodeSpans(line)))
       return true
   }
   return false
@@ -610,7 +614,7 @@ export function renderMarkdownIncremental(
       entry = undefined
 
     if (!entry) {
-      const hasToc = blockContainsStandaloneToc(chunk)
+      const hasToc = blockContainsToc(chunk)
       const rendered = renderer.renderBlock(chunk, { tagCiteIndices: citeStatus })
       const cleaned = stripBreakBeforeInlineKatex(rendered.html)
       const sanitizedHtml = sanitizeHtml(cleaned)
