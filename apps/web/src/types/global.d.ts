@@ -1,3 +1,4 @@
+import type { DesktopBridge } from '@md/shared/types'
 import type { CoseApi } from './cose'
 
 export {}
@@ -5,6 +6,7 @@ export {}
 declare global {
   interface Window {
     __MD_UTOOLS__?: boolean
+    mdDesktop?: DesktopBridge
     $cose?: CoseApi
     syncPost?: (data: { thumb: string, title: string, desc: string, content: string }) => void
 

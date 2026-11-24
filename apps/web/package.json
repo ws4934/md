@@ -12,6 +12,7 @@
     "build:only": "vite build",
     "build:h5-netlify": "run-s \"build:h5-netlify:only {@}\" type-check --",
     "build:h5-netlify:only": "cross-env SERVER_ENV=NETLIFY vite build",
+    "build:desktop": "cross-env SERVER_ENV=DESKTOP vite build --outDir ../desktop/dist/renderer --emptyOutDir",
     "build:utools": "cross-env SERVER_ENV=UTOOLS vite build --mode utools --outDir ../utools/dist --emptyOutDir",
     "build:analyze": "cross-env ANALYZE=true vite build",
     "preview": "pnpm run build && vite preview",

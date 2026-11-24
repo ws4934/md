@@ -1,6 +1,7 @@
 export * from './ai-services-types'
 export * from './common'
 export * from './component'
+export * from './desktop-acp'
 export * from './emoji'
 export * from './front-matter'
 export * from './marketplace'

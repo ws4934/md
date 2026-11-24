@@ -95,6 +95,7 @@ patchedDependencies:
 allowBuilds:
   '@vscode/vsce-sign': true
   core-js: true
+  electron: true
   esbuild: true
   keytar: true
   sharp: true

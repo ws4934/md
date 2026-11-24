@@ -1,0 +1,223 @@
+export interface AcpAgentAvatar {
+  letter: string
+  color: string
+}
+
+export interface AcpAgentConfig {
+  id: string
+  name: string
+  command: string
+  args: string[]
+  env?: Record<string, string>
+  installPackage?: string
+  detectBinaries?: string[]
+  builtin: boolean
+  avatar: AcpAgentAvatar
+}
+
+export interface AcpInstallProgress {
+  percent: number
+  command: string
+  line: string
+}
+
+export interface AcpAgentStatus {
+  id: string
+  name: string
+  builtin: boolean
+  installed: boolean
+  resolvedPath?: string
+  command: string
+  args: string[]
+  env?: Record<string, string>
+  installPackage?: string
+  avatar: AcpAgentAvatar
+  isDefault: boolean
+  installing?: boolean
+  installProgress?: AcpInstallProgress
+}
+
+export interface AcpModelInfo {
+  id: string
+  name: string
+  description?: string
+  isDefault?: boolean
+}
+
+export interface AcpModeInfo {
+  id: string
+  name: string
+  description?: string
+}
+
+export interface AcpSlashCommand {
+  name: string
+  description?: string
+  inputHint?: string
+}
+
+export interface AcpProbeResult {
+  agentId: string
+  models: AcpModelInfo[]
+  currentModelId: string | null
+  modes: AcpModeInfo[]
+  currentModeId: string | null
+  commands: AcpSlashCommand[]
+  probedAt: number
+  error?: string
+}
+
+export interface AcpCommandOverride {
+  command: string
+  args: string[]
+  env?: Record<string, string>
+}
+
+export interface AcpSettings {
+  defaultAgentId: string
+  lastModelByAgent: Record<string, string>
+  reviewEditsBeforeWriting: boolean
+  askBeforeRunningCommands: boolean
+  customAgents: AcpAgentConfig[]
+  commandOverrides: Record<string, AcpCommandOverride>
+}
+
+export interface AcpPlanEntry {
+  content: string
+  status: `pending` | `in_progress` | `completed`
+  priority?: string
+}
+
+export type AcpToolKind
+  = | `read`
+    | `edit`
+    | `delete`
+    | `move`
+    | `search`
+    | `execute`
+    | `think`
+    | `fetch`
+    | `switch_mode`
+    | `other`
+
+export type AcpToolStatus = `pending` | `in_progress` | `completed` | `failed`
+
+export interface AcpToolCallItem {
+  id: string
+  title: string
+  toolKind: AcpToolKind
+  status: AcpToolStatus
+  detail?: string
+  filePath?: string
+  command?: string
+  oldText?: string
+  newText?: string
+  error?: string
+}
+
+export interface AcpPermissionOption {
+  optionId: string
+  name: string
+  kind: `allow_once` | `allow_always` | `reject_once` | `reject_always` | string
+}
+
+export interface AcpPermissionRequest {
+  requestId: string
+  sessionId: string
+  toolCallId: string
+  title: string
+  toolKind: AcpToolKind
+  command?: string
+  detail?: string
+  filePath?: string
+  options: AcpPermissionOption[]
+}
+
+export type AcpPermissionDecision = `allow_once` | `allow_always` | `reject`
+
+export interface AcpArticleEditProposal {
+  editId: string
+  sessionId: string
+  postId: string
+  baseContent: string
+  proposedContent: string
+  autoApplied: boolean
+}
+
+export type AcpHostEvent
+  = | { type: `session_created`, sessionId: string, agentId: string, modelId: string | null, postId: string, title: string }
+    | { type: `session_closed`, sessionId: string, reason?: string }
+    | { type: `turn_started`, sessionId: string }
+    | { type: `turn_finished`, sessionId: string, stopReason?: string }
+    | { type: `turn_error`, sessionId: string, message: string }
+    | { type: `message_chunk`, sessionId: string, text: string }
+    | { type: `thought_chunk`, sessionId: string, text: string }
+    | { type: `plan`, sessionId: string, entries: AcpPlanEntry[] }
+    | { type: `tool_call`, sessionId: string, tool: AcpToolCallItem }
+    | { type: `permission_requested`, sessionId: string, request: AcpPermissionRequest }
+    | { type: `permission_resolved`, sessionId: string, requestId: string, decision: AcpPermissionDecision | `cancelled` }
+    | { type: `article_edit`, sessionId: string, proposal: AcpArticleEditProposal }
+    | { type: `model_changed`, sessionId: string, modelId: string | null }
+    | { type: `commands_updated`, sessionId: string, commands: AcpSlashCommand[] }
+    | { type: `install_progress`, agentId: string, percent: number, command: string, line: string, done?: boolean, error?: string }
+    | { type: `agents_changed`, agents: AcpAgentStatus[] }
+
+export interface AcpStartSessionParams {
+  agentId: string
+  modelId?: string | null
+  postId: string
+  postTitle: string
+  content: string
+}
+
+export interface AcpStartSessionResult {
+  sessionId: string
+  modelId: string | null
+  models: AcpModelInfo[]
+  commands: AcpSlashCommand[]
+}
+
+export interface AcpPromptParams {
+  sessionId: string
+  text: string
+  attachments?: string[]
+  content: string
+  postTitle: string
+}
+
+export interface DesktopAcpApi {
+  listAgents: () => Promise<AcpAgentStatus[]>
+  detectAgents: () => Promise<AcpAgentStatus[]>
+  getSettings: () => Promise<AcpSettings>
+  updateSettings: (patch: Partial<AcpSettings>) => Promise<AcpSettings>
+  addCustomAgent: (agent: { name: string, command: string, args: string[], env?: Record<string, string> }) => Promise<AcpAgentStatus[]>
+  removeCustomAgent: (agentId: string) => Promise<AcpAgentStatus[]>
+  installAgent: (agentId: string) => Promise<{ ok: boolean, error?: string }>
+  cancelInstall: (agentId: string) => Promise<void>
+  probeAgent: (agentId: string, options?: { force?: boolean }) => Promise<AcpProbeResult>
+  startSession: (params: AcpStartSessionParams) => Promise<AcpStartSessionResult>
+  syncArticleContent: (params: { sessionId: string, content: string }) => Promise<void>
+  prompt: (params: AcpPromptParams) => Promise<{ stopReason?: string }>
+  cancelTurn: (sessionId: string) => Promise<void>
+  setModel: (params: { sessionId: string, modelId: string }) => Promise<{ modelId: string | null }>
+  respondPermission: (params: {
+    sessionId: string
+    requestId: string
+    decision: AcpPermissionDecision
+    optionId?: string
+  }) => Promise<void>
+  closeSession: (sessionId: string) => Promise<void>
+  onEvent: (listener: (event: AcpHostEvent) => void) => () => void
+}
+
+export interface DesktopPickedFile {
+  path: string
+  name: string
+}
+
+export interface DesktopBridge {
+  isDesktop: true
+  platform: string
+  acp: DesktopAcpApi
+  pickFiles: () => Promise<DesktopPickedFile[]>
+}

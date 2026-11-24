@@ -1,0 +1,30 @@
+{
+  "name": "@md/desktop",
+  "type": "module",
+  "version": "2.1.0",
+  "private": true,
+  "description": "Electron desktop edition of doocs/md with local ACP agent integration",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev": "tsx scripts/dev.ts",
+    "build:main": "tsx scripts/build.ts",
+    "build": "pnpm --filter @md/web run build:desktop && pnpm run build:main",
+    "start": "electron .",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^2.9.1",
+    "@md/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@md/config": "workspace:*",
+    "@types/node": "catalog:",
+    "electron": "^45.4.1",
+    "esbuild": "^0.28.2",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
