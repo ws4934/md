@@ -23,13 +23,13 @@ import { useThemeStore } from '@/stores/theme'
 import { useUIStore } from '@/stores/ui'
 import AgentAvatar from './AgentAvatar.vue'
 import AgentPanel from './AgentPanel.vue'
-import DesktopPublishDialog from './DesktopPublishDialog.vue'
 import DesktopSidebar from './DesktopSidebar.vue'
 import DesktopSplitHandle from './DesktopSplitHandle.vue'
 import DesktopToolbar from './DesktopToolbar.vue'
 import NewArticlePrompt from './NewArticlePrompt.vue'
 import './desktop-theme.css'
 
+const DesktopPublishDialog = defineAsyncComponent(() => import('./DesktopPublishDialog.vue'))
 const RightSlider = defineAsyncComponent(() => import('@/components/editor/RightSlider.vue'))
 const PreferencesDialog = defineAsyncComponent(() => import('@/components/editor/dialogs/PreferencesDialog.vue'))
 const UploadImgDialog = defineAsyncComponent(() => import('@/components/editor/dialogs/UploadImgDialog.vue'))
@@ -324,7 +324,13 @@ watch(innerContainerRef, el => observeInnerContainer(el))
 const backLight = ref(false)
 const isCoping = ref(false)
 const isShowPublishDialog = ref(false)
+const hasMountedPublishDialog = ref(false)
 let copyEndTimer: ReturnType<typeof setTimeout> | null = null
+
+watch(isShowPublishDialog, (open) => {
+  if (open)
+    hasMountedPublishDialog.value = true
+})
 
 const isGoToLineActive = ref(false)
 const goToLineInput = ref(``)
@@ -667,6 +673,7 @@ onUnmounted(() => {
 
     <!-- Dialogs -->
     <DesktopPublishDialog
+      v-if="hasMountedPublishDialog || isShowPublishDialog"
       v-model:open="isShowPublishDialog"
       @start-copy="startCopy"
       @end-copy="endCopy"

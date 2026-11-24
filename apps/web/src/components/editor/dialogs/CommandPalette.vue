@@ -56,7 +56,7 @@ watch(isShowCommandPalette, (open) => {
     activeIndex.value = 0
     nextTick(() => inputRef.value?.focus())
   }
-})
+}, { immediate: true })
 
 watch(filteredCommands, () => {
   activeIndex.value = 0

@@ -1,6 +1,5 @@
 import type { RenderedBlock } from '@md/core/utils'
 import type { RendererAPI } from '@md/shared/types'
-import { assembleRenderedBlocksHtml, isMathJaxReady, renderMarkdownIncremental } from '@md/core/utils'
 import { t } from '@/i18n/translate'
 import { resolveAssetUrl } from '@/services/emoji/urlResolver'
 import { useCustomComponentStore } from './customComponent'
@@ -13,6 +12,12 @@ export interface RenderOptions {
   force?: boolean
 }
 
+interface LazyCoreUtils {
+  assembleRenderedBlocksHtml: (typeof import('@md/core/utils'))[`assembleRenderedBlocksHtml`]
+  isMathJaxReady: (typeof import('@md/core/utils'))[`isMathJaxReady`]
+  renderMarkdownIncremental: (typeof import('@md/core/utils'))[`renderMarkdownIncremental`]
+}
+
 /** Markdown rendering, HTML output, and heading extraction. */
 export const useRenderStore = defineStore(`render`, () => {
   const renderedBlocks = shallowRef<RenderedBlock[]>([])
@@ -20,11 +25,20 @@ export const useRenderStore = defineStore(`render`, () => {
   const hasRendered = ref(false)
   const isDirty = ref(false)
 
+  let coreUtils: LazyCoreUtils | null = null
+
   // Assembled lazily on demand so keystrokes never join multi-MB HTML strings
   // unless an explicit consumer (copy / publish / export) reads `output`.
-  const output = computed(() =>
-    hasRendered.value ? assembleRenderedBlocksHtml(renderedBlocks.value) : ``,
-  )
+  const output = computed(() => {
+    if (!hasRendered.value)
+      return ``
+    if (coreUtils)
+      return coreUtils.assembleRenderedBlocksHtml(renderedBlocks.value)
+    let inner = ``
+    for (let i = 0; i < renderedBlocks.value.length; i++)
+      inner += renderedBlocks.value[i].html
+    return `<section class="container">${inner}</section>`
+  })
 
   const readingTime = reactive({
     chars: 0,
@@ -119,7 +133,7 @@ export const useRenderStore = defineStore(`render`, () => {
   }
 
   const render = (content: string, options?: RenderOptions) => {
-    if (!renderer) {
+    if (!renderer || !coreUtils) {
       pendingRender = { content, options }
       return
     }
@@ -129,7 +143,7 @@ export const useRenderStore = defineStore(`render`, () => {
     const componentStore = useCustomComponentStore()
     const themeMode = options?.themeMode ?? (uiStore.isDark ? `dark` : `light`)
     const optionsFingerprint = buildOptionsFingerprint(themeMode, themeStore, componentStore)
-    const mathReady = isMathJaxReady()
+    const mathReady = coreUtils.isMathJaxReady()
 
     if (
       !options?.force
@@ -156,7 +170,7 @@ export const useRenderStore = defineStore(`render`, () => {
       assetResolver: resolveAssetUrl,
     })
 
-    const result = renderMarkdownIncremental(content, renderer, optionsFingerprint)
+    const result = coreUtils.renderMarkdownIncremental(content, renderer, optionsFingerprint)
 
     readingTime.chars = content.length
     readingTime.words = result.readingTime.words
@@ -191,7 +205,11 @@ export const useRenderStore = defineStore(`render`, () => {
     isMacCodeBlock?: boolean
     isShowLineNumber?: boolean
   }) => {
-    initPromise ??= import(`@md/core/renderer`).then(({ initRenderer }) => {
+    initPromise ??= Promise.all([
+      import(`@md/core/renderer`),
+      import(`@md/core/utils`),
+    ]).then(([{ initRenderer }, utils]) => {
+      coreUtils = utils
       renderer = initRenderer(options || {})
       lastOptionsFingerprint = ``
       lastContent = ``
