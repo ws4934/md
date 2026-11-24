@@ -6,13 +6,16 @@ import type {
   AcpStartSessionParams,
   DesktopBridge,
 } from '@md/shared/types'
-import process from 'node:process'
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC_CHANNELS } from '../shared/ipc-channels'
 
+// Sandboxed Electron preload exposes global `process` without allowing `node:process` imports.
+// eslint-disable-next-line node/prefer-global/process
+const hostPlatform = typeof process !== `undefined` ? process.platform : `unknown`
+
 const desktopBridge: DesktopBridge = {
   isDesktop: true,
-  platform: process.platform,
+  platform: hostPlatform,
   pickFiles: () => ipcRenderer.invoke(IPC_CHANNELS.PICK_FILES),
   acp: {
     listAgents: () => ipcRenderer.invoke(IPC_CHANNELS.ACP_LIST_AGENTS),

@@ -161,6 +161,7 @@ declare global {
   const useAIImageConfigStore: typeof import('./src/stores/aiImageConfig').useAIImageConfigStore
   const useAccountSyncBootstrap: typeof import('./src/composables/useAccountSyncBootstrap').useAccountSyncBootstrap
   const useActiveElement: typeof import('@vueuse/core').useActiveElement
+  const useAgentStore: typeof import('./src/stores/agent').useAgentStore
   const useAnimate: typeof import('@vueuse/core').useAnimate
   const useArrayDifference: typeof import('@vueuse/shared').useArrayDifference
   const useArrayEvery: typeof import('@vueuse/shared').useArrayEvery
@@ -395,6 +396,9 @@ declare global {
   // @ts-ignore
   export type { Component, Slot, Slots, ComponentPublicInstance, ComputedRef, DirectiveBinding, ExtractDefaultPropTypes, ExtractPropTypes, ExtractPublicPropTypes, InjectionKey, PropType, Ref, ShallowRef, MaybeRef, MaybeRefOrGetter, VNode, WritableComputedRef } from 'vue'
   import('vue')
+  // @ts-ignore
+  export type { AgentTimelineItem, AgentConversationSession, PendingArticleEdit } from './src/stores/agent'
+  import('./src/stores/agent')
   // @ts-ignore
   export type { CssContentConfig } from './src/stores/cssEditor'
   import('./src/stores/cssEditor')

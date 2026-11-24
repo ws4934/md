@@ -74,6 +74,7 @@ const {
 
 const { toggleShowUploadImgDialog } = uiStore
 
+const isDesktop = Boolean(window.mdDesktop?.isDesktop)
 const showEditor = computed(() => viewMode.value !== `preview`)
 
 const codeMirrorView = shallowRef<EditorView | null>(null)
@@ -695,7 +696,7 @@ defineExpose({
       @close="closeSlashMenu()"
     />
     <SidebarAIToolbar
-      v-if="showAIToolbox"
+      v-if="showAIToolbox && !isDesktop"
       :is-mobile="isMobile"
       :show-editor="showEditor"
     />

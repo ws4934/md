@@ -1,3 +1,4 @@
+import agent from './agent'
 import ai from './ai'
 import chrome from './chrome'
 import common from './common'
@@ -15,6 +16,7 @@ export default {
   ...editor,
   ...marketplace,
   ...notifications,
+  ...agent,
   ...ai,
   ...upload,
   ...store,

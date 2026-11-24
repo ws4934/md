@@ -174,7 +174,13 @@ export const useUIStore = defineStore(`ui`, () => {
   const toggleShowEditorStateDialog = useToggle(isShowEditorStateDialog)
 
   const isShowPreferencesDialog = ref(false)
+  const preferencesInitialTab = ref<`general` | `editor` | `preview` | `agents`>(`general`)
   const toggleShowPreferencesDialog = useToggle(isShowPreferencesDialog)
+
+  function openPreferencesDialog(tab: `general` | `editor` | `preview` | `agents` = `general`) {
+    preferencesInitialTab.value = tab
+    isShowPreferencesDialog.value = true
+  }
 
   const isShowKeyboardShortcutsDialog = ref(false)
   const toggleShowKeyboardShortcutsDialog = useToggle(isShowKeyboardShortcutsDialog)
@@ -309,7 +315,9 @@ export const useUIStore = defineStore(`ui`, () => {
     isShowEditorStateDialog,
     toggleShowEditorStateDialog,
     isShowPreferencesDialog,
+    preferencesInitialTab,
     toggleShowPreferencesDialog,
+    openPreferencesDialog,
     isShowKeyboardShortcutsDialog,
     toggleShowKeyboardShortcutsDialog,
     isShowCommandPalette,

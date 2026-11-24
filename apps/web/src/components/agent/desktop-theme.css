@@ -1,0 +1,100 @@
+/* Design tokens for Electron desktop edition (matches design/desktop-acp/lib.jsx) */
+.is-desktop {
+  --dt-canvas: #fbfaf7;
+  --dt-sidebar: #f4f2ee;
+  --dt-surface: #ffffff;
+  --dt-subtle: #eeebe5;
+  --dt-line: #e7e3dc;
+  --dt-ink: #1c1b19;
+  --dt-ink2: #5f5c55;
+  --dt-ink3: #a09c93;
+  --dt-on-ink: #ffffff;
+  --dt-accent: #5b5bd6;
+  --dt-accent-soft: #f0f0fc;
+  --dt-accent-line: #d6d6f7;
+  --dt-green: #0a9e55;
+  --dt-green-soft: #e7f5ed;
+  --dt-red: #d23f3f;
+  --dt-red-soft: #fbecec;
+  --dt-amber: #a86500;
+  --dt-amber-soft: #fcf4e4;
+  --dt-amber-line: #efdab0;
+  --dt-mono: 'Roboto Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.is-desktop.dark {
+  --dt-canvas: #181817;
+  --dt-sidebar: #1d1d1c;
+  --dt-surface: #232322;
+  --dt-subtle: #2d2d2b;
+  --dt-line: #31302e;
+  --dt-ink: #eceae4;
+  --dt-ink2: #b0ada5;
+  --dt-ink3: #75726b;
+  --dt-on-ink: #181817;
+  --dt-accent: #9293f6;
+  --dt-accent-soft: #24244a;
+  --dt-accent-line: #393970;
+  --dt-green: #3ccb7f;
+  --dt-green-soft: #16301f;
+  --dt-red: #f07272;
+  --dt-red-soft: #3a1d1d;
+  --dt-amber: #f0b350;
+  --dt-amber-soft: #30260f;
+  --dt-amber-line: #574416;
+}
+
+.desktop-drag-region {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.desktop-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Blend CodeMirror editor cleanly into the warm desktop canvas */
+.desktop-editor-host .cm-editor {
+  background-color: var(--dt-canvas) !important;
+  color: var(--dt-ink);
+  height: 100%;
+}
+
+.desktop-editor-host .cm-scroller {
+  padding: 20px 44px 48px !important;
+  font-size: 14.5px;
+  line-height: 1.8;
+}
+
+.desktop-editor-host .cm-gutters {
+  background-color: var(--dt-canvas) !important;
+  border-right: none !important;
+  color: var(--dt-ink3) !important;
+}
+
+.desktop-editor-host .cm-activeLine,
+.desktop-editor-host .cm-activeLineGutter {
+  background-color: transparent !important;
+}
+
+/* Style WeChat preview panel to match the floating phone card in the desktop design */
+.desktop-preview-host .preview-wrapper {
+  background-color: var(--dt-sidebar);
+  padding: 12px 24px 32px !important;
+  align-items: flex-start !important;
+}
+
+.desktop-preview-host .preview {
+  width: 348px !important;
+  max-width: 100% !important;
+  min-height: calc(100% - 16px) !important;
+  border-radius: 18px !important;
+  background-color: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.05) !important;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.07), 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+  padding: 24px 20px !important;
+}
+
+.is-desktop.dark .desktop-preview-host .preview {
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.3) !important;
+}

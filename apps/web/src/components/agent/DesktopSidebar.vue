@@ -1,0 +1,208 @@
+<script setup lang="ts">
+import type { Post } from '@/types/post'
+import { Ellipsis, Search, Settings, SquarePen, Trash2 } from '@lucide/vue'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { formatRelativeTime } from '@/lib/format/relative-time'
+import { useAgentStore } from '@/stores/agent'
+import { useConfirmStore } from '@/stores/confirm'
+import { usePostStore } from '@/stores/post'
+import { useUIStore } from '@/stores/ui'
+
+const { t, locale } = useI18n()
+const postStore = usePostStore()
+const uiStore = useUIStore()
+const agentStore = useAgentStore()
+const confirmStore = useConfirmStore()
+
+const { posts, currentPostId } = storeToRefs(postStore)
+const { writingPostIds } = storeToRefs(agentStore)
+
+const isMac = computed(() => window.mdDesktop?.platform === `darwin`)
+
+const sortedPosts = computed(() =>
+  [...posts.value].sort((a, b) => +new Date(b.updateDatetime) - +new Date(a.updateDatetime)),
+)
+
+const renamingId = ref<string | null>(null)
+const renameDraft = ref(``)
+
+function createNewArticle() {
+  postStore.addPost(t(`agent.newArticle.untitled`), null)
+  if (postStore.currentPost)
+    postStore.updatePostContent(postStore.currentPost.id, ``)
+  agentStore.isNewArticleHero = true
+}
+
+function selectPost(post: Post) {
+  postStore.currentPostId = post.id
+  agentStore.isNewArticleHero = false
+}
+
+function beginRename(post: Post) {
+  renamingId.value = post.id
+  renameDraft.value = post.title
+}
+
+function commitRename(id: string) {
+  const next = renameDraft.value.trim()
+  if (next)
+    postStore.renamePost(id, next)
+  renamingId.value = null
+}
+
+function deletePost(post: Post) {
+  confirmStore.confirm({
+    title: t(`confirm.tip`),
+    description: t(`confirm.deleteItem`, { name: post.title }),
+    confirmText: t(`post.confirmDelete`),
+    destructive: true,
+    onConfirm: () => {
+      postStore.delPost(post.id)
+      if (posts.value.length === 0)
+        createNewArticle()
+    },
+  })
+}
+
+function formatMeta(post: Post): string {
+  void locale.value
+  const diffMs = Date.now() - +new Date(post.updateDatetime)
+  if (diffMs < 60_000)
+    return t(`agent.sidebar.justNow`)
+  return formatRelativeTime(post.updateDatetime)
+}
+</script>
+
+<template>
+  <aside
+    class="flex h-full w-[248px] shrink-0 flex-col select-none"
+    style="
+      background-color: var(--dt-sidebar);
+      border-right: 1px solid var(--dt-line);
+    "
+  >
+    <!-- Titlebar area: reserves macOS traffic lights inset on the left -->
+    <div
+      class="desktop-drag-region flex h-[52px] shrink-0 items-center justify-between pr-2.5"
+      :class="isMac ? 'pl-[84px]' : 'pl-4'"
+    >
+      <span class="flex-1" />
+      <button
+        type="button"
+        :title="t('agent.sidebar.newArticle')"
+        :aria-label="t('agent.sidebar.newArticle')"
+        class="desktop-no-drag inline-flex size-[30px] cursor-pointer items-center justify-center rounded-lg transition-colors hover:opacity-80"
+        style="color: var(--dt-ink2)"
+        @click="createNewArticle"
+      >
+        <SquarePen class="size-4" />
+      </button>
+    </div>
+
+    <!-- Search row opening Command Palette -->
+    <div class="shrink-0 px-2.5 pb-1">
+      <button
+        type="button"
+        class="flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg px-3 text-left transition-colors hover:opacity-85"
+        style="color: var(--dt-ink3)"
+        @click="uiStore.toggleShowCommandPalette(true)"
+      >
+        <Search class="size-3.5 shrink-0" />
+        <span class="flex-1 text-[13px]">{{ t('agent.sidebar.search') }}</span>
+        <span class="text-[11.5px]">{{ isMac ? '⌘K' : 'Ctrl+K' }}</span>
+      </button>
+    </div>
+
+    <!-- Document list ONLY -->
+    <div class="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 py-1">
+      <div
+        v-for="post in sortedPosts"
+        :key="post.id"
+        class="group relative flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-3 py-[9px] transition-colors"
+        :style="{
+          backgroundColor: post.id === currentPostId ? 'var(--dt-subtle)' : 'transparent',
+        }"
+        @click="selectPost(post)"
+      >
+        <input
+          v-if="renamingId === post.id"
+          v-model="renameDraft"
+          type="text"
+          class="w-full rounded bg-transparent text-[13px] font-medium outline-none"
+          style="color: var(--dt-ink)"
+          autofocus
+          @click.stop
+          @keydown.enter="commitRename(post.id)"
+          @keydown.escape="renamingId = null"
+          @blur="commitRename(post.id)"
+        >
+        <div v-else class="flex items-center gap-1">
+          <span
+            class="min-w-0 flex-1 truncate text-[13px]"
+            :style="{
+              color: 'var(--dt-ink)',
+              fontWeight: post.id === currentPostId ? 600 : 500,
+            }"
+          >
+            {{ post.title }}
+          </span>
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <button
+                type="button"
+                class="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100"
+                style="color: var(--dt-ink3)"
+                @click.stop
+              >
+                <Ellipsis class="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" class="w-36">
+              <DropdownMenuItem class="cursor-pointer text-xs" @click.stop="beginRename(post)">
+                {{ t('agent.sidebar.rename') }}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                class="cursor-pointer text-xs text-destructive"
+                @click.stop="deletePost(post)"
+              >
+                <Trash2 class="mr-1.5 size-3.5" />
+                {{ t('agent.sidebar.delete') }}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        <div class="flex items-center gap-1.5">
+          <template v-if="writingPostIds.has(post.id)">
+            <span class="size-[5px] shrink-0 rounded-full" style="background-color: var(--dt-accent)" />
+            <span class="text-[11.5px]" style="color: var(--dt-accent)">
+              {{ t('agent.panel.writingBadge') }}
+            </span>
+          </template>
+          <span v-else class="text-[11.5px]" style="color: var(--dt-ink3)">
+            {{ formatMeta(post) }}
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom settings trigger -->
+    <div class="flex shrink-0 items-center px-2.5 pb-2.5 pt-1">
+      <button
+        type="button"
+        :title="t('agent.sidebar.settings')"
+        :aria-label="t('agent.sidebar.settings')"
+        class="inline-flex size-[30px] cursor-pointer items-center justify-center rounded-lg transition-colors hover:opacity-80"
+        style="color: var(--dt-ink3)"
+        @click="uiStore.openPreferencesDialog('general')"
+      >
+        <Settings class="size-4" />
+      </button>
+    </div>
+  </aside>
+</template>
