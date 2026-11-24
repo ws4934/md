@@ -54,9 +54,9 @@ export function useEditorRefresh(options?: {
   }
 
   function scheduleEditorRefresh() {
+    renderStore.markDirty()
     if (uiStore.viewMode === `edit`) {
       clearTimers()
-      renderStore.markDirty()
       return
     }
 

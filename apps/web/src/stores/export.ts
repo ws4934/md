@@ -24,15 +24,17 @@ export const useExportStore = defineStore(`export`, () => {
   const themeStore = useThemeStore()
   const uiStore = useUIStore()
 
-  function flushPreviewForExport() {
+  async function flushPreviewForExport() {
     if (!renderStore.isDirty && renderStore.output)
       return
     themeStore.updateCodeTheme()
     renderStore.render(editorStore.getContent())
+    // Wait for PreviewPanel's flush: 'post' watcher to patch #output before DOM export reads it.
+    await nextTick()
   }
 
-  const editorContent2HTML = () => {
-    flushPreviewForExport()
+  const editorContent2HTML = async () => {
+    await flushPreviewForExport()
     return getHtmlContent()
   }
 
@@ -41,7 +43,7 @@ export const useExportStore = defineStore(`export`, () => {
     if (!currentPost)
       return
 
-    flushPreviewForExport()
+    await flushPreviewForExport()
     await exportHTML(currentPost.title)
   }
 
@@ -58,7 +60,7 @@ export const useExportStore = defineStore(`export`, () => {
     if (!currentPost)
       return
 
-    flushPreviewForExport()
+    await flushPreviewForExport()
     await exportPNG(currentPost.title, {
       previewDevice: uiStore.previewDevice,
     })
@@ -69,7 +71,7 @@ export const useExportStore = defineStore(`export`, () => {
     if (!currentPost)
       return
 
-    flushPreviewForExport()
+    await flushPreviewForExport()
     const toastId = toast.loading(t(`store.png.segmentsStart`))
     try {
       const count = await exportPNGSegments(currentPost.title, {
@@ -96,7 +98,7 @@ export const useExportStore = defineStore(`export`, () => {
     if (!currentPost)
       return
 
-    flushPreviewForExport()
+    await flushPreviewForExport()
     await exportPDF(currentPost.title, options)
   }
 

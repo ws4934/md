@@ -183,7 +183,7 @@ async function copy() {
           await copyContent(await generatePureHTML(editor.value!.state.doc.toString()))
         }
         else if (copyMode.value === `html-and-style`) {
-          await copyContent(exportStore.editorContent2HTML())
+          await copyContent(await exportStore.editorContent2HTML())
         }
 
         toast.success(

@@ -13,7 +13,7 @@ export async function captureShareSnapshot(): Promise<{ bodyHtml: string, styles
   const rerenderForLight = uiStore.isDark
   const shareThemeMode = `light` as const
 
-  if (rerenderForLight)
+  if (rerenderForLight || renderStore.isDirty || !renderStore.output)
     renderStore.render(content, { themeMode: shareThemeMode })
 
   const ready = await waitForPreviewReady(undefined, { themeMode: shareThemeMode })

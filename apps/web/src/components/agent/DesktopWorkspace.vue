@@ -11,14 +11,13 @@ import { useCursorSync } from '@/composables/useCursorSync'
 import { useDesktopSidebarHotkey } from '@/composables/useDesktopSidebarHotkey'
 import { useEditorRefresh } from '@/composables/useEditorRefresh'
 import { useScrollSync } from '@/composables/useScrollSync'
+import { copyWeChatHtmlToClipboard } from '@/lib/agent/copy-wechat-html'
 import {
   computeEditorMinPercent,
   computeMainMinPercent,
   DESKTOP_LAYOUT_LIMITS,
 } from '@/lib/agent/desktop-layout'
-import { delay } from '@/lib/delay'
 import { clampGoToLineValue, jumpToLine } from '@/lib/markdown/headingNavigation'
-import { processClipboardContent } from '@/services/export'
 import { useAgentStore } from '@/stores/agent'
 import { useThemeStore } from '@/stores/theme'
 import { useUIStore } from '@/stores/ui'
@@ -114,9 +113,10 @@ const previewPanelRef = ref<InstanceType<typeof ResizablePanel> | null>(null)
 const outerContainerWidth = ref<number>(typeof window !== `undefined` ? window.innerWidth : 1440)
 const innerContainerWidth = ref<number>(Math.max(640, outerContainerWidth.value - 648))
 
-const activeDragCount = ref(0)
-const draggingPanel = ref<keyof DesktopLayoutWidths | null>(null)
-const isDraggingDivider = computed(() => activeDragCount.value > 0)
+const activeDragPanels = ref<Set<keyof DesktopLayoutWidths>>(new Set())
+const keyboardResizingPanel = ref<keyof DesktopLayoutWidths | null>(null)
+let keyboardResizeTimer: ReturnType<typeof setTimeout> | null = null
+const isDraggingDivider = computed(() => activeDragPanels.value.size > 0)
 
 let isSyncingOuter = false
 let isSyncingInner = false
@@ -213,10 +213,17 @@ function syncInnerLayout() {
 }
 
 function isUserResizingPanel(panel: keyof DesktopLayoutWidths): boolean {
-  if (draggingPanel.value === panel)
-    return true
-  const activeEl = typeof document !== `undefined` ? document.activeElement : null
-  return Boolean(activeEl?.getAttribute(`data-testid`) === `split-handle-${panel}`)
+  return activeDragPanels.value.has(panel) || keyboardResizingPanel.value === panel
+}
+
+function onHandleKeyboardResize(panel: keyof DesktopLayoutWidths) {
+  keyboardResizingPanel.value = panel
+  if (keyboardResizeTimer)
+    clearTimeout(keyboardResizeTimer)
+  keyboardResizeTimer = setTimeout(() => {
+    keyboardResizingPanel.value = null
+    keyboardResizeTimer = null
+  }, 180)
 }
 
 function onSidebarResize(sizePx: number) {
@@ -244,17 +251,21 @@ function onPreviewResize(size: number) {
 }
 
 function onHandleDragging(panel: keyof DesktopLayoutWidths, active: boolean) {
+  const next = new Set(activeDragPanels.value)
   if (active) {
-    activeDragCount.value += 1
-    draggingPanel.value = panel
+    next.add(panel)
+    activeDragPanels.value = next
   }
-  else {
-    activeDragCount.value = Math.max(0, activeDragCount.value - 1)
-    if (draggingPanel.value === panel)
-      draggingPanel.value = null
-    if (activeDragCount.value === 0)
+  else if (next.delete(panel)) {
+    activeDragPanels.value = next
+    if (next.size === 0)
       flushPendingWidthSaves()
   }
+}
+
+function clearDraggingPanel(panel: keyof DesktopLayoutWidths) {
+  if (activeDragPanels.value.has(panel))
+    onHandleDragging(panel, false)
 }
 
 function resetSplit(panel: keyof DesktopLayoutWidths) {
@@ -273,13 +284,17 @@ watch([isSidebarOpen, showAgentPanel], () => {
   syncOuterLayout()
 })
 
-watch(viewMode, () => {
+watch(viewMode, (mode) => {
+  if (mode !== `split`)
+    clearDraggingPanel(`preview`)
   flushPendingWidthSaves()
   syncInnerLayout()
 })
 
 watch(isNewArticleHero, (hero) => {
-  if (!hero)
+  if (hero)
+    clearDraggingPanel(`preview`)
+  else
     nextTick(() => syncInnerLayout())
 })
 
@@ -339,26 +354,17 @@ function cancelGoToLine() {
 async function copyWeChatFromCommandPalette() {
   if (isCoping.value)
     return
-  startCopy()
-  try {
-    await nextTick()
-    await delay(100)
-    const processed = await processClipboardContent(themeStore.primaryColor)
-    const item = new ClipboardItem({
-      'text/html': new Blob([processed.html], { type: `text/html` }),
-      'text/plain': new Blob([processed.plainText], { type: `text/plain` }),
-    })
-    await navigator.clipboard.write([item])
-    toast.success(t(`agent.toolbar.copiedToWeChat`))
-    editorRefresh()
+  if (isNewArticleHero.value) {
+    toast.error(t(`agent.publish.errors.emptyContent`))
+    return
   }
-  catch (error) {
-    toast.error(t(`toast.copyFailed`, { message: error instanceof Error ? error.message : String(error) }))
-    editorRefresh()
-  }
-  finally {
-    endCopy()
-  }
+  await copyWeChatHtmlToClipboard({
+    primaryColor: themeStore.primaryColor,
+    delayMs: 100,
+    onStart: startCopy,
+    onEnd: endCopy,
+    onRefresh: () => editorRefresh(),
+  })
 }
 
 watch(() => uiStore.copyRequest, (tick) => {
@@ -418,6 +424,10 @@ onUnmounted(() => {
   flushPendingWidthSaves()
   outerObserver?.disconnect()
   innerObserver?.disconnect()
+  if (keyboardResizeTimer) {
+    clearTimeout(keyboardResizeTimer)
+    keyboardResizeTimer = null
+  }
   if (copyEndTimer) {
     clearTimeout(copyEndTimer)
     copyEndTimer = null
@@ -462,6 +472,7 @@ onUnmounted(() => {
         v-show="isSidebarOpen"
         test-id="split-handle-sidebar"
         @dragging="(active) => onHandleDragging('sidebar', active)"
+        @keyboard-resize="onHandleKeyboardResize('sidebar')"
         @reset="resetSplit('sidebar')"
       />
 
@@ -535,6 +546,7 @@ onUnmounted(() => {
                   v-show="viewMode === 'split'"
                   test-id="split-handle-preview"
                   @dragging="(active) => onHandleDragging('preview', active)"
+                  @keyboard-resize="onHandleKeyboardResize('preview')"
                   @reset="resetSplit('preview')"
                 />
 
@@ -624,6 +636,7 @@ onUnmounted(() => {
         v-show="showAgentPanel"
         test-id="split-handle-agent"
         @dragging="(active) => onHandleDragging('agent', active)"
+        @keyboard-resize="onHandleKeyboardResize('agent')"
         @reset="resetSplit('agent')"
       />
 

@@ -24,6 +24,7 @@ import {
 } from '@lucide/vue'
 import { extractUploadableImageUrls } from '@md/shared/utils/wechat-html-images'
 import { useEditorRefresh } from '@/composables/useEditorRefresh'
+import { copyWeChatHtmlToClipboard } from '@/lib/agent/copy-wechat-html'
 import { delay } from '@/lib/delay'
 import { extractPublishDraft } from '@/lib/post/publish-draft'
 import { processClipboardContent } from '@/services/export'
@@ -369,26 +370,16 @@ async function copyWeChatHtml() {
   if (isCopyingHtml.value)
     return
   isCopyingHtml.value = true
-  emit(`startCopy`)
-
   try {
-    await nextTick()
-    await delay(120)
-    const processed = await processClipboardContent(primaryColor.value)
-    const item = new ClipboardItem({
-      'text/html': new Blob([processed.html], { type: `text/html` }),
-      'text/plain': new Blob([processed.plainText], { type: `text/plain` }),
+    await copyWeChatHtmlToClipboard({
+      primaryColor: primaryColor.value,
+      delayMs: 120,
+      onStart: () => emit(`startCopy`),
+      onEnd: () => emit(`endCopy`),
+      onRefresh: () => editorRefresh(),
     })
-    await navigator.clipboard.write([item])
-    toast.success(t(`agent.toolbar.copiedToWeChat`))
-    editorRefresh()
-  }
-  catch (error) {
-    toast.error(t(`toast.copyFailed`, { message: error instanceof Error ? error.message : String(error) }))
-    editorRefresh()
   }
   finally {
-    emit(`endCopy`)
     isCopyingHtml.value = false
   }
 }
