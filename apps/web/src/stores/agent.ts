@@ -9,10 +9,17 @@ import type {
   AcpPlanEntry,
   AcpProbeResult,
   AcpSettings,
+  AcpThinkingOption,
   AcpToolCallItem,
 } from '@md/shared/types'
 import type { DesktopLayoutWidths } from '@/lib/agent/desktop-layout'
 import { createDefaultAcpSettings, getCustomExtraModes, mapAcpModeIdToPermissionLevel } from '@md/shared/utils/acp-permissions'
+import {
+  getModelThinkingOptions,
+  hasVariantModels,
+  parseVariantModelId,
+  resolveThinkingLevelForModel,
+} from '@md/shared/utils/acp-thinking'
 import { computeCompactDiff } from '@md/shared/utils/compact-diff'
 import { uuidv4 } from '@md/shared/utils/uuid'
 import { t } from '@/i18n/translate'
@@ -45,6 +52,7 @@ export interface AgentConversationSession {
   acpSessionId: string | null
   agentId: string
   modelId: string | null
+  thinkingLevel?: string | null
   permissionLevel?: AcpPermissionLevel
   modeId?: string | null
   postId: string
@@ -104,6 +112,7 @@ export const useAgentStore = defineStore(`agent`, () => {
 
   const selectedAgentId = ref<string>(`claude`)
   const selectedModelByAgent = ref<Record<string, string>>({})
+  const selectedThinkingLevelByAgent = ref<Record<string, string>>({})
   const draftPermissionLevel = ref<AcpPermissionLevel>(`ask`)
   const draftModeId = ref<string | null>(null)
 
@@ -207,15 +216,60 @@ export const useAgentStore = defineStore(`agent`, () => {
     if (!agent)
       return null
     const probe = probeByAgent.value[agent.id]
-    const chosenId = selectedModelByAgent.value[agent.id]
+    const rawChosenId = selectedModelByAgent.value[agent.id]
       ?? settings.value.lastModelByAgent[agent.id]
       ?? probe?.currentModelId
       ?? probe?.models[0]?.id
       ?? null
-    if (!chosenId)
+    if (!rawChosenId)
       return null
-    const found = probe?.models.find(m => m.id === chosenId)
-    return found ?? { id: chosenId, name: chosenId }
+    const parsed = parseVariantModelId(rawChosenId, probe?.models ?? [])
+    const baseId = parsed.baseModelId ?? rawChosenId
+    const found = probe?.models.find(m => m.id === baseId)
+    return found ?? { id: baseId, name: baseId }
+  })
+
+  const availableThinkingOptions = computed<AcpThinkingOption[]>(() => {
+    const agent = selectedAgent.value
+    if (!agent)
+      return []
+    const probe = probeByAgent.value[agent.id]
+    return getModelThinkingOptions(selectedModel.value, probe?.thinkingOptions, probe?.models)
+  })
+
+  const selectedThinkingLevel = computed<string | null>(() => {
+    const options = availableThinkingOptions.value
+    if (options.length === 0)
+      return null
+    const agent = selectedAgent.value
+    const probe = agent ? probeByAgent.value[agent.id] : undefined
+    const model = selectedModel.value
+    const active = activeSession.value
+
+    const sessionLevel = active && agent && active.agentId === agent.id
+      ? active.thinkingLevel
+      : null
+
+    const rawModelId = agent
+      ? (selectedModelByAgent.value[agent.id] ?? settings.value.lastModelByAgent[agent.id] ?? null)
+      : null
+    const legacyLevel = parseVariantModelId(rawModelId, probe?.models ?? []).thinkingLevel
+
+    const probeDefaultLevel = probe?.currentThinkingLevel
+      && (!hasVariantModels(probe.models) || model?.id === probe.currentModelId)
+      ? probe.currentThinkingLevel
+      : null
+
+    const desired
+      = sessionLevel
+        ?? (agent ? selectedThinkingLevelByAgent.value[agent.id] : null)
+        ?? (agent ? settings.value.lastThinkingLevelByAgent[agent.id] : null)
+        ?? legacyLevel
+        ?? probeDefaultLevel
+        ?? model?.defaultThinkingLevel
+        ?? null
+
+    return resolveThinkingLevelForModel(options, desired, model?.defaultThinkingLevel)
   })
 
   const currentPermissionLevel = computed<AcpPermissionLevel>(
@@ -553,9 +607,37 @@ export const useAgentStore = defineStore(`agent`, () => {
       case `model_changed`: {
         const session = findSessionByAcpId(event.sessionId)
         if (session) {
-          session.modelId = event.modelId
-          if (event.modelId)
-            selectedModelByAgent.value[session.agentId] = event.modelId
+          const probe = probeByAgent.value[session.agentId]
+          const parsed = parseVariantModelId(event.modelId, probe?.models ?? [])
+          session.modelId = parsed.baseModelId
+          if (parsed.baseModelId)
+            selectedModelByAgent.value[session.agentId] = parsed.baseModelId
+          if (parsed.thinkingLevel) {
+            session.thinkingLevel = parsed.thinkingLevel
+            selectedThinkingLevelByAgent.value[session.agentId] = parsed.thinkingLevel
+          }
+        }
+        break
+      }
+      case `thinking_changed`: {
+        const session = findSessionByAcpId(event.sessionId)
+        if (session) {
+          session.thinkingLevel = event.thinkingLevel
+          if (event.thinkingLevel)
+            selectedThinkingLevelByAgent.value[session.agentId] = event.thinkingLevel
+          if (event.thinkingOptions !== undefined) {
+            const prevProbe = probeByAgent.value[session.agentId]
+            if (prevProbe) {
+              probeByAgent.value = {
+                ...probeByAgent.value,
+                [session.agentId]: {
+                  ...prevProbe,
+                  thinkingOptions: event.thinkingOptions,
+                  currentThinkingLevel: event.thinkingLevel,
+                },
+              }
+            }
+          }
         }
         break
       }
@@ -607,6 +689,7 @@ export const useAgentStore = defineStore(`agent`, () => {
     settings.value = loadedSettings
     draftPermissionLevel.value = loadedSettings.defaultPermissionLevel
     selectedModelByAgent.value = { ...loadedSettings.lastModelByAgent }
+    selectedThinkingLevelByAgent.value = { ...(loadedSettings.lastThinkingLevelByAgent ?? {}) }
     sessions.value = savedSessions
     if (savedSessions.length > 0)
       activeSessionId.value = savedSessions[0].id
@@ -641,8 +724,17 @@ export const useAgentStore = defineStore(`agent`, () => {
     try {
       const result = await window.mdDesktop.acp.probeAgent(agentId, { force })
       probeByAgent.value = { ...probeByAgent.value, [agentId]: result }
-      if (!selectedModelByAgent.value[agentId] && result.currentModelId)
+      const existingModel = selectedModelByAgent.value[agentId]
+      if (existingModel) {
+        const parsed = parseVariantModelId(existingModel, result.models)
+        if (parsed.baseModelId && parsed.baseModelId !== existingModel)
+          selectedModelByAgent.value[agentId] = parsed.baseModelId
+        if (parsed.thinkingLevel && !selectedThinkingLevelByAgent.value[agentId])
+          selectedThinkingLevelByAgent.value[agentId] = parsed.thinkingLevel
+      }
+      else if (result.currentModelId) {
         selectedModelByAgent.value[agentId] = result.currentModelId
+      }
       return result
     }
     finally {
@@ -653,28 +745,185 @@ export const useAgentStore = defineStore(`agent`, () => {
   }
 
   async function selectAgentAndModel(agentId: string, modelId?: string): Promise<void> {
-    if (selectedAgentId.value !== agentId)
+    const switchedAgent = selectedAgentId.value !== agentId
+    if (switchedAgent)
       draftModeId.value = null
     selectedAgentId.value = agentId
-    if (modelId) {
-      selectedModelByAgent.value = { ...selectedModelByAgent.value, [agentId]: modelId }
-      void window.mdDesktop?.acp.updateSettings({
-        lastModelByAgent: { [agentId]: modelId },
-      })
-    }
 
     const session = activeSession.value
-    if (session?.acpSessionId && session.agentId === agentId && modelId && window.mdDesktop?.acp) {
+    const probe = probeByAgent.value[agentId]
+    const prevModelId = selectedModelByAgent.value[agentId]
+    const prevThinking = selectedThinkingLevelByAgent.value[agentId]
+    const prevSessionModel = session?.modelId
+    const prevSessionThinking = session?.thinkingLevel
+
+    let nextBaseModelId: string | undefined
+    let nextThinkingLevel: string | null | undefined
+
+    if (modelId) {
+      const parsed = parseVariantModelId(modelId, probe?.models ?? [])
+      nextBaseModelId = parsed.baseModelId ?? modelId
+      selectedModelByAgent.value = { ...selectedModelByAgent.value, [agentId]: nextBaseModelId }
+      settings.value = {
+        ...settings.value,
+        lastModelByAgent: { ...settings.value.lastModelByAgent, [agentId]: nextBaseModelId },
+      }
+
+      const targetModel = probe?.models.find(m => m.id === nextBaseModelId)
+      const targetOptions = getModelThinkingOptions(targetModel, probe?.thinkingOptions, probe?.models)
+      if (targetOptions.length > 0) {
+        const currentDesired = parsed.thinkingLevel
+          ?? (session?.agentId === agentId ? session.thinkingLevel : null)
+          ?? selectedThinkingLevelByAgent.value[agentId]
+          ?? settings.value.lastThinkingLevelByAgent[agentId]
+          ?? probe?.currentThinkingLevel
+          ?? null
+        nextThinkingLevel = resolveThinkingLevelForModel(
+          targetOptions,
+          currentDesired,
+          targetModel?.defaultThinkingLevel,
+        )
+        if (nextThinkingLevel) {
+          selectedThinkingLevelByAgent.value = {
+            ...selectedThinkingLevelByAgent.value,
+            [agentId]: nextThinkingLevel,
+          }
+          settings.value = {
+            ...settings.value,
+            lastThinkingLevelByAgent: {
+              ...settings.value.lastThinkingLevelByAgent,
+              [agentId]: nextThinkingLevel,
+            },
+          }
+        }
+      }
+      else {
+        nextThinkingLevel = null
+      }
+
+      if (session && session.agentId === agentId) {
+        session.modelId = nextBaseModelId
+        session.thinkingLevel = nextThinkingLevel ?? null
+      }
+
+      const settingsPatch: Partial<AcpSettings> = {
+        lastModelByAgent: { [agentId]: nextBaseModelId },
+        ...(nextThinkingLevel ? { lastThinkingLevelByAgent: { [agentId]: nextThinkingLevel } } : {}),
+      }
+      void window.mdDesktop?.acp.updateSettings(settingsPatch)
+    }
+
+    if (session?.acpSessionId && session.agentId === agentId && nextBaseModelId && window.mdDesktop?.acp) {
       try {
-        await window.mdDesktop.acp.setModel({
+        const result = await window.mdDesktop.acp.setModel({
           sessionId: session.acpSessionId,
-          modelId,
+          modelId: nextBaseModelId,
+          thinkingLevel: nextThinkingLevel,
         })
+        session.modelId = result.modelId
+        session.thinkingLevel = result.thinkingLevel
+        if (result.modelId)
+          selectedModelByAgent.value[agentId] = result.modelId
+        if (result.thinkingLevel) {
+          selectedThinkingLevelByAgent.value[agentId] = result.thinkingLevel
+          settings.value = {
+            ...settings.value,
+            lastThinkingLevelByAgent: {
+              ...settings.value.lastThinkingLevelByAgent,
+              [agentId]: result.thinkingLevel,
+            },
+          }
+        }
       }
       catch (error) {
+        if (prevModelId !== undefined)
+          selectedModelByAgent.value = { ...selectedModelByAgent.value, [agentId]: prevModelId }
+        if (prevThinking !== undefined)
+          selectedThinkingLevelByAgent.value = { ...selectedThinkingLevelByAgent.value, [agentId]: prevThinking }
+        session.modelId = prevSessionModel ?? null
+        session.thinkingLevel = prevSessionThinking
         toast.error(error instanceof Error ? error.message : String(error))
       }
     }
+  }
+
+  async function setSessionThinkingLevel(level: string): Promise<void> {
+    const agent = selectedAgent.value
+    if (!agent)
+      return
+
+    const session = activeSession.value
+    const prevMapLevel = selectedThinkingLevelByAgent.value[agent.id]
+    const prevSettingsLevel = settings.value.lastThinkingLevelByAgent[agent.id]
+    const prevSessionLevel = session?.thinkingLevel
+
+    selectedThinkingLevelByAgent.value = {
+      ...selectedThinkingLevelByAgent.value,
+      [agent.id]: level,
+    }
+    settings.value = {
+      ...settings.value,
+      lastThinkingLevelByAgent: {
+        ...settings.value.lastThinkingLevelByAgent,
+        [agent.id]: level,
+      },
+    }
+    if (session && session.agentId === agent.id)
+      session.thinkingLevel = level
+
+    if (session?.acpSessionId && session.agentId === agent.id && window.mdDesktop?.acp) {
+      try {
+        const result = await window.mdDesktop.acp.setThinkingLevel({
+          sessionId: session.acpSessionId,
+          thinkingLevel: level,
+        })
+        session.thinkingLevel = result.thinkingLevel
+        if (result.thinkingLevel) {
+          selectedThinkingLevelByAgent.value = {
+            ...selectedThinkingLevelByAgent.value,
+            [agent.id]: result.thinkingLevel,
+          }
+          settings.value = {
+            ...settings.value,
+            lastThinkingLevelByAgent: {
+              ...settings.value.lastThinkingLevelByAgent,
+              [agent.id]: result.thinkingLevel,
+            },
+          }
+        }
+      }
+      catch (error) {
+        const restoredMap = { ...selectedThinkingLevelByAgent.value }
+        if (prevMapLevel !== undefined)
+          restoredMap[agent.id] = prevMapLevel
+        else
+          delete restoredMap[agent.id]
+        selectedThinkingLevelByAgent.value = restoredMap
+
+        const restoredSettings = { ...settings.value.lastThinkingLevelByAgent }
+        if (prevSettingsLevel !== undefined)
+          restoredSettings[agent.id] = prevSettingsLevel
+        else
+          delete restoredSettings[agent.id]
+        settings.value = {
+          ...settings.value,
+          lastThinkingLevelByAgent: restoredSettings,
+        }
+
+        if (session && session.agentId === agent.id)
+          session.thinkingLevel = prevSessionLevel
+        toast.error(error instanceof Error ? error.message : String(error))
+        return
+      }
+    }
+    else {
+      void window.mdDesktop?.acp.updateSettings({
+        lastThinkingLevelByAgent: { [agent.id]: level },
+      })
+    }
+
+    if (session)
+      void persistSessions()
   }
 
   async function setSessionPermissionMode(params: {
@@ -738,6 +987,7 @@ export const useAgentStore = defineStore(`agent`, () => {
       acpSessionId: null,
       agentId: selectedAgentId.value,
       modelId: selectedModel.value?.id ?? null,
+      thinkingLevel: selectedThinkingLevel.value,
       permissionLevel: draftPermissionLevel.value,
       modeId: draftModeId.value,
       postId: post?.id ?? ``,
@@ -754,6 +1004,8 @@ export const useAgentStore = defineStore(`agent`, () => {
     const current = activeSession.value
     if (current?.acpSessionId && window.mdDesktop?.acp)
       await window.mdDesktop.acp.closeSession(current.acpSessionId).catch(() => undefined)
+    // Detach activeSession first so the new draft resolves thinkingLevel from per-agent memory.
+    activeSessionId.value = null
     draftPermissionLevel.value = settings.value.defaultPermissionLevel
     draftModeId.value = null
     createSessionRecord()
@@ -769,6 +1021,8 @@ export const useAgentStore = defineStore(`agent`, () => {
       selectedAgentId.value = target.agentId
     if (target.modelId)
       selectedModelByAgent.value[target.agentId] = target.modelId
+    if (target.thinkingLevel)
+      selectedThinkingLevelByAgent.value[target.agentId] = target.thinkingLevel
   }
 
   async function deleteSession(id: string): Promise<void> {
@@ -832,6 +1086,7 @@ export const useAgentStore = defineStore(`agent`, () => {
         const started = await window.mdDesktop.acp.startSession({
           agentId: agent.id,
           modelId: selectedModel.value?.id ?? null,
+          thinkingLevel: selectedThinkingLevel.value,
           permissionLevel: session.permissionLevel ?? draftPermissionLevel.value,
           modeId: session.modeId ?? draftModeId.value,
           postId,
@@ -840,15 +1095,18 @@ export const useAgentStore = defineStore(`agent`, () => {
         })
         session.acpSessionId = started.sessionId
         session.modelId = started.modelId
+        session.thinkingLevel = started.thinkingLevel
         session.permissionLevel = started.permissionLevel
         session.modeId = started.currentModeId
-        if (started.models.length > 0 || started.modes.length > 0) {
+        if (started.models.length > 0 || started.modes.length > 0 || started.thinkingOptions.length > 0) {
           probeByAgent.value = {
             ...probeByAgent.value,
             [agent.id]: {
               agentId: agent.id,
               models: started.models.length > 0 ? started.models : (probeByAgent.value[agent.id]?.models ?? []),
               currentModelId: started.modelId ?? probeByAgent.value[agent.id]?.currentModelId ?? null,
+              thinkingOptions: started.thinkingOptions,
+              currentThinkingLevel: started.thinkingLevel,
               modes: started.modes.length > 0 ? started.modes : (probeByAgent.value[agent.id]?.modes ?? []),
               currentModeId: started.currentModeId ?? probeByAgent.value[agent.id]?.currentModeId ?? null,
               commands: started.commands.length > 0 ? started.commands : (probeByAgent.value[agent.id]?.commands ?? []),
@@ -856,8 +1114,23 @@ export const useAgentStore = defineStore(`agent`, () => {
             },
           }
         }
-        if (started.modelId)
+        if (started.modelId) {
           selectedModelByAgent.value[agent.id] = started.modelId
+          settings.value = {
+            ...settings.value,
+            lastModelByAgent: { ...settings.value.lastModelByAgent, [agent.id]: started.modelId },
+          }
+        }
+        if (started.thinkingLevel) {
+          selectedThinkingLevelByAgent.value[agent.id] = started.thinkingLevel
+          settings.value = {
+            ...settings.value,
+            lastThinkingLevelByAgent: {
+              ...settings.value.lastThinkingLevelByAgent,
+              [agent.id]: started.thinkingLevel,
+            },
+          }
+        }
       }
 
       await window.mdDesktop.acp.prompt({
@@ -980,8 +1253,11 @@ export const useAgentStore = defineStore(`agent`, () => {
     probingAgents,
     selectedAgentId,
     selectedModelByAgent,
+    selectedThinkingLevelByAgent,
     selectedAgent,
     selectedModel,
+    availableThinkingOptions,
+    selectedThinkingLevel,
     isPanelOpen,
     isSidebarOpen,
     layoutWidths,
@@ -1012,6 +1288,7 @@ export const useAgentStore = defineStore(`agent`, () => {
     detectAgents,
     probeAgent,
     selectAgentAndModel,
+    setSessionThinkingLevel,
     setSessionPermissionMode,
     startNewSession,
     switchSession,

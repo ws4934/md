@@ -63,7 +63,7 @@ onKeyStroke(`Escape`, () => {
 </script>
 
 <template>
-  <div ref="containerRef" class="relative inline-flex">
+  <div ref="containerRef" class="relative inline-flex shrink-0">
     <button
       type="button"
       data-testid="permission-mode-pill"

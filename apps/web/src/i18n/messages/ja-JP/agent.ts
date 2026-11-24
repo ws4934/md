@@ -34,6 +34,18 @@ export default {
       bypassTitle: `すべて自動許可`,
       bypassDesc: `すべての操作を確認なしで許可`,
     },
+    thinking: {
+      menuTitle: `思考レベル`,
+      levels: {
+        minimal: `最小`,
+        low: `低`,
+        medium: `中`,
+        high: `高`,
+        xhigh: `超高`,
+        max: `最大`,
+        ultra: `極限`,
+      },
+    },
     composer: {
       placeholder: `Agent に続けて指示…`,
       waitingPlaceholder: `確認待ち…`,

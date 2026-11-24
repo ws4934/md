@@ -3,6 +3,7 @@ import type { DesktopPickedFile } from '@md/shared/types'
 import { ArrowUp, Paperclip, X } from '@lucide/vue'
 import AgentModelPicker from './AgentModelPicker.vue'
 import AgentPermissionPicker from './AgentPermissionPicker.vue'
+import AgentThinkingPicker from './AgentThinkingPicker.vue'
 
 const props = withDefaults(defineProps<{
   running?: boolean
@@ -121,13 +122,14 @@ defineExpose({ focus })
     <div class="flex items-center justify-between gap-2">
       <div class="flex min-w-0 items-center gap-0.5">
         <AgentModelPicker :placement="menuPlacement" :disabled="disabled" />
+        <AgentThinkingPicker :placement="menuPlacement" :disabled="disabled" />
         <AgentPermissionPicker :placement="menuPlacement" :disabled="disabled" />
         <button
           type="button"
           :disabled="disabled"
           :title="t('agent.composer.attachFile')"
           :aria-label="t('agent.composer.attachFile')"
-          class="inline-flex size-7 cursor-pointer items-center justify-center rounded-lg transition-colors hover:opacity-80 disabled:opacity-40"
+          class="inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors hover:opacity-80 disabled:opacity-40"
           style="color: var(--dt-ink3)"
           @click="pickAttachments"
         >

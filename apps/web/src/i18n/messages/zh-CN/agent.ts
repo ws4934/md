@@ -34,6 +34,18 @@ export default {
       bypassTitle: `完全放行`,
       bypassDesc: `不再询问任何操作`,
     },
+    thinking: {
+      menuTitle: `思考深度`,
+      levels: {
+        minimal: `极简`,
+        low: `低`,
+        medium: `中`,
+        high: `高`,
+        xhigh: `超高`,
+        max: `极高`,
+        ultra: `极限`,
+      },
+    },
     composer: {
       placeholder: `让 Agent 继续…`,
       waitingPlaceholder: `等待确认…`,

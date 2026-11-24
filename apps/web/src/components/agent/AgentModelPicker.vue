@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AcpAgentStatus } from '@md/shared/types'
 import { Check, ChevronDown, ChevronRight, Loader2, Settings2 } from '@lucide/vue'
+import { parseVariantModelId } from '@md/shared/utils/acp-thinking'
 import { useAgentStore } from '@/stores/agent'
 import { useUIStore } from '@/stores/ui'
 import AgentAvatar from './AgentAvatar.vue'
@@ -53,10 +54,12 @@ const activeModelIdForSubmenu = computed(() => {
   const agent = activeSubmenuAgent.value
   if (!agent)
     return null
-  return agentStore.selectedModelByAgent[agent.id]
-    ?? probeByAgent.value[agent.id]?.currentModelId
+  const probe = probeByAgent.value[agent.id]
+  const raw = agentStore.selectedModelByAgent[agent.id]
+    ?? probe?.currentModelId
     ?? submenuModels.value[0]?.id
     ?? null
+  return parseVariantModelId(raw, probe?.models ?? []).baseModelId
 })
 
 const scheduleProbe = useDebounceFn((agentId: string) => {
@@ -129,24 +132,25 @@ onKeyStroke(`Escape`, () => {
 </script>
 
 <template>
-  <div ref="containerRef" class="relative inline-flex">
+  <div ref="containerRef" class="relative inline-flex min-w-0 shrink">
     <button
       type="button"
+      data-testid="agent-model-pill"
       :disabled="disabled"
-      class="inline-flex h-7 items-center gap-1.5 rounded-lg pl-1 pr-2 text-[12.5px] transition-colors disabled:opacity-50"
+      class="inline-flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-lg pl-1 pr-2 text-[12.5px] transition-colors disabled:opacity-50"
       :style="{
         backgroundColor: isOpen ? 'var(--dt-subtle)' : 'transparent',
         color: 'var(--dt-ink)',
       }"
       @click="toggleMenu"
     >
-      <AgentAvatar v-if="selectedAgent" :avatar="selectedAgent.avatar" :size="18" />
-      <span class="max-w-[96px] truncate font-medium">
+      <AgentAvatar v-if="selectedAgent" :avatar="selectedAgent.avatar" :size="18" class="shrink-0" />
+      <span class="min-w-0 max-w-[96px] truncate font-medium">
         {{ selectedAgent?.name ?? t('agent.composer.selectAgent') }}
       </span>
       <span
         v-if="selectedModel"
-        class="max-w-[74px] truncate"
+        class="min-w-0 max-w-[82px] truncate"
         style="color: var(--dt-ink3)"
       >
         · {{ selectedModel.name }}
@@ -172,6 +176,7 @@ onKeyStroke(`Escape`, () => {
           v-for="agent in agents"
           :key="agent.id"
           type="button"
+          :data-testid="`agent-option-${agent.id}`"
           class="flex h-[38px] w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors"
           :class="agent.installed ? 'cursor-pointer' : 'cursor-pointer opacity-55'"
           :style="{
@@ -239,6 +244,7 @@ onKeyStroke(`Escape`, () => {
             v-for="model in submenuModels"
             :key="model.id"
             type="button"
+            :data-testid="`model-option-${model.id}`"
             class="flex min-h-[42px] w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors"
             :style="{
               backgroundColor: activeModelIdForSubmenu === model.id && selectedAgent?.id === activeSubmenuAgent.id

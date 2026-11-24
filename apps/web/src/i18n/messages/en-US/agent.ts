@@ -34,6 +34,18 @@ export default {
       bypassTitle: `Bypass all`,
       bypassDesc: `Never ask for confirmation`,
     },
+    thinking: {
+      menuTitle: `Thinking level`,
+      levels: {
+        minimal: `Minimal`,
+        low: `Low`,
+        medium: `Medium`,
+        high: `High`,
+        xhigh: `XHigh`,
+        max: `Max`,
+        ultra: `Ultra`,
+      },
+    },
     composer: {
       placeholder: `Ask Agent to continue…`,
       waitingPlaceholder: `Waiting for confirmation…`,
