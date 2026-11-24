@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { initRenderer } from '../renderer/renderer-impl'
 import { MD_DIAGRAM_STATE, MD_DIAGRAM_STATE_ATTR } from '../utils/asyncDiagramState'
 import { renderMarkdown } from '../utils/markdownHelpers'
-import { clearMermaidCache } from './mermaid'
+import { clearMermaidCache, hydratePendingMermaidDiagrams } from './mermaid'
 
 const mermaid = vi.hoisted(() => {
   let release: (() => void) | undefined
@@ -102,5 +102,23 @@ describe(`mermaid extension`, () => {
     finally {
       errSpy.mockRestore()
     }
+  })
+
+  it(`hydrates a late-mounted mermaid placeholder from svgCache and serializes theme initialization`, async () => {
+    const md = `\`\`\`mermaid\ngraph TD\n  Late --> Mount\n\`\`\``
+    // Render before mounting into DOM: async mermaid.render finishes while no element is connected.
+    const loadingHtml = render(md)
+    await vi.waitFor(() => expect(mermaid.render).toHaveBeenCalledTimes(1))
+    mermaid.release()
+    await vi.waitFor(() => expect(render(md)).toContain(`viewBox="0 0 10 10"`))
+
+    const host = document.createElement(`div`)
+    host.innerHTML = loadingHtml
+    const placeholder = host.querySelector(`.mermaid-diagram`) as HTMLElement
+    expect(placeholder.getAttribute(MD_DIAGRAM_STATE_ATTR)).toBe(MD_DIAGRAM_STATE.loading)
+
+    hydratePendingMermaidDiagrams(placeholder)
+    expect(placeholder.getAttribute(MD_DIAGRAM_STATE_ATTR)).toBe(MD_DIAGRAM_STATE.ready)
+    expect(placeholder.querySelector(`svg`)).not.toBeNull()
   })
 })

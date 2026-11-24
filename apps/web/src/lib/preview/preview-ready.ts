@@ -1,4 +1,8 @@
-import { hydratePendingInfographicDiagrams } from '@md/core/extensions'
+import {
+  hydratePendingInfographicDiagrams,
+  hydratePendingMermaidDiagrams,
+  hydratePendingPlantUmlDiagrams,
+} from '@md/core/extensions'
 import {
   isAsyncDiagramPending,
   MD_DIAGRAM_STATE,
@@ -57,6 +61,8 @@ export async function waitForPreviewReady(
   const deadline = Date.now() + timeoutMs
 
   while (Date.now() < deadline) {
+    hydratePendingMermaidDiagrams(output)
+    hydratePendingPlantUmlDiagrams(output)
     hydratePendingInfographicDiagrams(output, infographicOptions)
 
     if (!isDiagramStillLoading(output) && !isMathStillLoading(output))
@@ -65,6 +71,8 @@ export async function waitForPreviewReady(
     await delay(PREVIEW_POLL_INTERVAL_MS)
   }
 
+  hydratePendingMermaidDiagrams(output)
+  hydratePendingPlantUmlDiagrams(output)
   hydratePendingInfographicDiagrams(output, infographicOptions)
   return !isDiagramStillLoading(output) && !isMathStillLoading(output)
 }

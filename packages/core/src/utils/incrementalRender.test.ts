@@ -506,9 +506,9 @@ describe(`renderMarkdownIncremental`, () => {
     expect(alertRefInc.fallbackReason).toBe(`link-ref-def`)
     expect(assembleRenderedBlocksHtml(alertRefInc.blocks)).toBe(alertRefFull.html)
 
-    // 3. Prose with mid-line `Escaped \[` or inline code `\[` must NOT trap subsequent paragraphs.
+    // 3a. Prose with unmatched `\[` or inline code `\[` or `[^0-9]+` stays incremental across all blocks.
     const proseWithLatexChars = [
-      `Escaped \\[ in prose stays inline.`,
+      `Escaped \\[ in prose stays inline, and regex \`[^0-9]+\` stays incremental.`,
       ``,
       `Inline code \`\\[\` also stays inline.`,
       ``,
@@ -520,7 +520,6 @@ describe(`renderMarkdownIncremental`, () => {
     ].join(`\n`)
     const split = splitMarkdownBlocks(proseWithLatexChars)
     expect(split.fallbackReason).toBeUndefined()
-    expect(split.blocks.length).toBeGreaterThan(1)
     expect(split.blocks).toHaveLength(5)
 
     renderer.reset(opts)
@@ -528,6 +527,26 @@ describe(`renderMarkdownIncremental`, () => {
     const proseFull = renderFullReference(proseWithLatexChars, opts)
     expect(proseInc.usedIncremental).toBe(true)
     expect(assembleRenderedBlocksHtml(proseInc.blocks)).toBe(proseFull.html)
+
+    // 3b. Mid-line `\[` or trailing `\[` after `\[...\]` WITH a later `\]` keeps exact parity with marked/MDKatex.
+    const pairedLatexAcrossBlankLines = [
+      `Prefix \\[ in prose before later close`,
+      ``,
+      `still inside latex \\]`,
+      ``,
+      `\\[a = 1\\] \\[`,
+      `b = 2`,
+      ``,
+      `c = 3`,
+      `\\]`,
+      ``,
+      `Trailing paragraph.`,
+    ].join(`\n`)
+    renderer.reset(opts)
+    const pairedInc = renderMarkdownIncremental(pairedLatexAcrossBlankLines, renderer, fp)
+    const pairedFull = renderFullReference(pairedLatexAcrossBlankLines, opts)
+    expect(pairedInc.usedIncremental).toBe(true)
+    expect(assembleRenderedBlocksHtml(pairedInc.blocks)).toBe(pairedFull.html)
   })
 
   it(`keeps [TOC] inside blockquotes, lists, and alert containers identical to full render`, () => {

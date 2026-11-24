@@ -24,6 +24,7 @@ type InfographicOptionsSource = InfographicOptions | (() => InfographicOptions |
 
 const svgCache = createSVGCache(50)
 const errorCache = createSVGCache(100)
+const MAX_PENDING_META = 100
 const pendingMeta = new Map<string, { code: string, options?: InfographicOptions }>()
 const inFlight = new Set<string>()
 
@@ -112,6 +113,7 @@ function findInfographicElements(cacheKey: string): HTMLElement[] {
 }
 
 function applySvgByCacheKey(cacheKey: string, svgHtml: string) {
+  pendingMeta.delete(cacheKey)
   findInfographicElements(cacheKey).forEach((el) => {
     el.innerHTML = svgHtml
     el.setAttribute(MD_DIAGRAM_STATE_ATTR, MD_DIAGRAM_STATE.ready)
@@ -121,6 +123,7 @@ function applySvgByCacheKey(cacheKey: string, svgHtml: string) {
 function showInfographicError(cacheKey: string, error: unknown, messages?: DiagramMessages) {
   const detail = error instanceof Error ? error.message : String(error)
   errorCache.set(cacheKey, detail)
+  pendingMeta.delete(cacheKey)
   const html = buildInfographicErrorHtml(detail, messages)
   findInfographicElements(cacheKey).forEach((el) => {
     el.innerHTML = html
@@ -190,8 +193,6 @@ async function renderInfographic(code: string, cacheKey: string, options?: Infog
   if (typeof window === `undefined`)
     return
 
-  pendingMeta.set(cacheKey, { code, options })
-
   const cached = svgCache.get(cacheKey)
   if (cached) {
     applySvgByCacheKey(cacheKey, cached)
@@ -200,6 +201,7 @@ async function renderInfographic(code: string, cacheKey: string, options?: Infog
 
   const cachedError = errorCache.get(cacheKey)
   if (cachedError !== undefined) {
+    pendingMeta.delete(cacheKey)
     const html = buildInfographicErrorHtml(cachedError, options?.diagramMessages)
     findInfographicElements(cacheKey).forEach((el) => {
       el.innerHTML = html
@@ -207,6 +209,16 @@ async function renderInfographic(code: string, cacheKey: string, options?: Infog
     })
     return
   }
+
+  if (pendingMeta.has(cacheKey)) {
+    pendingMeta.delete(cacheKey)
+  }
+  else if (pendingMeta.size >= MAX_PENDING_META) {
+    const oldest = pendingMeta.keys().next().value
+    if (oldest !== undefined)
+      pendingMeta.delete(oldest)
+  }
+  pendingMeta.set(cacheKey, { code, options })
 
   if (inFlight.has(cacheKey))
     return

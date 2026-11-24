@@ -40,7 +40,7 @@ async function hydratePreviewDiagrams(roots?: HTMLElement[]) {
   if (targets.length === 0)
     return
 
-  const [{ hljs }, { highlightPendingBlocks }, { hydratePendingInfographicDiagrams }] = await Promise.all([
+  const [{ hljs }, { highlightPendingBlocks }, { hydratePendingInfographicDiagrams, hydratePendingMermaidDiagrams, hydratePendingPlantUmlDiagrams }] = await Promise.all([
     import(`@md/core/renderer`),
     import(`@md/core/utils`),
     import(`@md/core/extensions`),
@@ -51,6 +51,8 @@ async function hydratePreviewDiagrams(roots?: HTMLElement[]) {
     if (!root.isConnected)
       continue
     highlightPendingBlocks(hljs, root)
+    hydratePendingMermaidDiagrams(root)
+    hydratePendingPlantUmlDiagrams(root)
     hydratePendingInfographicDiagrams(root, { themeMode })
   }
 }

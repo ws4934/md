@@ -43,6 +43,9 @@ function getMermaid() {
     initPromise = import('mermaid').then((m) => {
       m.default.initialize(getMermaidThemeConfig())
       return m.default
+    }).catch((error) => {
+      initPromise = null
+      throw error
     })
   }
   return initPromise
@@ -65,10 +68,11 @@ export function clearMermaidCache(): void {
 // start a second mermaid.render with the same element id; the two runs then measure
 // each other's temporary elements and cache an SVG without viewBox or size.
 const pendingRenders = new Map<string, Promise<string>>()
+let renderQueue: Promise<unknown> = Promise.resolve()
 
-function buildMermaidErrorHtml(detail: string): string {
-  const messages = getDiagramMessages()
-  return `<div style="color: red; padding: 10px; border: 1px solid red;">${formatDiagramMessage(messages.mermaidError, detail)}</div>`
+function buildMermaidErrorHtml(detail: string, messages?: DiagramMessages): string {
+  const resolved = messages ? resolveDiagramMessages(messages) : getDiagramMessages()
+  return `<div style="color: red; padding: 10px; border: 1px solid red;">${formatDiagramMessage(resolved.mermaidError, detail)}</div>`
 }
 
 async function renderMermaidSvg(code: string, themeMode?: DiagramThemeMode): Promise<string> {
@@ -79,16 +83,57 @@ async function renderMermaidSvg(code: string, themeMode?: DiagramThemeMode): Pro
 
   let pending = pendingRenders.get(cacheKey)
   if (!pending) {
-    pending = (async () => {
+    // Serialize initialize + render across the singleton mermaid instance so concurrent
+    // diagrams (or dark preview + light export) never overwrite each other's theme config.
+    const run = renderQueue.catch(() => undefined).then(async () => {
+      const stillCached = svgCache.get(cacheKey)
+      if (stillCached)
+        return stillCached
       const mermaid = await getMermaid()
       mermaid.initialize(getMermaidThemeConfig(themeMode))
       const result = await mermaid.render(`mermaid-svg-${cacheKey}`, code)
       svgCache.set(cacheKey, result.svg)
       return result.svg
-    })().finally(() => pendingRenders.delete(cacheKey))
+    })
+    renderQueue = run.catch(() => undefined)
+    pending = run.finally(() => pendingRenders.delete(cacheKey))
     pendingRenders.set(cacheKey, pending)
   }
   return pending
+}
+
+/** Populate newly mounted `.mermaid-diagram` placeholders if their async render settled before DOM mount. */
+export function hydratePendingMermaidDiagrams(root: ParentNode, diagramMessages?: DiagramMessages): void {
+  if (typeof window === `undefined`)
+    return
+
+  const targets: HTMLElement[] = []
+  if (root instanceof HTMLElement && root.matches(`.mermaid-diagram[data-mermaid-key]`))
+    targets.push(root)
+  root.querySelectorAll<HTMLElement>(`.mermaid-diagram[data-mermaid-key]`).forEach(el => targets.push(el))
+
+  targets.forEach((el) => {
+    if (el.querySelector(`svg`))
+      return
+    if (el.getAttribute(MD_DIAGRAM_STATE_ATTR) === MD_DIAGRAM_STATE.error)
+      return
+    const cacheKey = el.getAttribute(`data-mermaid-key`)
+    if (!cacheKey)
+      return
+
+    const cached = svgCache.get(cacheKey)
+    if (cached) {
+      el.innerHTML = cached
+      el.setAttribute(MD_DIAGRAM_STATE_ATTR, MD_DIAGRAM_STATE.ready)
+      return
+    }
+
+    const cachedError = errorCache.get(cacheKey)
+    if (cachedError !== undefined) {
+      el.innerHTML = buildMermaidErrorHtml(cachedError, diagramMessages)
+      el.setAttribute(MD_DIAGRAM_STATE_ATTR, MD_DIAGRAM_STATE.error)
+    }
+  })
 }
 
 function renderMermaid(code: string, cacheKey: string, themeMode?: DiagramThemeMode) {

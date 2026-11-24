@@ -8,6 +8,7 @@ import {
   diagramStateAttr,
   isSvgMarkup,
   MD_DIAGRAM_STATE,
+  MD_DIAGRAM_STATE_ATTR,
   resolveDiagramMessages,
 } from '../utils/asyncDiagramState'
 import { simpleHash } from '../utils/basicHelpers'
@@ -16,10 +17,12 @@ import { createSVGCache } from '../utils/svgCache'
 import { diagramCacheThemeSuffix, injectPlantUmlTheme } from './diagram-theme'
 
 const svgCache = createSVGCache(100)
-const pendingFetches = new Map<string, Promise<string>>()
+const pendingFetches = new Map<string, Promise<string | null>>()
 const ERROR_CACHE_TTL_MS = 30_000
 const MAX_ERROR_CACHE_ENTRIES = 100
-const errorCache = new Map<string, { html: string, expiresAt: number }>()
+const errorCache = new Map<string, number>()
+const PLANTUML_PLACEHOLDER_PREFIX = `plantuml-`
+let activeGetDiagramMessages: (() => DiagramMessages | undefined) | undefined
 
 /** Drop memoized PlantUML SVGs, transient errors, and in-flight fetches (exported for tests). */
 export function clearPlantUmlCache(): void {
@@ -28,18 +31,23 @@ export function clearPlantUmlCache(): void {
   pendingFetches.clear()
 }
 
-function readPlantUmlCachedError(cacheKey: string): string | null {
-  const entry = errorCache.get(cacheKey)
-  if (!entry)
-    return null
-  if (Date.now() > entry.expiresAt) {
-    errorCache.delete(cacheKey)
-    return null
-  }
-  return entry.html
+function buildPlantUmlErrorInnerHtml(messages?: DiagramMessages): string {
+  const resolved = resolveDiagramMessages(messages ?? activeGetDiagramMessages?.())
+  return `<div style="color: #666; font-style: italic;">${resolved.plantumlError}</div>`
 }
 
-function writePlantUmlCachedError(cacheKey: string, html: string): void {
+function hasPlantUmlCachedError(cacheKey: string): boolean {
+  const expiresAt = errorCache.get(cacheKey)
+  if (expiresAt === undefined)
+    return false
+  if (Date.now() > expiresAt) {
+    errorCache.delete(cacheKey)
+    return false
+  }
+  return true
+}
+
+function markPlantUmlCachedError(cacheKey: string): void {
   if (errorCache.has(cacheKey)) {
     errorCache.delete(cacheKey)
   }
@@ -48,7 +56,43 @@ function writePlantUmlCachedError(cacheKey: string, html: string): void {
     if (oldest !== undefined)
       errorCache.delete(oldest)
   }
-  errorCache.set(cacheKey, { html, expiresAt: Date.now() + ERROR_CACHE_TTL_MS })
+  errorCache.set(cacheKey, Date.now() + ERROR_CACHE_TTL_MS)
+}
+
+/** Populate newly mounted `.plantuml-diagram` placeholders if their fetch settled before DOM mount. */
+export function hydratePendingPlantUmlDiagrams(root: ParentNode, diagramMessages?: DiagramMessages): void {
+  if (typeof window === `undefined`)
+    return
+
+  const targets: HTMLElement[] = []
+  if (root instanceof HTMLElement && root.matches(`.plantuml-diagram[data-placeholder]`))
+    targets.push(root)
+  root.querySelectorAll<HTMLElement>(`.plantuml-diagram[data-placeholder]`).forEach(el => targets.push(el))
+
+  targets.forEach((el) => {
+    if (el.querySelector(`svg, img`))
+      return
+    if (el.getAttribute(MD_DIAGRAM_STATE_ATTR) === MD_DIAGRAM_STATE.error)
+      return
+    const placeholder = el.getAttribute(`data-placeholder`)
+    if (!placeholder?.startsWith(PLANTUML_PLACEHOLDER_PREFIX))
+      return
+    const cacheKey = placeholder.slice(PLANTUML_PLACEHOLDER_PREFIX.length)
+    if (!cacheKey)
+      return
+
+    const cached = svgCache.get(cacheKey)
+    if (cached) {
+      el.setAttribute(MD_DIAGRAM_STATE_ATTR, MD_DIAGRAM_STATE.ready)
+      el.innerHTML = `\n      ${cached}\n    `
+      return
+    }
+
+    if (hasPlantUmlCachedError(cacheKey)) {
+      el.setAttribute(MD_DIAGRAM_STATE_ATTR, MD_DIAGRAM_STATE.error)
+      el.innerHTML = `\n      ${buildPlantUmlErrorInnerHtml(diagramMessages)}\n    `
+    }
+  })
 }
 
 export interface PlantUMLOptions {
@@ -200,20 +244,23 @@ function renderPlantUMLDiagram(
   const imageUrl = generatePlantUMLUrl(finalCode, options)
 
   if (options.inlineSvg && options.format === `svg`) {
-    const placeholder = `plantuml-${cacheKey}`
+    const placeholder = `${PLANTUML_PLACEHOLDER_PREFIX}${cacheKey}`
 
     if (typeof window !== `undefined`) {
       let fetchPromise = pendingFetches.get(cacheKey)
       if (!fetchPromise) {
-        fetchPromise = fetchSvgContent(imageUrl, messages.plantumlError)
+        fetchPromise = fetchSvgContent(imageUrl)
           .finally(() => pendingFetches.delete(cacheKey))
         pendingFetches.set(cacheKey, fetchPromise)
       }
 
       void fetchPromise.then((svgContent) => {
-        const isError = !isSvgMarkup(svgContent)
+        const isError = !svgContent || !isSvgMarkup(svgContent)
+        const renderedContent = isError
+          ? buildPlantUmlErrorInnerHtml(options.getDiagramMessages?.())
+          : svgContent
         if (isError) {
-          writePlantUmlCachedError(cacheKey, svgContent)
+          markPlantUmlCachedError(cacheKey)
         }
         else {
           errorCache.delete(cacheKey)
@@ -224,10 +271,10 @@ function renderPlantUMLDiagram(
         // locate the container.
         document.querySelectorAll<HTMLElement>(`[data-placeholder="${placeholder}"]`).forEach((el) => {
           el.setAttribute(
-            `data-md-diagram-state`,
+            MD_DIAGRAM_STATE_ATTR,
             isError ? MD_DIAGRAM_STATE.error : MD_DIAGRAM_STATE.ready,
           )
-          el.innerHTML = `\n      ${svgContent}\n    `
+          el.innerHTML = `\n      ${renderedContent}\n    `
         })
       })
     }
@@ -246,7 +293,7 @@ function renderPlantUMLDiagram(
   return createPlantUMLHTML(imageUrl, options)
 }
 
-async function fetchSvgContent(svgUrl: string, errorMessage: string): Promise<string> {
+async function fetchSvgContent(svgUrl: string): Promise<string | null> {
   try {
     const response = await fetch(svgUrl)
     if (!response.ok) {
@@ -264,7 +311,7 @@ async function fetchSvgContent(svgUrl: string, errorMessage: string): Promise<st
   }
   catch (error) {
     console.warn(`Failed to fetch SVG content from ${svgUrl}:`, error)
-    return `<div style="color: #666; font-style: italic;">${errorMessage}</div>`
+    return null
   }
 }
 
@@ -294,12 +341,14 @@ function createPlantUMLHTML(
 
 /** PlantUML marked extension */
 export function markedPlantUML(options: PlantUMLOptions = {}): MarkedExtension {
+  activeGetDiagramMessages = options.getDiagramMessages
   const resolvedOptions: ResolvedPlantUMLOptions = {
     serverUrl: options.serverUrl || `https://www.plantuml.com/plantuml`,
     format: options.format || `svg`,
     className: options.className || `plantuml-diagram`,
     inlineSvg: options.inlineSvg || false,
     getDiagramMessages: options.getDiagramMessages,
+    getThemeMode: options.getThemeMode,
     styles: {
       container: {
         textAlign: `center`,
@@ -338,9 +387,13 @@ export function markedPlantUML(options: PlantUMLOptions = {}): MarkedExtension {
           if (cached)
             return cached
 
-          const cachedError = readPlantUmlCachedError(cacheKey)
-          if (cachedError)
-            return wrapPlantUmlSvgHtml(cachedError, resolvedOptions, true)
+          if (hasPlantUmlCachedError(cacheKey)) {
+            return wrapPlantUmlSvgHtml(
+              buildPlantUmlErrorInnerHtml(resolvedOptions.getDiagramMessages?.()),
+              resolvedOptions,
+              true,
+            )
+          }
 
           return renderPlantUMLDiagram(token, resolvedOptions, cacheKey)
         }),

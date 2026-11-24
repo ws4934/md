@@ -138,7 +138,6 @@ const LIST_ITEM_RE = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/
 const ALERT_OPEN_RE = /^:::[ \t]*\S+/
 const ALERT_CLOSE_RE = /^:::[ \t]*$/
 const MATH_DOLLAR_FENCE_RE = /^\s{0,3}(\${1,2})[ \t]*$/
-const LATEX_BLOCK_OPEN_RE = /^ {0,3}\\\[/
 const COMPONENT_OPEN_RE = /^<([A-Z]\w*)(?=[\s/>]|$)/
 const BLOCK_TOC_LINE_RE = /^(?:[ \t>]|[-*+][ \t]|\d{1,9}[.)][ \t])*\[TOC\][ \t]*$/
 const RAW_DANGEROUS_TAG_RE = /<(?:style|script|iframe|textarea|pre)(?=[\s>/]|$)/i
@@ -337,14 +336,16 @@ export function splitMarkdownBlocks(markdown: string): SplitBlocksResult {
 
     // Run document-scoped fallback checks on every non-fenced line, including
     // lines inside unclosed math/alert/component regions.
+    let strippedLine: string | undefined
+    const getStrippedLine = () => (strippedLine ??= stripInlineCodeSpans(line))
     if (!blank) {
-      if (line.includes(`[^`))
+      if (line.includes(`[^`) && getStrippedLine().includes(`[^`))
         return { blocks: [], fallbackReason: `footnotes` }
       if (LINK_REF_DEF_RE.test(line))
         return { blocks: [], fallbackReason: `link-ref-def` }
-      if (line.includes(`<`) && RAW_DANGEROUS_TAG_RE.test(stripInlineCodeSpans(line)))
+      if (line.includes(`<`) && RAW_DANGEROUS_TAG_RE.test(getStrippedLine()))
         return { blocks: [], fallbackReason: `raw-html-block` }
-      if (line.includes(`<!--`) && stripInlineCodeSpans(line).includes(`<!--`))
+      if (line.includes(`<!--`) && getStrippedLine().includes(`<!--`))
         return { blocks: [], fallbackReason: `raw-html-comment` }
     }
 
@@ -356,8 +357,12 @@ export function splitMarkdownBlocks(markdown: string): SplitBlocksResult {
     }
 
     if (inLatexBlock) {
-      if (line.includes(`\\]`))
-        inLatexBlock = false
+      if (line.includes(`\\]`)) {
+        const lastOpen = line.lastIndexOf(`\\[`)
+        const lastClose = line.lastIndexOf(`\\]`)
+        if (lastClose > lastOpen || !normalized.includes(`\\]`, lineStarts[i] + lastOpen + 2))
+          inLatexBlock = false
+      }
       continue
     }
 
@@ -429,8 +434,10 @@ export function splitMarkdownBlocks(markdown: string): SplitBlocksResult {
     }
 
     if (line.includes(`\\[`)) {
-      const stripped = stripInlineCodeSpans(line)
-      if (LATEX_BLOCK_OPEN_RE.test(stripped) && !stripped.includes(`\\]`, stripped.indexOf(`\\[`))) {
+      const lastOpen = line.lastIndexOf(`\\[`)
+      // Match katex.ts blockLatexKatex: `\[` (even mid-line or after an earlier `\[...\]`)
+      // spans across blank lines iff a closing `\]` exists later in the document.
+      if (lastOpen > line.lastIndexOf(`\\]`) && normalized.includes(`\\]`, lineStarts[i] + lastOpen + 2)) {
         inLatexBlock = true
         continue
       }

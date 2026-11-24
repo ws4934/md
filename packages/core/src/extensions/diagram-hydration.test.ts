@@ -4,7 +4,7 @@ import { MD_DIAGRAM_STATE, MD_DIAGRAM_STATE_ATTR } from '../utils/asyncDiagramSt
 import { highlightPendingBlocks } from '../utils/languages'
 import { renderMarkdown } from '../utils/markdownHelpers'
 import { clearInfographicCache, hydratePendingInfographicDiagrams } from './infographic'
-import { clearPlantUmlCache } from './plantuml'
+import { clearPlantUmlCache, hydratePendingPlantUmlDiagrams } from './plantuml'
 
 const infographicMock = vi.hoisted(() => {
   let failNext = false
@@ -83,6 +83,16 @@ describe(`diagram hydration, duplicate placeholders, and error caching`, () => {
       expect(el.getAttribute(`data-placeholder`)).toMatch(/^plantuml-/)
     }
     expect(fetchSpy).toHaveBeenCalledTimes(1)
+
+    // Late-mounted placeholder (e.g. remounted preview) hydrates synchronously from svgCache.
+    const lateEl = document.createElement(`div`)
+    lateEl.className = `plantuml-diagram`
+    lateEl.setAttribute(`data-placeholder`, placeholders[0].getAttribute(`data-placeholder`)!)
+    lateEl.setAttribute(MD_DIAGRAM_STATE_ATTR, MD_DIAGRAM_STATE.loading)
+    lateEl.textContent = `Loading...`
+    hydratePendingPlantUmlDiagrams(lateEl)
+    expect(lateEl.getAttribute(MD_DIAGRAM_STATE_ATTR)).toBe(MD_DIAGRAM_STATE.ready)
+    expect(lateEl.querySelector(`svg`)).not.toBeNull()
   })
 
   it(`caches failed PlantUML fetches briefly so unrelated re-renders do not re-fetch`, async () => {
@@ -99,10 +109,27 @@ describe(`diagram hydration, duplicate placeholders, and error caching`, () => {
     })
     expect(fetchSpy).toHaveBeenCalledTimes(1)
 
-    // Unrelated re-render within TTL serves cached error state without refetching.
-    const nextHtml = renderMarkdown(md, initRenderer({ themeMode: `light` })).html
+    // Unrelated re-render within TTL serves cached error state without refetching,
+    // while formatting with the active locale's diagramMessages.
+    const nextHtml = renderMarkdown(md, initRenderer({
+      themeMode: `light`,
+      diagramMessages: {
+        mermaidLoading: `...`,
+        mermaidError: `err`,
+        plantumlLoading: `...`,
+        plantumlError: `PlantUML 加载失败（切换语言后）`,
+        infographicLoading: `...`,
+        infographicError: `err`,
+      },
+    })).html
     expect(nextHtml).toContain(`${MD_DIAGRAM_STATE_ATTR}="${MD_DIAGRAM_STATE.error}"`)
+    expect(nextHtml).toContain(`PlantUML 加载失败（切换语言后）`)
     expect(fetchSpy).toHaveBeenCalledTimes(1)
+
+    // Dark themeMode must forward getThemeMode so dark/light URLs and caches do not collide.
+    renderMarkdown(md, initRenderer({ themeMode: `dark` }))
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(fetchSpy.mock.calls[1]?.[0]).not.toBe(fetchSpy.mock.calls[0]?.[0])
     warnSpy.mockRestore()
   })
 
