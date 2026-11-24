@@ -39,11 +39,22 @@ export interface AcpAgentStatus {
   installProgress?: AcpInstallProgress
 }
 
+export interface AcpThinkingOption {
+  id: string
+  name?: string
+  description?: string
+}
+
 export interface AcpModelInfo {
   id: string
   name: string
   description?: string
   isDefault?: boolean
+  /** Available thinking levels for this model when the agent exposes effort-suffixed model variants. */
+  thinkingOptions?: AcpThinkingOption[]
+  /** Maps a thinking level id to the raw ACP variant model id sent over `session/set_model`. */
+  thinkingVariantIds?: Record<string, string>
+  defaultThinkingLevel?: string
 }
 
 export interface AcpModeInfo {
@@ -62,6 +73,9 @@ export interface AcpProbeResult {
   agentId: string
   models: AcpModelInfo[]
   currentModelId: string | null
+  /** Session-level thinking options from a `thought_level` configOption when models are not variant-grouped. */
+  thinkingOptions?: AcpThinkingOption[]
+  currentThinkingLevel?: string | null
   modes: AcpModeInfo[]
   currentModeId: string | null
   commands: AcpSlashCommand[]
@@ -81,6 +95,7 @@ export interface AcpSettings {
   defaultAgentId: string
   defaultPermissionLevel: AcpPermissionLevel
   lastModelByAgent: Record<string, string>
+  lastThinkingLevelByAgent: Record<string, string>
   customAgents: AcpAgentConfig[]
   commandOverrides: Record<string, AcpCommandOverride>
 }
@@ -165,6 +180,7 @@ export type AcpHostEvent
     | { type: `permission_resolved`, sessionId: string, requestId: string, decision: AcpPermissionDecision | `cancelled` }
     | { type: `article_synced`, sessionId: string, postId: string, content: string }
     | { type: `model_changed`, sessionId: string, modelId: string | null }
+    | { type: `thinking_changed`, sessionId: string, thinkingLevel: string | null, thinkingOptions?: AcpThinkingOption[] }
     | { type: `mode_changed`, sessionId: string, modeId: string | null, permissionLevel?: AcpPermissionLevel }
     | { type: `commands_updated`, sessionId: string, commands: AcpSlashCommand[] }
     | { type: `install_progress`, agentId: string, percent: number, command: string, line: string, done?: boolean, error?: string }
@@ -173,6 +189,7 @@ export type AcpHostEvent
 export interface AcpStartSessionParams {
   agentId: string
   modelId?: string | null
+  thinkingLevel?: string | null
   permissionLevel?: AcpPermissionLevel
   modeId?: string | null
   postId: string
@@ -184,6 +201,8 @@ export interface AcpStartSessionResult {
   sessionId: string
   modelId: string | null
   models: AcpModelInfo[]
+  thinkingLevel: string | null
+  thinkingOptions: AcpThinkingOption[]
   modes: AcpModeInfo[]
   currentModeId: string | null
   permissionLevel: AcpPermissionLevel
@@ -211,7 +230,8 @@ export interface DesktopAcpApi {
   startSession: (params: AcpStartSessionParams) => Promise<AcpStartSessionResult>
   prompt: (params: AcpPromptParams) => Promise<{ stopReason?: string }>
   cancelTurn: (sessionId: string) => Promise<void>
-  setModel: (params: { sessionId: string, modelId: string }) => Promise<{ modelId: string | null }>
+  setModel: (params: { sessionId: string, modelId: string, thinkingLevel?: string | null }) => Promise<{ modelId: string | null, thinkingLevel: string | null }>
+  setThinkingLevel: (params: { sessionId: string, thinkingLevel: string }) => Promise<{ thinkingLevel: string | null, modelId: string | null }>
   setPermissionMode: (params: {
     sessionId: string
     permissionLevel?: AcpPermissionLevel

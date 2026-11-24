@@ -1,4 +1,5 @@
 export * from './acp-permissions'
+export * from './acp-thinking'
 export * from './basicHelpers'
 export * from './fetch'
 export * from './fileHelpers'

@@ -4,6 +4,7 @@ export const DEFAULT_ACP_SETTINGS: Readonly<AcpSettings> = {
   defaultAgentId: `claude`,
   defaultPermissionLevel: `ask`,
   lastModelByAgent: {},
+  lastThinkingLevelByAgent: {},
   customAgents: [],
   commandOverrides: {},
 }
@@ -13,6 +14,7 @@ export function createDefaultAcpSettings(): AcpSettings {
     defaultAgentId: DEFAULT_ACP_SETTINGS.defaultAgentId,
     defaultPermissionLevel: DEFAULT_ACP_SETTINGS.defaultPermissionLevel,
     lastModelByAgent: {},
+    lastThinkingLevelByAgent: {},
     customAgents: [],
     commandOverrides: {},
   }
