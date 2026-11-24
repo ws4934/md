@@ -274,7 +274,10 @@ export function highlightCodeBlock(codeBlock: Element, language: string, hljs: H
 
 /** Highlight code blocks marked with data-language-pending after loading their grammar. */
 export function highlightPendingBlocks(hljs: HLJSApi, container: Document | Element = document): void {
-  const pendingBlocks = container.querySelectorAll(`code[data-language-pending]`)
+  const pendingBlocks: Element[] = []
+  if (container instanceof Element && container.matches(`code[data-language-pending]`))
+    pendingBlocks.push(container)
+  container.querySelectorAll(`code[data-language-pending]`).forEach(el => pendingBlocks.push(el))
 
   pendingBlocks.forEach((codeBlock) => {
     const language = codeBlock.getAttribute(`data-language-pending`)

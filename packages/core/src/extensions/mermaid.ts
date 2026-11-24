@@ -53,11 +53,23 @@ function buildCacheKey(code: string, themeMode?: DiagramThemeMode): string {
 }
 
 const svgCache = createSVGCache(256)
+const errorCache = createSVGCache(100)
+
+/** Drop memoized Mermaid SVGs and errors (exported for tests). */
+export function clearMermaidCache(): void {
+  svgCache.clear()
+  errorCache.clear()
+}
 
 // A re-render while a diagram is still rendering (e.g. on `md:mathjax-ready`) would
 // start a second mermaid.render with the same element id; the two runs then measure
 // each other's temporary elements and cache an SVG without viewBox or size.
 const pendingRenders = new Map<string, Promise<string>>()
+
+function buildMermaidErrorHtml(detail: string): string {
+  const messages = getDiagramMessages()
+  return `<div style="color: red; padding: 10px; border: 1px solid red;">${formatDiagramMessage(messages.mermaidError, detail)}</div>`
+}
 
 async function renderMermaidSvg(code: string, themeMode?: DiagramThemeMode): Promise<string> {
   const cacheKey = buildCacheKey(code, themeMode)
@@ -79,29 +91,30 @@ async function renderMermaidSvg(code: string, themeMode?: DiagramThemeMode): Pro
   return pending
 }
 
-function renderMermaid(id: string, code: string, cacheKey: string, themeMode?: DiagramThemeMode) {
+function renderMermaid(code: string, cacheKey: string, themeMode?: DiagramThemeMode) {
   if (typeof window === `undefined`)
     return
+
+  const selector = `[data-mermaid-key="${cacheKey}"]`
 
   const handleResult = (svg: string) => {
     svgCache.set(cacheKey, svg)
 
-    const el = document.getElementById(id)
-    if (el) {
+    document.querySelectorAll<HTMLElement>(selector).forEach((el) => {
       el.innerHTML = svg
       el.setAttribute(MD_DIAGRAM_STATE_ATTR, MD_DIAGRAM_STATE.ready)
-    }
+    })
   }
 
   const handleError = (error: unknown) => {
-    console.error('Failed to render Mermaid:', error)
-    const el = document.getElementById(id)
-    if (el) {
-      const detail = error instanceof Error ? error.message : String(error)
-      const messages = getDiagramMessages()
-      el.innerHTML = `<div style="color: red; padding: 10px; border: 1px solid red;">${formatDiagramMessage(messages.mermaidError, detail)}</div>`
+    console.error(`Failed to render Mermaid:`, error)
+    const detail = error instanceof Error ? error.message : String(error)
+    errorCache.set(cacheKey, detail)
+    const errorHtml = buildMermaidErrorHtml(detail)
+    document.querySelectorAll<HTMLElement>(selector).forEach((el) => {
+      el.innerHTML = errorHtml
       el.setAttribute(MD_DIAGRAM_STATE_ATTR, MD_DIAGRAM_STATE.error)
-    }
+    })
   }
 
   void renderMermaidSvg(code, themeMode)
@@ -111,13 +124,13 @@ function renderMermaid(id: string, code: string, cacheKey: string, themeMode?: D
 
 export function markedMermaid(options?: MermaidOptionsSource): MarkedExtension {
   optionsSource = options
-  const className = 'mermaid-diagram'
+  const className = `mermaid-diagram`
 
   return {
     extensions: [
       {
-        name: 'mermaid',
-        level: 'block',
+        name: `mermaid`,
+        level: `block`,
         start(src: string) {
           return findAtLineStart(src, '```mermaid', blockScanLimit(src))
         },
@@ -125,7 +138,7 @@ export function markedMermaid(options?: MermaidOptionsSource): MarkedExtension {
           const match = /^```mermaid\r?\n([\s\S]*?)\r?\n```/.exec(src)
           if (match) {
             return {
-              type: 'mermaid',
+              type: `mermaid`,
               raw: match[0],
               text: match[1].trim(),
             }
@@ -142,11 +155,15 @@ export function markedMermaid(options?: MermaidOptionsSource): MarkedExtension {
             return `<!--mermaid-start--><div class="${className}">${cached}</div><!--mermaid-end-->`
           }
 
-          const id = `mermaid-${cacheKey}`
-          renderMermaid(id, code, cacheKey, themeMode)
+          const cachedError = errorCache.get(cacheKey)
+          if (cachedError !== undefined) {
+            return `<!--mermaid-start--><div class="${className}" ${diagramStateAttr(MD_DIAGRAM_STATE.error)}>${buildMermaidErrorHtml(cachedError)}</div><!--mermaid-end-->`
+          }
+
+          renderMermaid(code, cacheKey, themeMode)
 
           const messages = getDiagramMessages()
-          return `<!--mermaid-start--><div id="${id}" class="${className}" ${diagramStateAttr(MD_DIAGRAM_STATE.loading)}>${messages.mermaidLoading}</div><!--mermaid-end-->`
+          return `<!--mermaid-start--><div data-mermaid-key="${cacheKey}" class="${className}" ${diagramStateAttr(MD_DIAGRAM_STATE.loading)}>${messages.mermaidLoading}</div><!--mermaid-end-->`
         }),
       },
     ],

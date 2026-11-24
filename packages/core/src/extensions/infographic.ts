@@ -23,8 +23,17 @@ interface InfographicOptions {
 type InfographicOptionsSource = InfographicOptions | (() => InfographicOptions | undefined)
 
 const svgCache = createSVGCache(50)
+const errorCache = createSVGCache(100)
 const pendingMeta = new Map<string, { code: string, options?: InfographicOptions }>()
 const inFlight = new Set<string>()
+
+/** Drop memoized Infographic SVGs, errors, and pending metadata (exported for tests). */
+export function clearInfographicCache(): void {
+  svgCache.clear()
+  errorCache.clear()
+  pendingMeta.clear()
+  inFlight.clear()
+}
 
 const INFOGRAPHIC_FENCE = '```infographic'
 const RE_INFOGRAPHIC_BLOCK = /^```infographic\r?\n([\s\S]*?)\r?\n```/
@@ -92,23 +101,31 @@ function svgElementToHtml(svg: SVGElement | Node): string {
   return wrapper.innerHTML
 }
 
-function applySvgByCacheKey(cacheKey: string, svgHtml: string) {
-  const el = document.getElementById(`${INFOGRAPHIC_ID_PREFIX}${cacheKey}`)
-  if (el) {
-    el.innerHTML = svgHtml
-    el.setAttribute(MD_DIAGRAM_STATE_ATTR, MD_DIAGRAM_STATE.ready)
-  }
+function buildInfographicErrorHtml(detail: string, messages?: DiagramMessages): string {
+  const resolved = resolveDiagramMessages(messages)
+  return `<div style="color: red; padding: 10px; border: 1px solid red;">${formatDiagramMessage(resolved.infographicError, detail)}</div>`
 }
 
-function showInfographicError(containerId: string, error: unknown, messages?: DiagramMessages) {
-  const container = document.getElementById(containerId)
-  if (!container)
-    return
+function findInfographicElements(cacheKey: string): HTMLElement[] {
+  const selector = `[data-infographic-key="${cacheKey}"], #${INFOGRAPHIC_ID_PREFIX}${cacheKey}`
+  return Array.from(document.querySelectorAll<HTMLElement>(selector))
+}
 
+function applySvgByCacheKey(cacheKey: string, svgHtml: string) {
+  findInfographicElements(cacheKey).forEach((el) => {
+    el.innerHTML = svgHtml
+    el.setAttribute(MD_DIAGRAM_STATE_ATTR, MD_DIAGRAM_STATE.ready)
+  })
+}
+
+function showInfographicError(cacheKey: string, error: unknown, messages?: DiagramMessages) {
   const detail = error instanceof Error ? error.message : String(error)
-  const resolved = resolveDiagramMessages(messages)
-  container.innerHTML = `<div style="color: red; padding: 10px; border: 1px solid red;">${formatDiagramMessage(resolved.infographicError, detail)}</div>`
-  container.setAttribute(MD_DIAGRAM_STATE_ATTR, MD_DIAGRAM_STATE.error)
+  errorCache.set(cacheKey, detail)
+  const html = buildInfographicErrorHtml(detail, messages)
+  findInfographicElements(cacheKey).forEach((el) => {
+    el.innerHTML = html
+    el.setAttribute(MD_DIAGRAM_STATE_ATTR, MD_DIAGRAM_STATE.error)
+  })
 }
 
 async function renderInfographicSvgHtml(code: string, options?: InfographicOptions): Promise<string> {
@@ -169,7 +186,7 @@ async function renderInfographicSvgHtml(code: string, options?: InfographicOptio
   }
 }
 
-async function renderInfographic(containerId: string, code: string, cacheKey: string, options?: InfographicOptions) {
+async function renderInfographic(code: string, cacheKey: string, options?: InfographicOptions) {
   if (typeof window === `undefined`)
     return
 
@@ -178,6 +195,16 @@ async function renderInfographic(containerId: string, code: string, cacheKey: st
   const cached = svgCache.get(cacheKey)
   if (cached) {
     applySvgByCacheKey(cacheKey, cached)
+    return
+  }
+
+  const cachedError = errorCache.get(cacheKey)
+  if (cachedError !== undefined) {
+    const html = buildInfographicErrorHtml(cachedError, options?.diagramMessages)
+    findInfographicElements(cacheKey).forEach((el) => {
+      el.innerHTML = html
+      el.setAttribute(MD_DIAGRAM_STATE_ATTR, MD_DIAGRAM_STATE.error)
+    })
     return
   }
 
@@ -192,7 +219,7 @@ async function renderInfographic(containerId: string, code: string, cacheKey: st
   }
   catch (error) {
     console.error(`Failed to render Infographic:`, error)
-    showInfographicError(containerId, error, options?.diagramMessages)
+    showInfographicError(cacheKey, error, options?.diagramMessages)
   }
   finally {
     inFlight.delete(cacheKey)
@@ -204,27 +231,40 @@ export function hydratePendingInfographicDiagrams(root: ParentNode, options?: In
   if (typeof window === `undefined`)
     return
 
-  root.querySelectorAll<HTMLElement>(`.infographic-diagram`).forEach((el) => {
+  const targets: HTMLElement[] = []
+  if (root instanceof HTMLElement && root.matches(`.infographic-diagram`))
+    targets.push(root)
+  root.querySelectorAll<HTMLElement>(`.infographic-diagram`).forEach(el => targets.push(el))
+
+  targets.forEach((el) => {
     if (el.querySelector(`svg, img`))
       return
 
     if (el.getAttribute(MD_DIAGRAM_STATE_ATTR) === MD_DIAGRAM_STATE.error)
       return
 
-    const id = el.id
-    if (!id?.startsWith(INFOGRAPHIC_ID_PREFIX))
+    const keyAttr = el.getAttribute(`data-infographic-key`)
+    const cacheKey = keyAttr || (el.id?.startsWith(INFOGRAPHIC_ID_PREFIX) ? el.id.slice(INFOGRAPHIC_ID_PREFIX.length) : ``)
+    if (!cacheKey)
       return
 
-    const cacheKey = id.slice(INFOGRAPHIC_ID_PREFIX.length)
     const cached = svgCache.get(cacheKey)
     if (cached) {
       el.innerHTML = cached
+      el.setAttribute(MD_DIAGRAM_STATE_ATTR, MD_DIAGRAM_STATE.ready)
+      return
+    }
+
+    const cachedError = errorCache.get(cacheKey)
+    if (cachedError !== undefined) {
+      el.innerHTML = buildInfographicErrorHtml(cachedError, options?.diagramMessages)
+      el.setAttribute(MD_DIAGRAM_STATE_ATTR, MD_DIAGRAM_STATE.error)
       return
     }
 
     const meta = pendingMeta.get(cacheKey)
     if (meta)
-      void renderInfographic(id, meta.code, cacheKey, options ?? meta.options)
+      void renderInfographic(meta.code, cacheKey, options ?? meta.options)
   })
 }
 
@@ -259,11 +299,15 @@ export function markedInfographic(options?: InfographicOptionsSource): MarkedExt
             return `<!--infographic-start--><div class="${className}" style="width: 100%;">${cached}</div><!--infographic-end-->`
           }
 
-          const id = `${INFOGRAPHIC_ID_PREFIX}${cacheKey}`
-          void renderInfographic(id, code, cacheKey, currentOptions)
+          const cachedError = errorCache.get(cacheKey)
+          if (cachedError !== undefined) {
+            return `<!--infographic-start--><div class="${className}" style="width: 100%;" ${diagramStateAttr(MD_DIAGRAM_STATE.error)}>${buildInfographicErrorHtml(cachedError, currentOptions?.diagramMessages)}</div><!--infographic-end-->`
+          }
+
+          void renderInfographic(code, cacheKey, currentOptions)
 
           const messages = resolveDiagramMessages(currentOptions?.diagramMessages)
-          return `<!--infographic-start--><div id="${id}" class="${className}" style="width: 100%;" ${diagramStateAttr(MD_DIAGRAM_STATE.loading)}>${messages.infographicLoading}</div><!--infographic-end-->`
+          return `<!--infographic-start--><div data-infographic-key="${cacheKey}" class="${className}" style="width: 100%;" ${diagramStateAttr(MD_DIAGRAM_STATE.loading)}>${messages.infographicLoading}</div><!--infographic-end-->`
         }),
       },
     ],

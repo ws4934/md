@@ -1,6 +1,6 @@
 import type { RenderedBlock } from '@md/core/utils'
 import type { RendererAPI } from '@md/shared/types'
-import { assembleRenderedBlocksHtml, renderMarkdownIncremental } from '@md/core/utils'
+import { assembleRenderedBlocksHtml, isMathJaxReady, renderMarkdownIncremental } from '@md/core/utils'
 import { t } from '@/i18n/translate'
 import { resolveAssetUrl } from '@/services/emoji/urlResolver'
 import { useCustomComponentStore } from './customComponent'
@@ -41,6 +41,7 @@ export const useRenderStore = defineStore(`render`, () => {
   let renderer: RendererAPI | null = null
   let lastOptionsFingerprint = ``
   let lastContent = ``
+  let lastMathReady = false
   let initPromise: Promise<RendererAPI> | null = null
   let pendingRender: { content: string, options?: RenderOptions } | null = null
 
@@ -128,8 +129,14 @@ export const useRenderStore = defineStore(`render`, () => {
     const componentStore = useCustomComponentStore()
     const themeMode = options?.themeMode ?? (uiStore.isDark ? `dark` : `light`)
     const optionsFingerprint = buildOptionsFingerprint(themeMode, themeStore, componentStore)
+    const mathReady = isMathJaxReady()
 
-    if (!options?.force && content === lastContent && optionsFingerprint === lastOptionsFingerprint) {
+    if (
+      !options?.force
+      && content === lastContent
+      && optionsFingerprint === lastOptionsFingerprint
+      && mathReady === lastMathReady
+    ) {
       isDirty.value = false
       return
     }
@@ -167,6 +174,7 @@ export const useRenderStore = defineStore(`render`, () => {
 
     lastContent = content
     lastOptionsFingerprint = optionsFingerprint
+    lastMathReady = mathReady
     isDirty.value = false
   }
 
@@ -187,6 +195,7 @@ export const useRenderStore = defineStore(`render`, () => {
       renderer = initRenderer(options || {})
       lastOptionsFingerprint = ``
       lastContent = ``
+      lastMathReady = false
       return renderer
     }).catch((error) => {
       initPromise = null

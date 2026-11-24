@@ -15,7 +15,41 @@ import { blockScanLimit, findAtLineStart } from '../utils/scan'
 import { createSVGCache } from '../utils/svgCache'
 import { diagramCacheThemeSuffix, injectPlantUmlTheme } from './diagram-theme'
 
-const svgCache = createSVGCache(50)
+const svgCache = createSVGCache(100)
+const pendingFetches = new Map<string, Promise<string>>()
+const ERROR_CACHE_TTL_MS = 30_000
+const MAX_ERROR_CACHE_ENTRIES = 100
+const errorCache = new Map<string, { html: string, expiresAt: number }>()
+
+/** Drop memoized PlantUML SVGs, transient errors, and in-flight fetches (exported for tests). */
+export function clearPlantUmlCache(): void {
+  svgCache.clear()
+  errorCache.clear()
+  pendingFetches.clear()
+}
+
+function readPlantUmlCachedError(cacheKey: string): string | null {
+  const entry = errorCache.get(cacheKey)
+  if (!entry)
+    return null
+  if (Date.now() > entry.expiresAt) {
+    errorCache.delete(cacheKey)
+    return null
+  }
+  return entry.html
+}
+
+function writePlantUmlCachedError(cacheKey: string, html: string): void {
+  if (errorCache.has(cacheKey)) {
+    errorCache.delete(cacheKey)
+  }
+  else if (errorCache.size >= MAX_ERROR_CACHE_ENTRIES) {
+    const oldest = errorCache.keys().next().value
+    if (oldest !== undefined)
+      errorCache.delete(oldest)
+  }
+  errorCache.set(cacheKey, { html, expiresAt: Date.now() + ERROR_CACHE_TTL_MS })
+}
 
 export interface PlantUMLOptions {
   /** @default 'https://www.plantuml.com/plantuml' */
@@ -168,21 +202,35 @@ function renderPlantUMLDiagram(
   if (options.inlineSvg && options.format === `svg`) {
     const placeholder = `plantuml-${cacheKey}`
 
-    fetchSvgContent(imageUrl, messages.plantumlError).then((svgContent) => {
-      const placeholderElement = document.querySelector(`[data-placeholder="${placeholder}"]`) as HTMLElement
-      if (placeholderElement) {
-        const isError = !isSvgMarkup(svgContent)
-        if (!isError)
-          svgCache.set(cacheKey, svgContent)
-        // Mutate the placeholder in place so keyed DOM patching preserves element identity.
-        placeholderElement.removeAttribute(`data-placeholder`)
-        placeholderElement.setAttribute(
-          `data-md-diagram-state`,
-          isError ? MD_DIAGRAM_STATE.error : MD_DIAGRAM_STATE.ready,
-        )
-        placeholderElement.innerHTML = `\n      ${svgContent}\n    `
+    if (typeof window !== `undefined`) {
+      let fetchPromise = pendingFetches.get(cacheKey)
+      if (!fetchPromise) {
+        fetchPromise = fetchSvgContent(imageUrl, messages.plantumlError)
+          .finally(() => pendingFetches.delete(cacheKey))
+        pendingFetches.set(cacheKey, fetchPromise)
       }
-    })
+
+      void fetchPromise.then((svgContent) => {
+        const isError = !isSvgMarkup(svgContent)
+        if (isError) {
+          writePlantUmlCachedError(cacheKey, svgContent)
+        }
+        else {
+          errorCache.delete(cacheKey)
+          svgCache.set(cacheKey, svgContent)
+        }
+        // Keep data-placeholder intact and update all duplicates in place so
+        // keyed DOM patching preserves element identity and later retries still
+        // locate the container.
+        document.querySelectorAll<HTMLElement>(`[data-placeholder="${placeholder}"]`).forEach((el) => {
+          el.setAttribute(
+            `data-md-diagram-state`,
+            isError ? MD_DIAGRAM_STATE.error : MD_DIAGRAM_STATE.ready,
+          )
+          el.innerHTML = `\n      ${svgContent}\n    `
+        })
+      })
+    }
 
     const containerStyles = options.styles.container
       ? Object.entries(options.styles.container)
@@ -289,6 +337,10 @@ export function markedPlantUML(options: PlantUMLOptions = {}): MarkedExtension {
           const cached = readPlantUmlCachedHtml(cacheKey, resolvedOptions)
           if (cached)
             return cached
+
+          const cachedError = readPlantUmlCachedError(cacheKey)
+          if (cachedError)
+            return wrapPlantUmlSvgHtml(cachedError, resolvedOptions, true)
 
           return renderPlantUMLDiagram(token, resolvedOptions, cacheKey)
         }),

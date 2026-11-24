@@ -501,7 +501,7 @@ function createFormTextArea(dom: HTMLDivElement) {
 
 // --- Lifecycle ---
 function handleMathJaxReady() {
-  editorRefresh()
+  editorRefresh({ force: uiStore.viewMode !== `edit` })
 }
 
 async function preloadMathJaxIfNeeded(content: string) {
