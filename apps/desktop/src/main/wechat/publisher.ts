@@ -8,6 +8,7 @@ import type {
 } from '@md/shared/types'
 import { Buffer } from 'node:buffer'
 import crypto from 'node:crypto'
+import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { extractUploadableImageUrls, normalizeImageSource, rewriteHtmlImageSources } from '@md/shared/utils/wechat-html-images'
@@ -230,6 +231,7 @@ async function runWithConcurrency<T>(
 export class WeChatPublisher {
   private readonly fetchFn: typeof fetch
   private readonly readLocalFile: (filePath: string) => Promise<ImageBinary>
+  private readonly hasCustomLocalReader: boolean
   private readonly sleepFn: (ms: number) => Promise<void>
   private readonly resolveEgressIp: () => Promise<string | undefined>
   private readonly onProgress?: (event: WeChatPublishProgressEvent) => void
@@ -242,6 +244,7 @@ export class WeChatPublisher {
   constructor(options: WeChatPublisherOptions = {}) {
     this.fetchFn = options.fetchFn ?? fetch
     this.readLocalFile = options.readLocalFile ?? defaultReadLocalFile
+    this.hasCustomLocalReader = Boolean(options.readLocalFile)
     this.sleepFn = options.sleepFn ?? (ms => new Promise(resolve => setTimeout(resolve, ms)))
     this.resolveEgressIp = options.resolveEgressIp ?? (() => defaultResolveEgressIp(this.fetchFn))
     this.onProgress = options.onProgress
@@ -253,8 +256,16 @@ export class WeChatPublisher {
   /** Authorize a local image file explicitly picked by the user via the native picker. */
   allowLocalImagePath(filePath: string): void {
     const trimmed = filePath.trim()
-    if (trimmed)
-      this.allowedLocalPaths.add(path.resolve(trimmed))
+    if (!trimmed)
+      return
+    const resolved = path.resolve(trimmed)
+    try {
+      this.allowedLocalPaths.add(fsSync.realpathSync.native(resolved))
+    }
+    catch {
+      if (this.hasCustomLocalReader)
+        this.allowedLocalPaths.add(resolved)
+    }
   }
 
   private emitProgress(event: WeChatPublishProgressEvent): void {
@@ -383,10 +394,18 @@ export class WeChatPublisher {
     }
 
     const resolved = path.resolve(normalized)
-    if (!this.allowedLocalPaths.has(resolved))
+    let canonical = resolved
+    try {
+      canonical = await fs.realpath(resolved)
+    }
+    catch {
+      if (!this.hasCustomLocalReader)
+        throw new Error(`Local cover image must be selected through the image picker.`)
+    }
+    if (!this.allowedLocalPaths.has(canonical))
       throw new Error(`Local cover image must be selected through the image picker.`)
 
-    return this.readLocalFile(resolved)
+    return this.readLocalFile(canonical)
   }
 
   private buildMediaForm(binary: ImageBinary): FormData {

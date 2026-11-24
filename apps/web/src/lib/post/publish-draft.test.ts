@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { extractPublishDraft } from './publish-draft'
+import { extractPublishDraft, resolveAutoPublishCover } from './publish-draft'
 
 const ARTICLE_HTML = `
 <section class="container">
@@ -56,5 +56,13 @@ Body paragraph.
       </blockquote>
     `
     expect(extractPublishDraft(html).desc).toBe(`Only this remains.`)
+  })
+
+  it(`normalizes auto-extracted remote/data covers and filters out local/relative paths`, () => {
+    expect(resolveAutoPublishCover(`https://cdn.example/cover.png`)).toBe(`https://cdn.example/cover.png`)
+    expect(resolveAutoPublishCover(`//cdn.example/cover.png?a=1&amp;b=2`)).toBe(`https://cdn.example/cover.png?a=1&b=2`)
+    expect(resolveAutoPublishCover(`data:image/png;base64,iVBORw0KGgo=`)).toBe(`data:image/png;base64,iVBORw0KGgo=`)
+    expect(resolveAutoPublishCover(`./assets/hero.png`)).toBe(``)
+    expect(resolveAutoPublishCover(`/Users/alice/Desktop/private.png`)).toBe(``)
   })
 })

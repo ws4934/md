@@ -26,7 +26,7 @@ import { extractUploadableImageUrls } from '@md/shared/utils/wechat-html-images'
 import { useEditorRefresh } from '@/composables/useEditorRefresh'
 import { copyWeChatHtmlToClipboard } from '@/lib/agent/copy-wechat-html'
 import { delay } from '@/lib/delay'
-import { extractPublishDraft } from '@/lib/post/publish-draft'
+import { extractPublishDraft, resolveAutoPublishCover } from '@/lib/post/publish-draft'
 import { processClipboardContent } from '@/services/export'
 import { store } from '@/storage'
 import { useEditorStore } from '@/stores/editor'
@@ -83,6 +83,7 @@ const needOpenComment = ref(true)
 const coverSource = ref(``)
 const coverPreviewUrl = ref(``)
 const coverIsCustom = ref(false)
+const pickedCoverByPostId = new Map<string, { path: string, dataUrl: string }>()
 const contentImageCount = ref(0)
 
 const phase = ref<`idle` | `running` | `done`>(`idle`)
@@ -230,9 +231,19 @@ async function loadInitialState() {
   const lastAuthor = (await store.get(LAST_AUTHOR_KEY))?.trim() ?? ``
   author.value = lastAuthor || currentAccount.value?.name?.trim() || ``
 
-  coverSource.value = draft.thumb
-  coverPreviewUrl.value = draft.thumb
-  coverIsCustom.value = false
+  const postId = currentPost.value?.id ?? ``
+  const rememberedCover = postId ? pickedCoverByPostId.get(postId) : undefined
+  if (rememberedCover) {
+    coverSource.value = rememberedCover.path
+    coverPreviewUrl.value = rememberedCover.dataUrl
+    coverIsCustom.value = true
+  }
+  else {
+    const autoCover = resolveAutoPublishCover(draft.thumb)
+    coverSource.value = autoCover
+    coverPreviewUrl.value = autoCover
+    coverIsCustom.value = false
+  }
   contentImageCount.value = extractUploadableImageUrls(html).length
 
   phase.value = `idle`
@@ -280,6 +291,9 @@ async function pickCoverImage() {
   coverSource.value = picked.path
   coverPreviewUrl.value = picked.dataUrl
   coverIsCustom.value = true
+  const postId = currentPost.value?.id
+  if (postId)
+    pickedCoverByPostId.set(postId, { path: picked.path, dataUrl: picked.dataUrl })
 }
 
 function handleProgressEvent(event: WeChatPublishProgressEvent) {

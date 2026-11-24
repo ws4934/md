@@ -1,4 +1,7 @@
 import type { WeChatPublishProgressEvent } from '@md/shared/types'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import {
   extractUploadableImageUrls,
   isWeChatHostedImage,
@@ -449,5 +452,34 @@ describe(`weChatPublisher state machine`, () => {
     expect(blockedResult.ok).toBe(false)
     expect(blockedResult.error).toMatch(/image picker/i)
     expect(readLocalFile).not.toHaveBeenCalled()
+
+    // Symlink swap check: replacing an allowed path with a symlink to another file must be rejected.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `md-wechat-symlink-`))
+    try {
+      const pickedFile = path.join(tmpDir, `picked.png`)
+      const secretFile = path.join(tmpDir, `secret.png`)
+      await fs.writeFile(pickedFile, new Uint8Array([0x89, 0x50, 0x4E, 0x47, 1]))
+      await fs.writeFile(secretFile, new Uint8Array([0x89, 0x50, 0x4E, 0x47, 9]))
+
+      const realPublisher = new WeChatPublisher({ fetchFn: mockFetch })
+      realPublisher.allowLocalImagePath(pickedFile)
+
+      await fs.unlink(pickedFile)
+      await fs.symlink(secretFile, pickedFile)
+
+      const swappedResult = await realPublisher.publish({
+        credentials: { appID: `wx_proto`, appsecret: `sec_proto` },
+        mode: `draft`,
+        title: `Symlink Swapped Cover`,
+        contentHtml: `<p>Body</p>`,
+        coverSource: pickedFile,
+        needOpenComment: false,
+      })
+      expect(swappedResult.ok).toBe(false)
+      expect(swappedResult.error).toMatch(/image picker/i)
+    }
+    finally {
+      await fs.rm(tmpDir, { recursive: true, force: true })
+    }
   })
 })

@@ -1,9 +1,22 @@
 import { parseFrontMatter } from '@md/core/utils'
+import { normalizeImageSource } from '@md/shared/utils/wechat-html-images'
 
 export interface PublishDraftFields {
   title: string
   desc: string
   thumb: string
+}
+
+/**
+ * Normalizes an auto-extracted cover source (`https?://`, `//`, or `data:image/`),
+ * filtering out relative or local filesystem paths that cannot render in `<img src>`
+ * or upload without explicit user selection via the native file picker.
+ */
+export function resolveAutoPublishCover(rawThumb: string): string {
+  const normalized = normalizeImageSource(rawThumb)
+  if (/^https?:\/\//i.test(normalized) || /^data:image\//i.test(normalized))
+    return normalized
+  return ``
 }
 
 const HEADING_SELECTOR = `h1, h2, h3, h4, h5, h6`
