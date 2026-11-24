@@ -57,7 +57,7 @@ const MODE_ID_ALIASES: Record<AcpPermissionLevel, readonly string[]> = {
   ask: [`default`, `ask`, `prompt`, `normal`, `standard`, `suggest`, `code`, `write`],
   auto_edits: [`acceptedits`, `accept_edits`, `accept-edits`, `autoedits`, `auto_edits`, `auto-edits`, `autoedit`, `auto_edit`, `auto-edit`, `edit`],
   plan: [`plan`, `planmode`, `plan_mode`, `plan-mode`, `architect`, `readonly`, `read_only`, `read-only`],
-  bypass: [`bypasspermissions`, `bypass_permissions`, `bypass-permissions`, `bypass`, `dontask`, `dont_ask`, `dont-ask`, `yolo`, `fullauto`, `full_auto`, `full-auto`, `auto`],
+  bypass: [`bypasspermissions`, `bypass_permissions`, `bypass-permissions`, `bypass`, `dontask`, `dont_ask`, `dont-ask`, `yolo`, `fullauto`, `full_auto`, `full-auto`, `fullaccess`, `full_access`, `full-access`],
 }
 
 export function isAcpPermissionLevel(value: unknown): value is AcpPermissionLevel {
