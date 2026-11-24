@@ -22,6 +22,7 @@ import {
   Send,
   X,
 } from '@lucide/vue'
+import { extractUploadableImageUrls } from '@md/shared/utils/wechat-html-images'
 import { useEditorRefresh } from '@/composables/useEditorRefresh'
 import { delay } from '@/lib/delay'
 import { extractPublishDraft } from '@/lib/post/publish-draft'
@@ -206,34 +207,6 @@ function stepStatus(stageId: WeChatPublishStage): `done` | `active` | `pending` 
   return `pending`
 }
 
-function countExternalContentImages(html: string): number {
-  if (!html.trim() || typeof DOMParser === `undefined`)
-    return 0
-  const body = new DOMParser().parseFromString(html, `text/html`).body
-  const unique = new Set<string>()
-  for (const img of body.querySelectorAll(`img`)) {
-    const raw = img.getAttribute(`src`)?.trim() ?? ``
-    if (!raw || raw === `about:blank` || raw.startsWith(`asset:`) || raw.startsWith(`blob:`))
-      continue
-    const normalized = raw.startsWith(`//`) ? `https:${raw}` : raw
-    if (/^https?:\/\//i.test(normalized)) {
-      try {
-        const host = new URL(normalized).hostname.toLowerCase()
-        if (host === `mmbiz.qpic.cn` || host.endsWith(`.mmbiz.qpic.cn`))
-          continue
-      }
-      catch {
-        continue
-      }
-      unique.add(normalized)
-    }
-    else if (/^data:image\//i.test(normalized)) {
-      unique.add(normalized)
-    }
-  }
-  return unique.size
-}
-
 async function loadInitialState() {
   const saved = await store.getJSON<Partial<WeChatMpCredentials>>(MP_CONFIG_KEY, {})
   mpCredentials.value = {
@@ -259,7 +232,7 @@ async function loadInitialState() {
   coverSource.value = draft.thumb
   coverPreviewUrl.value = draft.thumb
   coverIsCustom.value = false
-  contentImageCount.value = countExternalContentImages(html)
+  contentImageCount.value = extractUploadableImageUrls(html).length
 
   phase.value = `idle`
   confirmingPublish.value = false

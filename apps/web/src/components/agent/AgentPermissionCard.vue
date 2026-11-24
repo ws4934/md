@@ -2,6 +2,7 @@
 import type { AcpPermissionDecision, AcpPermissionRequest } from '@md/shared/types'
 import { FilePenLine, ShieldAlert, Terminal } from '@lucide/vue'
 import { buildUnifiedDiff, formatShortFilePath } from '@/lib/agent/unified-diff'
+import AgentDiffLines from './AgentDiffLines.vue'
 
 const props = defineProps<{
   request: AcpPermissionRequest
@@ -120,45 +121,7 @@ const resolvedLabel = computed(() => {
           {{ shortPath }}
         </span>
       </div>
-      <div
-        class="max-h-[200px] overflow-auto py-1 text-[11.5px] leading-[19px]"
-        style="font-family: var(--dt-mono)"
-      >
-        <div
-          v-for="(line, idx) in diff.lines"
-          :key="idx"
-          class="flex items-start gap-2 px-2.5 py-px"
-          :style="{
-            backgroundColor: line.kind === 'add'
-              ? 'var(--dt-green-soft)'
-              : line.kind === 'remove'
-                ? 'var(--dt-red-soft)'
-                : 'transparent',
-          }"
-        >
-          <span
-            class="w-2.5 shrink-0 select-none"
-            :style="{
-              color: line.kind === 'add'
-                ? 'var(--dt-green)'
-                : line.kind === 'remove'
-                  ? 'var(--dt-red)'
-                  : 'var(--dt-ink3)',
-            }"
-          >
-            {{ line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : line.kind === 'ellipsis' ? '' : ' ' }}
-          </span>
-          <span
-            class="min-w-0 flex-1 whitespace-pre-wrap break-all"
-            :class="line.kind === 'remove' ? 'line-through' : ''"
-            :style="{
-              color: line.kind === 'remove' || line.kind === 'ellipsis'
-                ? 'var(--dt-ink3)'
-                : 'var(--dt-ink)',
-            }"
-          >{{ line.text || ' ' }}</span>
-        </div>
-      </div>
+      <AgentDiffLines :lines="diff.lines" max-height-class="max-h-[200px]" />
     </div>
 
     <!-- Command / detail box for non-diff permissions -->

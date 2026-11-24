@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AcpPermissionLevel } from '@md/shared/types'
-import { Check, NotebookPen, Shield, ShieldCheck, ShieldOff, SlidersHorizontal } from '@lucide/vue'
+import { Check, SlidersHorizontal } from '@lucide/vue'
+import { useAcpPermissionOptions } from '@/lib/agent/permission-options'
 import { useAgentStore } from '@/stores/agent'
 
 const props = withDefaults(defineProps<{
@@ -23,46 +24,7 @@ const {
 const isOpen = ref(false)
 const containerRef = ref<HTMLElement | null>(null)
 
-interface PermissionOptionItem {
-  id: AcpPermissionLevel
-  icon: typeof Shield
-  shortLabel: string
-  title: string
-  desc: string
-  danger?: boolean
-}
-
-const permissionOptions = computed<PermissionOptionItem[]>(() => [
-  {
-    id: `ask`,
-    icon: Shield,
-    shortLabel: t(`agent.permissionMode.shortAsk`),
-    title: t(`agent.permissionMode.askTitle`),
-    desc: t(`agent.permissionMode.askDesc`),
-  },
-  {
-    id: `auto_edits`,
-    icon: ShieldCheck,
-    shortLabel: t(`agent.permissionMode.shortAutoEdits`),
-    title: t(`agent.permissionMode.autoEditsTitle`),
-    desc: t(`agent.permissionMode.autoEditsDesc`),
-  },
-  {
-    id: `plan`,
-    icon: NotebookPen,
-    shortLabel: t(`agent.permissionMode.shortPlan`),
-    title: t(`agent.permissionMode.planTitle`),
-    desc: t(`agent.permissionMode.planDesc`),
-  },
-  {
-    id: `bypass`,
-    icon: ShieldOff,
-    shortLabel: t(`agent.permissionMode.shortBypass`),
-    title: t(`agent.permissionMode.bypassTitle`),
-    desc: t(`agent.permissionMode.bypassDesc`),
-    danger: true,
-  },
-])
+const permissionOptions = useAcpPermissionOptions(t)
 
 const activeOption = computed(() =>
   permissionOptions.value.find(o => o.id === currentPermissionLevel.value) ?? permissionOptions.value[0],
@@ -89,27 +51,14 @@ function selectCustomMode(modeId: string) {
   void agentStore.setSessionPermissionMode({ modeId })
 }
 
-function onClickOutside(event: MouseEvent) {
-  if (!isOpen.value)
-    return
-  const target = event.target as Node | null
-  if (containerRef.value && target && !containerRef.value.contains(target))
+onClickOutside(containerRef, () => {
+  if (isOpen.value)
     isOpen.value = false
-}
-
-function onKeydown(event: KeyboardEvent) {
-  if (isOpen.value && event.key === `Escape`)
-    isOpen.value = false
-}
-
-onMounted(() => {
-  document.addEventListener(`mousedown`, onClickOutside)
-  document.addEventListener(`keydown`, onKeydown)
 })
 
-onUnmounted(() => {
-  document.removeEventListener(`mousedown`, onClickOutside)
-  document.removeEventListener(`keydown`, onKeydown)
+onKeyStroke(`Escape`, () => {
+  if (isOpen.value)
+    isOpen.value = false
 })
 </script>
 

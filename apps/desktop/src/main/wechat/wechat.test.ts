@@ -353,4 +353,48 @@ describe(`weChatPublisher state machine`, () => {
     expect(result.error).not.toContain(secret)
     expect(JSON.stringify(events)).not.toContain(secret)
   })
+
+  it(`reuses cached stable_token across uploadImage and publish`, async () => {
+    let tokenCalls = 0
+    const endpoints: string[] = []
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === `string` ? input : input instanceof URL ? input.toString() : input.url
+      endpoints.push(url)
+      if (url.endsWith(`/cgi-bin/stable_token`)) {
+        tokenCalls++
+        return jsonResponse({ access_token: `shared_tok`, expires_in: 7200 })
+      }
+      if (url.includes(`/cgi-bin/media/uploadimg`))
+        return jsonResponse({ url: `http://mmbiz.qpic.cn/mmbiz_png/shared/0` })
+      if (url.includes(`/cgi-bin/material/add_material`))
+        return jsonResponse({ media_id: `cover_1`, url: `http://mmbiz.qpic.cn/mmbiz_png/cover/0` })
+      if (url.includes(`/cgi-bin/draft/add`))
+        return jsonResponse({ media_id: `draft_1` })
+      return jsonResponse({ errcode: 500, errmsg: `unexpected` }, 500)
+    }) as unknown as typeof fetch
+
+    const publisher = new WeChatPublisher({ fetchFn: mockFetch })
+    const credentials = { appID: `wx_shared`, appsecret: `sec_shared` }
+
+    const uploaded = await publisher.uploadImage({
+      credentials,
+      dataUrl: `data:image/png;base64,iVBORw0KGgo=`,
+      filename: `pic.png`,
+      mimeType: `image/png`,
+      byteSize: 128,
+    })
+    expect(uploaded).toEqual({ ok: true, url: `http://mmbiz.qpic.cn/mmbiz_png/shared/0` })
+
+    const published = await publisher.publish({
+      credentials,
+      mode: `draft`,
+      title: `Reuse Token`,
+      contentHtml: `<p>Hello</p>`,
+      coverSource: `data:image/png;base64,iVBORw0KGgo=`,
+      needOpenComment: false,
+    })
+    expect(published.ok).toBe(true)
+    expect(tokenCalls).toBe(1)
+    expect(endpoints.some(u => u.includes(`/cgi-bin/media/uploadimg`))).toBe(true)
+  })
 })

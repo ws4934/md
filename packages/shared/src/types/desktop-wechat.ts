@@ -72,7 +72,23 @@ export interface DesktopPickedImage {
   dataUrl: string
 }
 
+export interface WeChatUploadImageRequest {
+  credentials: WeChatMpCredentials
+  dataUrl: string
+  filename: string
+  mimeType: string
+  byteSize: number
+}
+
+export interface WeChatUploadImageResult {
+  ok: boolean
+  url?: string
+  errcode?: number
+  error?: string
+}
+
 export interface DesktopWeChatApi {
   publish: (request: WeChatPublishRequest) => Promise<WeChatPublishResult>
+  uploadImage: (request: WeChatUploadImageRequest) => Promise<WeChatUploadImageResult>
   onProgress: (listener: (event: WeChatPublishProgressEvent) => void) => () => void
 }

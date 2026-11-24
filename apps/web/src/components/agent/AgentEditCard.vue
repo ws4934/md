@@ -2,6 +2,7 @@
 import type { AcpToolCallItem } from '@md/shared/types'
 import { Check, ChevronDown, ChevronRight, LoaderCircle, PencilLine, X } from '@lucide/vue'
 import { formatShortFilePath, getDiffLines, getDiffStats } from '@/lib/agent/unified-diff'
+import AgentDiffLines from './AgentDiffLines.vue'
 
 const props = defineProps<{
   tool: AcpToolCallItem
@@ -94,47 +95,12 @@ const displayPath = computed(() =>
 
     <div
       v-if="expanded && stats.hasChanges"
-      class="max-h-[240px] overflow-auto py-1.5 text-[11.5px] leading-[19px]"
       style="
         background-color: var(--dt-surface);
         border-top: 1px solid var(--dt-line);
-        font-family: var(--dt-mono);
       "
     >
-      <div
-        v-for="(line, idx) in diffLines"
-        :key="idx"
-        class="flex items-start gap-2 px-2.5 py-px"
-        :style="{
-          backgroundColor: line.kind === 'add'
-            ? 'var(--dt-green-soft)'
-            : line.kind === 'remove'
-              ? 'var(--dt-red-soft)'
-              : 'transparent',
-        }"
-      >
-        <span
-          class="w-2.5 shrink-0 select-none"
-          :style="{
-            color: line.kind === 'add'
-              ? 'var(--dt-green)'
-              : line.kind === 'remove'
-                ? 'var(--dt-red)'
-                : 'var(--dt-ink3)',
-          }"
-        >
-          {{ line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : line.kind === 'ellipsis' ? '' : ' ' }}
-        </span>
-        <span
-          class="min-w-0 flex-1 whitespace-pre-wrap break-all"
-          :class="line.kind === 'remove' ? 'line-through' : ''"
-          :style="{
-            color: line.kind === 'remove' || line.kind === 'ellipsis'
-              ? 'var(--dt-ink3)'
-              : 'var(--dt-ink)',
-          }"
-        >{{ line.text || ' ' }}</span>
-      </div>
+      <AgentDiffLines :lines="diffLines" max-height-class="max-h-[240px]" />
     </div>
 
     <div

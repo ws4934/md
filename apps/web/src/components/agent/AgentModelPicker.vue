@@ -117,27 +117,14 @@ function openManageAgents() {
   uiStore.openPreferencesDialog(`agents`)
 }
 
-function onClickOutside(event: MouseEvent) {
-  if (!isOpen.value)
-    return
-  const target = event.target as Node | null
-  if (containerRef.value && target && !containerRef.value.contains(target))
+onClickOutside(containerRef, () => {
+  if (isOpen.value)
     closeMenu()
-}
-
-function onKeydown(event: KeyboardEvent) {
-  if (isOpen.value && event.key === `Escape`)
-    closeMenu()
-}
-
-onMounted(() => {
-  document.addEventListener(`mousedown`, onClickOutside)
-  document.addEventListener(`keydown`, onKeydown)
 })
 
-onUnmounted(() => {
-  document.removeEventListener(`mousedown`, onClickOutside)
-  document.removeEventListener(`keydown`, onKeydown)
+onKeyStroke(`Escape`, () => {
+  if (isOpen.value)
+    closeMenu()
 })
 </script>
 

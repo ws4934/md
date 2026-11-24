@@ -4,6 +4,7 @@ export const IPC_CHANNELS = {
   OPEN_EXTERNAL: `md:shell:open-external`,
   SET_LOCALE: `md:app:set-locale`,
   WECHAT_PUBLISH: `md:wechat:publish`,
+  WECHAT_UPLOAD_IMAGE: `md:wechat:upload-image`,
   WECHAT_PUBLISH_PROGRESS: `md:wechat:publish-progress`,
   ACP_LIST_AGENTS: `md:acp:list-agents`,
   ACP_DETECT_AGENTS: `md:acp:detect-agents`,

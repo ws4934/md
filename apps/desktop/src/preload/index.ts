@@ -7,6 +7,7 @@ import type {
   DesktopBridge,
   WeChatPublishProgressEvent,
   WeChatPublishRequest,
+  WeChatUploadImageRequest,
 } from '@md/shared/types'
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC_CHANNELS } from '../shared/ipc-channels'
@@ -25,6 +26,8 @@ const desktopBridge: DesktopBridge = {
   wechat: {
     publish: (request: WeChatPublishRequest) =>
       ipcRenderer.invoke(IPC_CHANNELS.WECHAT_PUBLISH, request),
+    uploadImage: (request: WeChatUploadImageRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.WECHAT_UPLOAD_IMAGE, request),
     onProgress: (listener: (event: WeChatPublishProgressEvent) => void) => {
       const handler = (_ipcEvent: Electron.IpcRendererEvent, payload: WeChatPublishProgressEvent) => {
         listener(payload)

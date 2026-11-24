@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { AcpAgentStatus, AcpPermissionLevel } from '@md/shared/types'
-import { Check, ChevronDown, Download, NotebookPen, Plus, RefreshCw, Shield, ShieldCheck, ShieldOff, Trash2 } from '@lucide/vue'
+import { Check, ChevronDown, Download, Plus, RefreshCw, Trash2 } from '@lucide/vue'
 import { formatCliArgs, parseCliArgs } from '@md/shared/utils/cli-args'
+import { useAcpPermissionOptions } from '@/lib/agent/permission-options'
 import { useAgentStore } from '@/stores/agent'
 import AgentAvatar from './AgentAvatar.vue'
 
@@ -97,39 +98,7 @@ async function submitCustomAgent() {
 const isDefaultPermOpen = ref(false)
 const defaultPermRef = ref<HTMLElement | null>(null)
 
-const permissionLevelOptions = computed<Array<{
-  id: AcpPermissionLevel
-  icon: typeof Shield
-  title: string
-  desc: string
-  danger?: boolean
-}>>(() => [
-  {
-    id: `ask`,
-    icon: Shield,
-    title: t(`agent.permissionMode.askTitle`),
-    desc: t(`agent.permissionMode.askDesc`),
-  },
-  {
-    id: `auto_edits`,
-    icon: ShieldCheck,
-    title: t(`agent.permissionMode.autoEditsTitle`),
-    desc: t(`agent.permissionMode.autoEditsDesc`),
-  },
-  {
-    id: `plan`,
-    icon: NotebookPen,
-    title: t(`agent.permissionMode.planTitle`),
-    desc: t(`agent.permissionMode.planDesc`),
-  },
-  {
-    id: `bypass`,
-    icon: ShieldOff,
-    title: t(`agent.permissionMode.bypassTitle`),
-    desc: t(`agent.permissionMode.bypassDesc`),
-    danger: true,
-  },
-])
+const permissionLevelOptions = useAcpPermissionOptions(t)
 
 const selectedDefaultPerm = computed(() =>
   permissionLevelOptions.value.find(o => o.id === settings.value.defaultPermissionLevel)
@@ -141,22 +110,19 @@ async function selectDefaultPermission(level: AcpPermissionLevel) {
   await agentStore.updateSettings({ defaultPermissionLevel: level })
 }
 
-function onClickOutsidePermSelect(event: MouseEvent) {
-  if (!isDefaultPermOpen.value)
-    return
-  const target = event.target as Node | null
-  if (defaultPermRef.value && target && !defaultPermRef.value.contains(target))
+onClickOutside(defaultPermRef, () => {
+  if (isDefaultPermOpen.value)
     isDefaultPermOpen.value = false
-}
+})
+
+onKeyStroke(`Escape`, () => {
+  if (isDefaultPermOpen.value)
+    isDefaultPermOpen.value = false
+})
 
 onMounted(() => {
   // Use cached agent list on open; only explicit "Re-detect" invalidates probes and spawns a login shell.
   void agentStore.refreshAgentsList()
-  document.addEventListener(`mousedown`, onClickOutsidePermSelect)
-})
-
-onUnmounted(() => {
-  document.removeEventListener(`mousedown`, onClickOutsidePermSelect)
 })
 </script>
 

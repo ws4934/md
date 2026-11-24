@@ -4,6 +4,14 @@ import fetch from '@md/shared/utils/fetch'
 import * as tokenTools from '@md/shared/utils/tokenTools'
 import { base64encode, safe64, utf16to8 } from '@md/shared/utils/tokenTools'
 import { uuidv4 } from '@md/shared/utils/uuid'
+import {
+  buildWeChatAddMaterialUrl,
+  buildWeChatStableTokenBody,
+  buildWeChatStableTokenUrl,
+  buildWeChatUploadImgUrl,
+  resolveWeChatApiOrigin,
+  shouldUseWeChatUploadImg,
+} from '@md/shared/utils/wechat-mp'
 import { t } from '@/i18n/translate'
 import { uploadDefaultImage } from '@/services/upload/client'
 import { resolveUploadProvider } from '@/services/upload/provider-registry'
@@ -410,6 +418,16 @@ interface MpResponse {
   errcode: number
   errmsg: string
 }
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ``))
+    reader.onerror = () => reject(reader.error ?? new Error(`Failed to read image file`))
+    reader.readAsDataURL(file)
+  })
+}
+
 async function getMpToken(appID: string, appsecret: string, proxyOrigin?: string) {
   const data = await store.get(`mpToken:${appID}`)
   if (data) {
@@ -423,19 +441,12 @@ async function getMpToken(appID: string, appsecret: string, proxyOrigin?: string
       // Corrupted token data, ignore and request a new one
     }
   }
+  const origin = resolveWeChatApiOrigin(proxyOrigin)
   const requestOptions = {
     method: `POST`,
-    data: {
-      grant_type: `client_credential`,
-      appid: appID,
-      secret: appsecret,
-    },
+    data: buildWeChatStableTokenBody(appID, appsecret),
   }
-  let url = `https://api.weixin.qq.com/cgi-bin/stable_token`
-  if (proxyOrigin) {
-    url = `${proxyOrigin}/cgi-bin/stable_token`
-  }
-  const res = await fetch<any, MpResponse>(url, requestOptions)
+  const res = await fetch<any, MpResponse>(buildWeChatStableTokenUrl(origin), requestOptions)
   if (res.access_token) {
     const tokenInfo = {
       ...res,
@@ -460,6 +471,25 @@ async function mpFileUpload(file: File) {
   if (!proxyOrigin && isCfWorkers) {
     proxyOrigin = window.location.origin
   }
+
+  // On Desktop, route through the main-process WeChatPublisher so uploads and
+  // publishing share one cached access_token and retry logic.
+  if (typeof window !== `undefined` && window.mdDesktop?.wechat?.uploadImage) {
+    const dataUrl = await readFileAsDataUrl(file)
+    const uploaded = await window.mdDesktop.wechat.uploadImage({
+      credentials: { appID, appsecret, proxyOrigin },
+      dataUrl,
+      filename: file.name,
+      mimeType: file.type,
+      byteSize: file.size,
+    })
+    if (!uploaded.ok || !uploaded.url) {
+      const detail = uploaded.errcode ? `: [${uploaded.errcode}] ${uploaded.error ?? ``}` : (uploaded.error ? `: ${uploaded.error}` : ``)
+      throw new Error(t(`upload.provider.uploadNoUrl`) + detail)
+    }
+    return uploaded.url
+  }
+
   const access_token = await getMpToken(appID, appsecret, proxyOrigin)
   if (!access_token) {
     throw new Error(t(`upload.provider.accessTokenFailed`))
@@ -473,15 +503,10 @@ async function mpFileUpload(file: File) {
     data: formdata,
   }
 
-  let url = `https://api.weixin.qq.com/cgi-bin/material/add_material?access_token=${access_token}&type=image`
-  const fileSizeInMB = file.size / (1024 * 1024)
-  const fileType = file.type.toLowerCase()
-  if (fileSizeInMB < 1 && (fileType === `image/jpeg` || fileType === `image/png`)) {
-    url = `https://api.weixin.qq.com/cgi-bin/media/uploadimg?access_token=${access_token}`
-  }
-  if (proxyOrigin) {
-    url = url.replace(`https://api.weixin.qq.com`, proxyOrigin)
-  }
+  const origin = resolveWeChatApiOrigin(proxyOrigin)
+  const url = shouldUseWeChatUploadImg(file.size, file.type)
+    ? buildWeChatUploadImgUrl(origin, access_token)
+    : buildWeChatAddMaterialUrl(origin, access_token, `image`)
 
   const res = await fetch<any, { url?: string, errcode?: number, errmsg?: string }>(url, requestOptions)
 

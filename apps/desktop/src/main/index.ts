@@ -1,4 +1,4 @@
-import type { AcpAgentConfig, AcpHostEvent, WeChatPublishProgressEvent, WeChatPublishRequest } from '@md/shared/types'
+import type { AcpAgentConfig, AcpHostEvent, WeChatPublishProgressEvent, WeChatPublishRequest, WeChatUploadImageRequest } from '@md/shared/types'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -219,6 +219,8 @@ function registerIpc(host: AcpHost, publisher: WeChatPublisher): void {
 
   ipcMain.handle(IPC_CHANNELS.WECHAT_PUBLISH, (_event, request: WeChatPublishRequest) =>
     publisher.publish(request))
+  ipcMain.handle(IPC_CHANNELS.WECHAT_UPLOAD_IMAGE, (_event, request: WeChatUploadImageRequest) =>
+    publisher.uploadImage(request))
 
   ipcMain.handle(IPC_CHANNELS.ACP_LIST_AGENTS, () => host.listAgents())
   ipcMain.handle(IPC_CHANNELS.ACP_DETECT_AGENTS, () => host.detectAgents())

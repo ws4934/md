@@ -15,6 +15,7 @@ declare module 'vue' {
     AccountDialog: typeof import('./src/components/editor/editor-header/AccountDialog.vue')['default']
     AgentAvatar: typeof import('./src/components/agent/AgentAvatar.vue')['default']
     AgentComposer: typeof import('./src/components/agent/AgentComposer.vue')['default']
+    AgentDiffLines: typeof import('./src/components/agent/AgentDiffLines.vue')['default']
     AgentEditCard: typeof import('./src/components/agent/AgentEditCard.vue')['default']
     AgentModelPicker: typeof import('./src/components/agent/AgentModelPicker.vue')['default']
     AgentPanel: typeof import('./src/components/agent/AgentPanel.vue')['default']

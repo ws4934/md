@@ -3,11 +3,26 @@ import type {
   WeChatPublishProgressEvent,
   WeChatPublishRequest,
   WeChatPublishResult,
+  WeChatUploadImageRequest,
+  WeChatUploadImageResult,
 } from '@md/shared/types'
 import { Buffer } from 'node:buffer'
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { extractUploadableImageUrls, rewriteHtmlImageSources } from '@md/shared/utils/wechat-html-images'
+import {
+  buildWeChatAddMaterialUrl,
+  buildWeChatDraftAddUrl,
+  buildWeChatFreePublishGetUrl,
+  buildWeChatFreePublishSubmitUrl,
+  buildWeChatStableTokenBody,
+  buildWeChatStableTokenUrl,
+  buildWeChatUploadImgUrl,
+  isWeChatTokenExpiredError,
+  resolveWeChatApiOrigin,
+  shouldUseWeChatUploadImg,
+} from '@md/shared/utils/wechat-mp'
 import {
   extractIpFromWeChatError,
   mapPublishFailureStatus,
@@ -15,9 +30,9 @@ import {
   sanitizeWeChatText,
   WeChatApiError,
 } from './errors'
-import { extractUploadableImageUrls, rewriteHtmlImageSources } from './html-images'
 
-const DEFAULT_WECHAT_ORIGIN = `https://api.weixin.qq.com`
+export { resolveWeChatApiOrigin }
+
 const DEFAULT_CONCURRENCY = 3
 const DEFAULT_POLL_INTERVAL_MS = 2000
 const DEFAULT_MAX_POLL_ATTEMPTS = 45
@@ -128,15 +143,6 @@ export function mimeForExtension(ext: string): string {
     default:
       return `image/png`
   }
-}
-
-export function resolveWeChatApiOrigin(proxyOrigin?: string): string {
-  const trimmed = proxyOrigin?.trim().replace(/\/+$/, ``)
-  if (!trimmed)
-    return DEFAULT_WECHAT_ORIGIN
-  if (!/^https?:\/\//i.test(trimmed))
-    throw new Error(`Invalid proxy origin: must start with http:// or https://`)
-  return trimmed
 }
 
 function parseDataImageUri(dataUri: string): ImageBinary {
@@ -300,16 +306,12 @@ export class WeChatPublisher {
     if (!forceRefresh && cached && cached.expiresAt > Date.now())
       return cached.accessToken
 
-    const response = await this.fetchFn(`${origin}/cgi-bin/stable_token`, {
+    const response = await this.fetchFn(buildWeChatStableTokenUrl(origin), {
       method: `POST`,
       headers: {
         'Content-Type': `application/json`,
       },
-      body: JSON.stringify({
-        grant_type: `client_credential`,
-        appid: credentials.appID,
-        secret: credentials.appsecret,
-      }),
+      body: JSON.stringify(buildWeChatStableTokenBody(credentials.appID, credentials.appsecret)),
     })
 
     const data = await this.parseJsonResponse<StableTokenResponse>(response, credentials.appsecret)
@@ -334,7 +336,7 @@ export class WeChatPublisher {
       return await operation(token, origin)
     }
     catch (err) {
-      if (err instanceof WeChatApiError && (err.errcode === 40001 || err.errcode === 42001)) {
+      if (err instanceof WeChatApiError && isWeChatTokenExpiredError(err.errcode)) {
         this.tokenCache.delete(this.tokenCacheKey(origin, credentials.appID))
         const refreshed = await this.getAccessToken(credentials, true)
         return await operation(refreshed, origin)
@@ -389,7 +391,7 @@ export class WeChatPublisher {
     const binary = await this.loadImageBinary(source)
     return this.withTokenRetry(credentials, async (token, origin) => {
       const response = await this.fetchFn(
-        `${origin}/cgi-bin/media/uploadimg?access_token=${encodeURIComponent(token)}`,
+        buildWeChatUploadImgUrl(origin, token),
         {
           method: `POST`,
           body: this.buildMediaForm(binary),
@@ -402,6 +404,62 @@ export class WeChatPublisher {
     })
   }
 
+  /**
+   * Uploads a single renderer image via the main-process token cache so
+   * editor image uploads and article publishing share one WeChat access_token.
+   */
+  async uploadImage(request: WeChatUploadImageRequest): Promise<WeChatUploadImageResult> {
+    const secret = request.credentials?.appsecret ?? ``
+    try {
+      const appID = request.credentials?.appID?.trim() ?? ``
+      const appsecret = secret.trim()
+      if (!appID || !appsecret) {
+        throw new WeChatApiError({
+          errmsg: `Missing credentials`,
+          errorCodeKey: `invalid_credentials`,
+          message: `WeChat Official Account AppID and AppSecret are required.`,
+        })
+      }
+
+      const credentials: WeChatMpCredentials = {
+        appID,
+        appsecret,
+        proxyOrigin: request.credentials.proxyOrigin?.trim() || undefined,
+      }
+      const parsed = parseDataImageUri(request.dataUrl)
+      const binary: ImageBinary = {
+        buffer: parsed.buffer,
+        mimeType: request.mimeType || parsed.mimeType,
+        filename: request.filename || parsed.filename,
+      }
+      const useUploadImg = shouldUseWeChatUploadImg(request.byteSize || binary.buffer.byteLength, binary.mimeType)
+
+      const url = await this.withTokenRetry(credentials, async (token, origin) => {
+        const endpoint = useUploadImg
+          ? buildWeChatUploadImgUrl(origin, token)
+          : buildWeChatAddMaterialUrl(origin, token, `image`)
+        const response = await this.fetchFn(endpoint, {
+          method: `POST`,
+          body: this.buildMediaForm(binary),
+        })
+        const data = await this.parseJsonResponse<UploadImgResponse & AddMaterialResponse>(response, appsecret)
+        if (!data.url)
+          await this.throwWeChatError(data.errcode, data.errmsg || `Missing uploaded image url`, appsecret)
+        return data.url!
+      })
+
+      return { ok: true, url }
+    }
+    catch (err) {
+      const apiErr = err instanceof WeChatApiError ? err : null
+      return {
+        ok: false,
+        errcode: apiErr?.errcode,
+        error: sanitizeWeChatText(err instanceof Error ? err.message : String(err), secret),
+      }
+    }
+  }
+
   private async uploadCoverMaterial(
     credentials: WeChatMpCredentials,
     coverSource: string,
@@ -409,7 +467,7 @@ export class WeChatPublisher {
     const binary = await this.loadImageBinary(coverSource)
     return this.withTokenRetry(credentials, async (token, origin) => {
       const response = await this.fetchFn(
-        `${origin}/cgi-bin/material/add_material?access_token=${encodeURIComponent(token)}&type=image`,
+        buildWeChatAddMaterialUrl(origin, token, `image`),
         {
           method: `POST`,
           body: this.buildMediaForm(binary),
@@ -435,7 +493,7 @@ export class WeChatPublisher {
   ): Promise<string> {
     return this.withTokenRetry(credentials, async (token, origin) => {
       const response = await this.fetchFn(
-        `${origin}/cgi-bin/draft/add?access_token=${encodeURIComponent(token)}`,
+        buildWeChatDraftAddUrl(origin, token),
         {
           method: `POST`,
           headers: {
@@ -469,7 +527,7 @@ export class WeChatPublisher {
   ): Promise<string> {
     return this.withTokenRetry(credentials, async (token, origin) => {
       const response = await this.fetchFn(
-        `${origin}/cgi-bin/freepublish/submit?access_token=${encodeURIComponent(token)}`,
+        buildWeChatFreePublishSubmitUrl(origin, token),
         {
           method: `POST`,
           headers: {
@@ -492,7 +550,7 @@ export class WeChatPublisher {
     for (let attempt = 0; attempt < this.maxPollAttempts; attempt += 1) {
       const data = await this.withTokenRetry(credentials, async (token, origin) => {
         const response = await this.fetchFn(
-          `${origin}/cgi-bin/freepublish/get?access_token=${encodeURIComponent(token)}`,
+          buildWeChatFreePublishGetUrl(origin, token),
           {
             method: `POST`,
             headers: {
