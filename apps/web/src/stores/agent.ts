@@ -11,9 +11,16 @@ import type {
   AcpSettings,
   AcpToolCallItem,
 } from '@md/shared/types'
+import type { DesktopLayoutWidths } from '@/lib/agent/desktop-layout'
 import { getCustomExtraModes, mapAcpModeIdToPermissionLevel } from '@md/shared/utils/acp-permissions'
 import { uuidv4 } from '@md/shared/utils/uuid'
 import { t } from '@/i18n/translate'
+import {
+  clampLayoutWidth,
+  DEFAULT_DESKTOP_LAYOUT_WIDTHS,
+  DESKTOP_LAYOUT_LIMITS,
+  normalizeDesktopLayoutWidths,
+} from '@/lib/agent/desktop-layout'
 import { store } from '@/storage'
 import { useEditorStore } from '@/stores/editor'
 import { usePostStore } from '@/stores/post'
@@ -47,6 +54,8 @@ export interface AgentConversationSession {
 
 const SESSIONS_STORAGE_KEY = `desktop_acp_sessions_v1`
 const PANEL_OPEN_STORAGE_KEY = `desktop_acp_panel_open_v1`
+const SIDEBAR_OPEN_STORAGE_KEY = `desktop_acp_sidebar_open_v1`
+const LAYOUT_WIDTHS_STORAGE_KEY = `desktop_acp_layout_widths_v1`
 const MAX_STORED_SESSIONS = 30
 
 const DEFAULT_SETTINGS: AcpSettings = {
@@ -74,6 +83,13 @@ export const useAgentStore = defineStore(`agent`, () => {
   const draftModeId = ref<string | null>(null)
 
   const isPanelOpen = store.reactive<boolean>(PANEL_OPEN_STORAGE_KEY, true)
+  const isSidebarOpen = store.reactive<boolean>(SIDEBAR_OPEN_STORAGE_KEY, true)
+  const layoutWidths = store.reactive<DesktopLayoutWidths>(
+    LAYOUT_WIDTHS_STORAGE_KEY,
+    { ...DEFAULT_DESKTOP_LAYOUT_WIDTHS },
+  )
+  layoutWidths.value = normalizeDesktopLayoutWidths(layoutWidths.value)
+
   const isNewArticleHero = ref<boolean>(false)
 
   function togglePanel(): void {
@@ -82,6 +98,31 @@ export const useAgentStore = defineStore(`agent`, () => {
 
   function setPanelOpen(open: boolean): void {
     isPanelOpen.value = open
+  }
+
+  function toggleSidebar(): void {
+    isSidebarOpen.value = !isSidebarOpen.value
+  }
+
+  function setSidebarOpen(open: boolean): void {
+    isSidebarOpen.value = open
+  }
+
+  function setLayoutWidth(panel: keyof DesktopLayoutWidths, widthPx: number): void {
+    const limits = DESKTOP_LAYOUT_LIMITS[panel]
+    const clamped = clampLayoutWidth(widthPx, limits.min, limits.max, limits.default)
+    if (layoutWidths.value[panel] === clamped)
+      return
+    layoutWidths.value = {
+      ...layoutWidths.value,
+      [panel]: clamped,
+    }
+  }
+
+  function resetLayoutWidth(panel: keyof DesktopLayoutWidths): number {
+    const fallback = DESKTOP_LAYOUT_LIMITS[panel].default
+    setLayoutWidth(panel, fallback)
+    return fallback
   }
 
   const sessions = ref<AgentConversationSession[]>([])
@@ -825,6 +866,8 @@ export const useAgentStore = defineStore(`agent`, () => {
     selectedAgent,
     selectedModel,
     isPanelOpen,
+    isSidebarOpen,
+    layoutWidths,
     isNewArticleHero,
     sessions,
     activeSessionId,
@@ -844,6 +887,10 @@ export const useAgentStore = defineStore(`agent`, () => {
     init,
     togglePanel,
     setPanelOpen,
+    toggleSidebar,
+    setSidebarOpen,
+    setLayoutWidth,
+    resetLayoutWidth,
     detectAgents,
     probeAgent,
     selectAgentAndModel,

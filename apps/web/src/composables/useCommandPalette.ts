@@ -275,14 +275,24 @@ export function useCommandPalette() {
     }
 
     if (typeof window !== `undefined` && window.mdDesktop?.isDesktop) {
-      commands.push({
-        id: `toggle-agent-panel`,
-        label: t(`agent.panel.togglePanel`),
-        group: t(`commandPalette.group.panel`),
-        keywords: [`agent`, `acp`, `ai`, `面板`, `展开`, `收起`],
-        shortcut: [ctrlSign, `J`],
-        action: () => { agentStore.togglePanel() },
-      })
+      commands.push(
+        {
+          id: `toggle-desktop-sidebar`,
+          label: t(`agent.sidebar.toggleSidebar`),
+          group: t(`commandPalette.group.panel`),
+          keywords: [`sidebar`, `侧边栏`, `文档`, `列表`, `展开`, `收起`],
+          shortcut: [ctrlSign, `\\`],
+          action: () => { agentStore.toggleSidebar() },
+        },
+        {
+          id: `toggle-agent-panel`,
+          label: t(`agent.panel.togglePanel`),
+          group: t(`commandPalette.group.panel`),
+          keywords: [`agent`, `acp`, `ai`, `面板`, `展开`, `收起`],
+          shortcut: [ctrlSign, `J`],
+          action: () => { agentStore.togglePanel() },
+        },
+      )
     }
 
     return commands

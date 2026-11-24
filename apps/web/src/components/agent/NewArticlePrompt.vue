@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { PanelLeft } from '@lucide/vue'
+import { ctrlSign } from '@md/shared/configs'
+import { useAgentStore } from '@/stores/agent'
 import AgentComposer from './AgentComposer.vue'
 
 const emit = defineEmits<{
@@ -7,6 +10,10 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const agentStore = useAgentStore()
+const { isSidebarOpen } = storeToRefs(agentStore)
+const isMac = computed(() => window.mdDesktop?.platform === `darwin`)
+const sidebarShortcutHint = `${ctrlSign}\\`
 const composerRef = ref<InstanceType<typeof AgentComposer> | null>(null)
 
 onMounted(() => {
@@ -19,7 +26,23 @@ onMounted(() => {
     class="flex h-full w-full flex-col items-center"
     style="background-color: var(--dt-canvas)"
   >
-    <div class="desktop-drag-region h-[52px] w-full shrink-0" />
+    <div
+      class="desktop-drag-region flex h-[52px] w-full shrink-0 items-center"
+      :class="!isSidebarOpen && isMac ? 'pl-[78px] pr-5' : 'px-5'"
+    >
+      <button
+        v-if="!isSidebarOpen"
+        type="button"
+        data-testid="hero-sidebar-toggle"
+        :title="`${t('agent.sidebar.toggleSidebar')} (${sidebarShortcutHint})`"
+        :aria-label="t('agent.sidebar.toggleSidebar')"
+        class="desktop-no-drag inline-flex size-[30px] cursor-pointer items-center justify-center rounded-lg transition-colors hover:opacity-80"
+        style="color: var(--dt-ink2)"
+        @click="agentStore.toggleSidebar()"
+      >
+        <PanelLeft class="size-4" />
+      </button>
+    </div>
 
     <div class="flex w-full max-w-[760px] flex-1 flex-col items-center justify-center px-6 pb-24">
       <h1

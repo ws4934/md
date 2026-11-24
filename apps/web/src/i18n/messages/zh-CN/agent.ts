@@ -59,6 +59,7 @@ export default {
     sidebar: {
       search: `搜索`,
       newArticle: `新建文章`,
+      toggleSidebar: `展开 / 收起侧边栏`,
       settings: `设置`,
       rename: `重命名`,
       delete: `删除`,

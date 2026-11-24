@@ -59,6 +59,7 @@ export default {
     sidebar: {
       search: `Search`,
       newArticle: `New article`,
+      toggleSidebar: `Toggle sidebar`,
       settings: `Settings`,
       rename: `Rename`,
       delete: `Delete`,

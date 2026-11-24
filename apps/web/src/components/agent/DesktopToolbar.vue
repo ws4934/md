@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Palette, Send, Sparkles } from '@lucide/vue'
+import { Palette, PanelLeft, Send, Sparkles } from '@lucide/vue'
 import { ctrlSign } from '@md/shared/configs'
 import { useAgentStore } from '@/stores/agent'
 import { usePostStore } from '@/stores/post'
@@ -16,8 +16,10 @@ const agentStore = useAgentStore()
 
 const { currentPost } = storeToRefs(postStore)
 const { viewMode, isOpenRightSlider } = storeToRefs(uiStore)
-const { isPanelOpen, isCurrentSessionRunning, isWaitingPermission } = storeToRefs(agentStore)
+const { isPanelOpen, isSidebarOpen, isCurrentSessionRunning, isWaitingPermission } = storeToRefs(agentStore)
+const isMac = computed(() => window.mdDesktop?.platform === `darwin`)
 const toggleShortcutHint = `${ctrlSign}J`
+const sidebarShortcutHint = `${ctrlSign}\\`
 const showCollapsedActivityDot = computed(
   () => !isPanelOpen.value && (isCurrentSessionRunning.value || isWaitingPermission.value),
 )
@@ -47,16 +49,31 @@ function commitTitleEdit() {
 
 <template>
   <header
-    class="desktop-drag-region flex h-[52px] shrink-0 items-center justify-between px-5"
+    data-testid="desktop-toolbar"
+    class="desktop-drag-region flex h-[52px] shrink-0 items-center justify-between pr-5"
+    :class="!isSidebarOpen && isMac ? 'pl-[78px]' : 'pl-5'"
     style="background-color: var(--dt-canvas)"
   >
-    <!-- Document title -->
-    <div class="desktop-no-drag min-w-0 max-w-[40%]">
+    <!-- Left controls: Sidebar toggle (when collapsed) + Document title -->
+    <div class="desktop-no-drag flex min-w-0 max-w-[45%] items-center gap-2">
+      <button
+        v-if="!isSidebarOpen"
+        type="button"
+        data-testid="toolbar-sidebar-toggle"
+        :title="`${t('agent.sidebar.toggleSidebar')} (${sidebarShortcutHint})`"
+        :aria-label="t('agent.sidebar.toggleSidebar')"
+        class="inline-flex size-[30px] shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors hover:opacity-80"
+        style="color: var(--dt-ink2)"
+        @click="agentStore.toggleSidebar()"
+      >
+        <PanelLeft class="size-4" />
+      </button>
+
       <input
         v-if="isEditingTitle"
         v-model="titleDraft"
         type="text"
-        class="w-full rounded bg-transparent text-[13px] font-semibold outline-none"
+        class="w-full min-w-0 rounded bg-transparent text-[13px] font-semibold outline-none"
         style="color: var(--dt-ink)"
         autofocus
         @keydown.enter="commitTitleEdit"
@@ -66,7 +83,7 @@ function commitTitleEdit() {
       <button
         v-else
         type="button"
-        class="max-w-full cursor-text truncate text-left text-[13px] font-semibold"
+        class="min-w-0 max-w-full cursor-text truncate text-left text-[13px] font-semibold"
         style="color: var(--dt-ink)"
         @dblclick="startTitleEdit"
       >

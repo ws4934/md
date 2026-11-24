@@ -212,6 +212,7 @@ declare global {
   const useDebounceFn: typeof import('@vueuse/shared').useDebounceFn
   const useDebouncedRefHistory: typeof import('@vueuse/core').useDebouncedRefHistory
   const useDeepLinkImport: typeof import('./src/composables/useDeepLinkImport').useDeepLinkImport
+  const useDesktopSidebarHotkey: typeof import('./src/composables/useDesktopSidebarHotkey').useDesktopSidebarHotkey
   const useDeviceMotion: typeof import('@vueuse/core').useDeviceMotion
   const useDeviceOrientation: typeof import('@vueuse/core').useDeviceOrientation
   const useDevicePixelRatio: typeof import('@vueuse/core').useDevicePixelRatio

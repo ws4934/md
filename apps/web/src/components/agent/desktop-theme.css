@@ -98,3 +98,60 @@
 .is-desktop.dark .desktop-preview-host .preview {
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.3) !important;
 }
+
+/* Resizable splitter handles: 1px hairline at rest, 8px hit area, 2px accent on hover/drag */
+.is-desktop .desktop-split-handle {
+  width: 1px;
+  background-color: var(--dt-line);
+  cursor: col-resize;
+}
+
+.is-desktop .desktop-split-handle::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  left: 50%;
+  width: 8px;
+  transform: translateX(-50%);
+  cursor: col-resize;
+}
+
+.is-desktop .desktop-split-handle::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background-color: transparent;
+  pointer-events: none;
+  transition: background-color 120ms ease;
+}
+
+.is-desktop .desktop-split-handle:hover::after,
+.is-desktop .desktop-split-handle[data-resize-handle-state='hover']::after,
+.is-desktop .desktop-split-handle[data-resize-handle-state='drag']::after {
+  background-color: var(--dt-accent);
+}
+
+/* Short width transition for sidebar collapse/expand (disabled while dragging or reduced motion) */
+.is-desktop .desktop-sidebar-panel-transition {
+  transition: flex-grow 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .is-desktop .desktop-sidebar-panel-transition {
+    transition: none !important;
+  }
+}
+
+/* Avoid preview/editor pointer thrash while dragging a column divider */
+.is-desktop .desktop-is-dragging {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+.is-desktop .desktop-is-dragging .desktop-preview-host,
+.is-desktop .desktop-is-dragging .desktop-preview-host * {
+  pointer-events: none !important;
+}

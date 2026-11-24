@@ -74,11 +74,9 @@ function onRespondPermission(requestId: string, decision: AcpPermissionDecision)
 
 <template>
   <aside
-    class="flex h-full w-[400px] shrink-0 flex-col"
-    style="
-      background-color: var(--dt-surface);
-      border-left: 1px solid var(--dt-line);
-    "
+    data-testid="agent-panel"
+    class="flex h-full w-full flex-col overflow-hidden"
+    style="background-color: var(--dt-surface)"
   >
     <!-- Header (52px) -->
     <header

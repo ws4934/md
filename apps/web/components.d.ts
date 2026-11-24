@@ -70,6 +70,7 @@ declare module 'vue' {
     CustomUploadForm: typeof import('./src/components/editor/dialogs/CustomUploadForm.vue')['default']
     DesktopPublishDialog: typeof import('./src/components/agent/DesktopPublishDialog.vue')['default']
     DesktopSidebar: typeof import('./src/components/agent/DesktopSidebar.vue')['default']
+    DesktopSplitHandle: typeof import('./src/components/agent/DesktopSplitHandle.vue')['default']
     DesktopToolbar: typeof import('./src/components/agent/DesktopToolbar.vue')['default']
     DesktopWorkspace: typeof import('./src/components/agent/DesktopWorkspace.vue')['default']
     Dialog: typeof import('./src/components/ui/dialog/Dialog.vue')['default']

@@ -59,6 +59,7 @@ export default {
     sidebar: {
       search: `検索`,
       newArticle: `新規記事`,
+      toggleSidebar: `サイドバーを開閉`,
       settings: `設定`,
       rename: `名前を変更`,
       delete: `削除`,

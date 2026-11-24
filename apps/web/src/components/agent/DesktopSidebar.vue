@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Post } from '@/types/post'
-import { Ellipsis, Search, Settings, SquarePen, Trash2 } from '@lucide/vue'
+import { Ellipsis, PanelLeft, Search, Settings, SquarePen, Trash2 } from '@lucide/vue'
+import { ctrlSign } from '@md/shared/configs'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,6 +24,7 @@ const { posts, currentPostId } = storeToRefs(postStore)
 const { writingPostIds } = storeToRefs(agentStore)
 
 const isMac = computed(() => window.mdDesktop?.platform === `darwin`)
+const sidebarShortcutHint = `${ctrlSign}\\`
 
 const sortedPosts = computed(() =>
   [...posts.value].sort((a, b) => +new Date(b.updateDatetime) - +new Date(a.updateDatetime)),
@@ -80,18 +82,27 @@ function formatMeta(post: Post): string {
 
 <template>
   <aside
-    class="flex h-full w-[248px] shrink-0 flex-col select-none"
-    style="
-      background-color: var(--dt-sidebar);
-      border-right: 1px solid var(--dt-line);
-    "
+    data-testid="desktop-sidebar"
+    class="flex h-full w-full flex-col overflow-hidden select-none"
+    style="background-color: var(--dt-sidebar)"
   >
     <!-- Titlebar area: reserves macOS traffic lights inset on the left -->
     <div
       class="desktop-drag-region flex h-[52px] shrink-0 items-center justify-between pr-2.5"
-      :class="isMac ? 'pl-[84px]' : 'pl-4'"
+      :class="isMac ? 'pl-[80px]' : 'pl-2.5'"
     >
-      <span class="flex-1" />
+      <button
+        type="button"
+        data-testid="sidebar-collapse-btn"
+        :title="`${t('agent.sidebar.toggleSidebar')} (${sidebarShortcutHint})`"
+        :aria-label="t('agent.sidebar.toggleSidebar')"
+        class="desktop-no-drag inline-flex size-[30px] cursor-pointer items-center justify-center rounded-lg transition-colors hover:opacity-80"
+        style="color: var(--dt-ink2)"
+        @click="agentStore.toggleSidebar()"
+      >
+        <PanelLeft class="size-4" />
+      </button>
+
       <button
         type="button"
         :title="t('agent.sidebar.newArticle')"

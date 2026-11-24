@@ -23,7 +23,12 @@ export function buildKeyboardShortcutCategories(): ShortcutCategory[] {
       items: [
         { label: t(`menu.commandPalette`), keys: mod(shiftSign, `.`) },
         { label: t(`menu.preferences`), keys: mod(`,`) },
-        ...(isDesktop ? [{ label: t(`agent.panel.togglePanel`), keys: mod(`J`) }] : []),
+        ...(isDesktop
+          ? [
+              { label: t(`agent.sidebar.toggleSidebar`), keys: mod(`\\`) },
+              { label: t(`agent.panel.togglePanel`), keys: mod(`J`) },
+            ]
+          : []),
         { label: t(`keyboard.slashCommand`), keys: [`/`] },
         { label: t(`keyboard.closeSearchPanel`), keys: [`Esc`] },
       ],
