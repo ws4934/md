@@ -1,9 +1,11 @@
+import type { AcpAgentConfig, AcpHostEvent } from '@md/shared/types'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, shell } from 'electron'
 import { IPC_CHANNELS } from '../shared/ipc-channels'
+import { AcpHost } from './acp/host'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -55,6 +57,38 @@ function registerAppProtocol(): void {
 }
 
 let mainWindow: BrowserWindow | null = null
+let acpHost: AcpHost | null = null
+
+function broadcastAcpEvent(event: AcpHostEvent): void {
+  if (mainWindow && !mainWindow.isDestroyed())
+    mainWindow.webContents.send(IPC_CHANNELS.ACP_EVENT, event)
+}
+
+function buildOptionalFakeAgents(): AcpAgentConfig[] {
+  if (process.env.MD_DESKTOP_FAKE_AGENT !== `1`)
+    return []
+
+  const fakeScript = path.resolve(__dirname, `../../scripts/fake-acp-agent.mjs`)
+  if (!fs.existsSync(fakeScript))
+    return []
+
+  return [
+    {
+      id: `fake-acp`,
+      name: `Fake ACP Agent`,
+      command: process.execPath,
+      args: [fakeScript],
+      env: {
+        ELECTRON_RUN_AS_NODE: `1`,
+        FAKE_AGENT_MODEL_STYLE: `both`,
+        FAKE_AGENT_EMIT_COMMANDS: `1`,
+      },
+      detectBinaries: [process.execPath],
+      builtin: true,
+      avatar: { letter: `F`, color: `#5B5BD6` },
+    },
+  ]
+}
 
 function createMainWindow(): BrowserWindow {
   const isMac = process.platform === `darwin`
@@ -97,7 +131,7 @@ function createMainWindow(): BrowserWindow {
   return win
 }
 
-function registerBaseIpc(): void {
+function registerIpc(host: AcpHost): void {
   ipcMain.handle(IPC_CHANNELS.PICK_FILES, async () => {
     const owner = mainWindow ?? BrowserWindow.getFocusedWindow() ?? undefined
     const options: Electron.OpenDialogOptions = {
@@ -113,13 +147,35 @@ function registerBaseIpc(): void {
       name: path.basename(filePath),
     }))
   })
+
+  ipcMain.handle(IPC_CHANNELS.ACP_LIST_AGENTS, () => host.listAgents())
+  ipcMain.handle(IPC_CHANNELS.ACP_DETECT_AGENTS, () => host.detectAgents())
+  ipcMain.handle(IPC_CHANNELS.ACP_GET_SETTINGS, () => host.getSettings())
+  ipcMain.handle(IPC_CHANNELS.ACP_UPDATE_SETTINGS, (_event, patch) => host.updateSettings(patch))
+  ipcMain.handle(IPC_CHANNELS.ACP_ADD_CUSTOM_AGENT, (_event, agent) => host.addCustomAgent(agent))
+  ipcMain.handle(IPC_CHANNELS.ACP_REMOVE_CUSTOM_AGENT, (_event, agentId) => host.removeCustomAgent(agentId))
+  ipcMain.handle(IPC_CHANNELS.ACP_INSTALL_AGENT, (_event, agentId) => host.installAgent(agentId))
+  ipcMain.handle(IPC_CHANNELS.ACP_CANCEL_INSTALL, (_event, agentId) => host.cancelInstall(agentId))
+  ipcMain.handle(IPC_CHANNELS.ACP_PROBE_AGENT, (_event, agentId, options) => host.probeAgent(agentId, options))
+  ipcMain.handle(IPC_CHANNELS.ACP_START_SESSION, (_event, params) => host.startSession(params))
+  ipcMain.handle(IPC_CHANNELS.ACP_SYNC_ARTICLE_CONTENT, (_event, params) => host.syncArticleContent(params))
+  ipcMain.handle(IPC_CHANNELS.ACP_PROMPT, (_event, params) => host.prompt(params))
+  ipcMain.handle(IPC_CHANNELS.ACP_CANCEL_TURN, (_event, sessionId) => host.cancelTurn(sessionId))
+  ipcMain.handle(IPC_CHANNELS.ACP_SET_MODEL, (_event, params) => host.setModel(params))
+  ipcMain.handle(IPC_CHANNELS.ACP_RESPOND_PERMISSION, (_event, params) => host.respondPermission(params))
+  ipcMain.handle(IPC_CHANNELS.ACP_CLOSE_SESSION, (_event, sessionId) => host.closeSession(sessionId))
 }
 
 app.whenReady().then(() => {
   if (!DEV_SERVER_URL)
     registerAppProtocol()
 
-  registerBaseIpc()
+  acpHost = new AcpHost({
+    dataDir: app.getPath(`userData`),
+    extraBuiltinAgents: buildOptionalFakeAgents(),
+    onEvent: broadcastAcpEvent,
+  })
+  registerIpc(acpHost)
   mainWindow = createMainWindow()
 
   const smokeExitMs = Number(process.env.MD_DESKTOP_SMOKE_EXIT_MS ?? 0)
@@ -133,6 +189,18 @@ app.whenReady().then(() => {
   app.on(`activate`, () => {
     if (BrowserWindow.getAllWindows().length === 0)
       mainWindow = createMainWindow()
+  })
+})
+
+let isQuitting = false
+
+app.on(`before-quit`, (event) => {
+  if (isQuitting || !acpHost)
+    return
+  isQuitting = true
+  event.preventDefault()
+  void acpHost.dispose().finally(() => {
+    app.quit()
   })
 })
 

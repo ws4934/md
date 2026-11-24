@@ -1,0 +1,381 @@
+import type {
+  NewSessionResponse,
+  PermissionOption,
+  Plan,
+  RequestPermissionRequest,
+  RequestPermissionResponse,
+  SessionConfigOption,
+  SessionConfigSelectOption,
+  ToolCall,
+  ToolCallContent,
+  ToolCallStatus,
+  ToolCallUpdate,
+  ToolKind,
+} from '@agentclientprotocol/sdk/unstable'
+import type {
+  AcpModeInfo,
+  AcpModelInfo,
+  AcpPermissionDecision,
+  AcpPermissionRequest,
+  AcpPlanEntry,
+  AcpToolCallItem,
+  AcpToolKind,
+  AcpToolStatus,
+} from '@md/shared/types'
+
+export interface UnstableSessionModelState {
+  currentModelId?: string | null
+  availableModels?: Array<{
+    modelId: string
+    name?: string | null
+    description?: string | null
+  }> | null
+}
+
+export type ExtendedNewSessionResponse = NewSessionResponse & {
+  models?: UnstableSessionModelState | null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === `object` && value !== null && !Array.isArray(value)
+}
+
+function readString(record: Record<string, unknown> | null, keys: string[]): string | undefined {
+  if (!record)
+    return undefined
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === `string` && value.trim())
+      return value
+  }
+  return undefined
+}
+
+export function flattenSelectConfigOptions(
+  options: Array<SessionConfigSelectOption | { group: string, name: string, options: SessionConfigSelectOption[] }>,
+): SessionConfigSelectOption[] {
+  const result: SessionConfigSelectOption[] = []
+  for (const item of options) {
+    if (`options` in item && Array.isArray(item.options)) {
+      result.push(...item.options)
+    }
+    else if (`value` in item) {
+      result.push(item)
+    }
+  }
+  return result
+}
+
+export function findSelectConfigOption(
+  configOptions: SessionConfigOption[] | null | undefined,
+  category: `model` | `mode`,
+): (SessionConfigOption & { type: `select` }) | null {
+  if (!configOptions?.length)
+    return null
+
+  const byCategory = configOptions.find(
+    opt => opt.type === `select` && opt.category === category,
+  )
+  if (byCategory && byCategory.type === `select`)
+    return byCategory
+
+  const byId = configOptions.find(
+    opt => opt.type === `select` && opt.id.toLowerCase() === category,
+  )
+  if (byId && byId.type === `select`)
+    return byId
+
+  return null
+}
+
+export function deriveModelsFromSessionResponse(response: ExtendedNewSessionResponse): {
+  models: AcpModelInfo[]
+  currentModelId: string | null
+  source: `models` | `configOptions` | `none`
+} {
+  if (response.models?.availableModels?.length) {
+    const currentModelId = response.models.currentModelId ?? null
+    return {
+      models: response.models.availableModels.map(m => ({
+        id: m.modelId,
+        name: m.name || m.modelId,
+        description: m.description ?? undefined,
+        isDefault: currentModelId === m.modelId,
+      })),
+      currentModelId,
+      source: `models`,
+    }
+  }
+
+  const modelConfig = findSelectConfigOption(response.configOptions, `model`)
+  if (modelConfig) {
+    const flat = flattenSelectConfigOptions(modelConfig.options)
+    const currentModelId = modelConfig.currentValue || null
+    return {
+      models: flat.map(opt => ({
+        id: opt.value,
+        name: opt.name || opt.value,
+        description: opt.description ?? undefined,
+        isDefault: currentModelId === opt.value,
+      })),
+      currentModelId,
+      source: `configOptions`,
+    }
+  }
+
+  return {
+    models: [],
+    currentModelId: null,
+    source: `none`,
+  }
+}
+
+export function deriveModesFromSessionResponse(response: ExtendedNewSessionResponse): {
+  modes: AcpModeInfo[]
+  currentModeId: string | null
+} {
+  if (response.modes?.availableModes?.length) {
+    return {
+      modes: response.modes.availableModes.map(mode => ({
+        id: mode.id,
+        name: mode.name,
+        description: mode.description ?? undefined,
+      })),
+      currentModeId: response.modes.currentModeId ?? null,
+    }
+  }
+
+  const modeConfig = findSelectConfigOption(response.configOptions, `mode`)
+  if (modeConfig) {
+    const flat = flattenSelectConfigOptions(modeConfig.options)
+    return {
+      modes: flat.map(opt => ({
+        id: opt.value,
+        name: opt.name || opt.value,
+        description: opt.description ?? undefined,
+      })),
+      currentModeId: modeConfig.currentValue || null,
+    }
+  }
+
+  return {
+    modes: [],
+    currentModeId: null,
+  }
+}
+
+const KNOWN_TOOL_KINDS = new Set<AcpToolKind>([
+  `read`,
+  `edit`,
+  `delete`,
+  `move`,
+  `search`,
+  `execute`,
+  `think`,
+  `fetch`,
+  `switch_mode`,
+  `other`,
+])
+
+export function normalizeToolKind(kind: ToolKind | string | null | undefined): AcpToolKind {
+  if (kind && KNOWN_TOOL_KINDS.has(kind as AcpToolKind))
+    return kind as AcpToolKind
+  return `other`
+}
+
+export function normalizeToolStatus(status: ToolCallStatus | string | null | undefined): AcpToolStatus {
+  switch (status) {
+    case `completed`:
+      return `completed`
+    case `failed`:
+      return `failed`
+    case `in_progress`:
+      return `in_progress`
+    case `pending`:
+    default:
+      return `pending`
+  }
+}
+
+function extractTextFromToolContent(content: ToolCallContent[] | null | undefined): string | undefined {
+  if (!content?.length)
+    return undefined
+  const texts: string[] = []
+  for (const item of content) {
+    if (item.type === `content` && item.content.type === `text` && item.content.text)
+      texts.push(item.content.text)
+  }
+  return texts.length > 0 ? texts.join(`\n`) : undefined
+}
+
+function extractDiffFromToolContent(content: ToolCallContent[] | null | undefined): {
+  path?: string
+  oldText?: string
+  newText?: string
+} | null {
+  if (!content?.length)
+    return null
+  for (const item of content) {
+    if (item.type === `diff`) {
+      return {
+        path: item.path,
+        oldText: item.oldText ?? undefined,
+        newText: item.newText,
+      }
+    }
+  }
+  return null
+}
+
+function extractCommandFromRawInput(rawInput: Record<string, unknown> | null, kind: AcpToolKind): string | undefined {
+  if (kind !== `execute`)
+    return undefined
+  const direct = readString(rawInput, [`command`, `cmd`, `script`])
+  if (!direct)
+    return undefined
+  const args = rawInput?.args
+  if (Array.isArray(args) && args.length > 0) {
+    const renderedArgs = args.filter((a): a is string => typeof a === `string`).join(` `)
+    return renderedArgs ? `${direct} ${renderedArgs}` : direct
+  }
+  return direct
+}
+
+export function mergeToolCallSnapshot(
+  previous: AcpToolCallItem | undefined,
+  update: ToolCall | ToolCallUpdate,
+): AcpToolCallItem {
+  const toolKind = update.kind ? normalizeToolKind(update.kind) : (previous?.toolKind ?? `other`)
+  const status = update.status ? normalizeToolStatus(update.status) : (previous?.status ?? `pending`)
+  const title = update.title ?? previous?.title ?? update.toolCallId
+
+  const rawInput = isRecord(update.rawInput) ? update.rawInput : null
+  const rawOutput = isRecord(update.rawOutput) ? update.rawOutput : null
+  const diff = extractDiffFromToolContent(update.content)
+  const contentText = extractTextFromToolContent(update.content)
+
+  const filePath
+    = diff?.path
+      ?? update.locations?.[0]?.path
+      ?? readString(rawInput, [`path`, `filePath`, `file`, `target`])
+      ?? previous?.filePath
+
+  const command
+    = extractCommandFromRawInput(rawInput, toolKind)
+      ?? previous?.command
+      ?? (toolKind === `execute` ? title || undefined : undefined)
+  const oldText = diff?.oldText ?? readString(rawInput, [`oldText`, `oldString`]) ?? previous?.oldText
+  const newText
+    = toolKind === `delete`
+      ? ``
+      : (diff?.newText ?? readString(rawInput, [`newText`, `newString`, `content`]) ?? previous?.newText)
+
+  let detail = contentText ?? previous?.detail
+  if (!detail) {
+    if (toolKind === `search`)
+      detail = readString(rawInput, [`query`, `pattern`]) ?? title
+    else if (toolKind === `fetch`)
+      detail = readString(rawInput, [`url`, `uri`]) ?? title
+    else if (toolKind === `execute`)
+      detail = command
+    else if (filePath)
+      detail = filePath
+  }
+
+  const error
+    = status === `failed`
+      ? (readString(rawOutput, [`error`, `message`]) ?? contentText ?? previous?.error ?? `Tool call failed`)
+      : undefined
+
+  return {
+    id: update.toolCallId,
+    title,
+    toolKind,
+    status,
+    detail,
+    filePath,
+    command,
+    oldText,
+    newText,
+    error,
+  }
+}
+
+export function mapPlanToEntries(plan: Plan): AcpPlanEntry[] {
+  return plan.entries.map(entry => ({
+    content: entry.content,
+    status: entry.status,
+    priority: entry.priority,
+  }))
+}
+
+export function mapPermissionRequest(
+  requestId: string,
+  sessionId: string,
+  params: RequestPermissionRequest,
+  toolSnapshot?: AcpToolCallItem,
+): AcpPermissionRequest {
+  const merged = mergeToolCallSnapshot(toolSnapshot, params.toolCall)
+  return {
+    requestId,
+    sessionId,
+    toolCallId: params.toolCall.toolCallId,
+    title: merged.title,
+    toolKind: merged.toolKind,
+    command: merged.command,
+    detail: merged.detail,
+    filePath: merged.filePath,
+    options: params.options.map(opt => ({
+      optionId: opt.optionId,
+      name: opt.name,
+      kind: opt.kind,
+    })),
+  }
+}
+
+export function selectAutoAcceptOption(options: PermissionOption[]): PermissionOption | null {
+  return (
+    options.find(opt => opt.kind === `allow_once`)
+    ?? options.find(opt => opt.kind === `allow_always`)
+    ?? options.find(opt => opt.kind.startsWith(`allow`))
+    ?? null
+  )
+}
+
+export function buildPermissionResponse(
+  options: PermissionOption[],
+  decision: AcpPermissionDecision,
+  explicitOptionId?: string,
+): RequestPermissionResponse {
+  if (explicitOptionId && options.some(opt => opt.optionId === explicitOptionId)) {
+    return {
+      outcome: {
+        outcome: `selected`,
+        optionId: explicitOptionId,
+      },
+    }
+  }
+
+  if (decision === `allow_once`) {
+    const opt = options.find(o => o.kind === `allow_once`)
+      ?? options.find(o => o.kind.startsWith(`allow`))
+    if (opt)
+      return { outcome: { outcome: `selected`, optionId: opt.optionId } }
+  }
+  else if (decision === `allow_always`) {
+    const opt = options.find(o => o.kind === `allow_always`)
+      ?? options.find(o => o.kind === `allow_once`)
+      ?? options.find(o => o.kind.startsWith(`allow`))
+    if (opt)
+      return { outcome: { outcome: `selected`, optionId: opt.optionId } }
+  }
+  else if (decision === `reject`) {
+    const opt = options.find(o => o.kind === `reject_once`)
+      ?? options.find(o => o.kind === `reject_always`)
+      ?? options.find(o => o.kind.startsWith(`reject`))
+    if (opt)
+      return { outcome: { outcome: `selected`, optionId: opt.optionId } }
+  }
+
+  return { outcome: { outcome: `cancelled` } }
+}
