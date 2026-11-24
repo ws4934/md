@@ -16,6 +16,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import {
   agentHasPlanMode,
+  clampAgentModePermissionLevel,
   evaluatePermissionPolicy,
   isEditToolKind,
   mapAcpModeIdToPermissionLevel,
@@ -195,11 +196,12 @@ export class AcpHost {
       onEvent: (event) => {
         if (event.type === `mode_changed`) {
           const mappedLevel = mapAcpModeIdToPermissionLevel(event.modeId)
-          if (mappedLevel)
-            permissionState.level = mappedLevel
+          // Agent-originated mode updates may keep or restrict permissions, never escalate.
+          // Echoes of our own setPermissionMode already match permissionState.level.
+          permissionState.level = clampAgentModePermissionLevel(permissionState.level, mappedLevel)
           this.onEvent?.({
             ...event,
-            permissionLevel: mappedLevel ?? permissionState.level,
+            permissionLevel: permissionState.level,
           })
           return
         }

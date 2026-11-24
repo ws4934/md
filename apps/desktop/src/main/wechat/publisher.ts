@@ -10,7 +10,7 @@ import { Buffer } from 'node:buffer'
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { extractUploadableImageUrls, rewriteHtmlImageSources } from '@md/shared/utils/wechat-html-images'
+import { extractUploadableImageUrls, normalizeImageSource, rewriteHtmlImageSources } from '@md/shared/utils/wechat-html-images'
 import {
   buildWeChatAddMaterialUrl,
   buildWeChatDraftAddUrl,
@@ -237,6 +237,7 @@ export class WeChatPublisher {
   private readonly pollIntervalMs: number
   private readonly maxPollAttempts: number
   private readonly tokenCache = new Map<string, CachedToken>()
+  private readonly allowedLocalPaths = new Set<string>()
 
   constructor(options: WeChatPublisherOptions = {}) {
     this.fetchFn = options.fetchFn ?? fetch
@@ -247,6 +248,13 @@ export class WeChatPublisher {
     this.concurrency = options.concurrency ?? DEFAULT_CONCURRENCY
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
     this.maxPollAttempts = options.maxPollAttempts ?? DEFAULT_MAX_POLL_ATTEMPTS
+  }
+
+  /** Authorize a local image file explicitly picked by the user via the native picker. */
+  allowLocalImagePath(filePath: string): void {
+    const trimmed = filePath.trim()
+    if (trimmed)
+      this.allowedLocalPaths.add(path.resolve(trimmed))
   }
 
   private emitProgress(event: WeChatPublishProgressEvent): void {
@@ -346,19 +354,19 @@ export class WeChatPublisher {
   }
 
   private async loadImageBinary(source: string): Promise<ImageBinary> {
-    const trimmed = source.trim()
-    if (/^data:image\//i.test(trimmed))
-      return parseDataImageUri(trimmed)
+    const normalized = normalizeImageSource(source)
+    if (/^data:image\//i.test(normalized))
+      return parseDataImageUri(normalized)
 
-    if (/^https?:\/\//i.test(trimmed)) {
-      const response = await this.fetchFn(trimmed)
+    if (/^https?:\/\//i.test(normalized)) {
+      const response = await this.fetchFn(normalized)
       if (!response.ok)
-        throw new Error(`Failed to fetch image (${response.status}): ${trimmed}`)
+        throw new Error(`Failed to fetch image (${response.status}): ${normalized}`)
       const contentType = response.headers.get(`content-type`)?.split(`;`)[0]?.trim().toLowerCase()
       const arrayBuf = await response.arrayBuffer()
       let urlExt = ``
       try {
-        urlExt = path.extname(new URL(trimmed).pathname).toLowerCase()
+        urlExt = path.extname(new URL(normalized).pathname).toLowerCase()
       }
       catch {
         urlExt = ``
@@ -374,7 +382,11 @@ export class WeChatPublisher {
       }
     }
 
-    return this.readLocalFile(trimmed)
+    const resolved = path.resolve(normalized)
+    if (!this.allowedLocalPaths.has(resolved))
+      throw new Error(`Local cover image must be selected through the image picker.`)
+
+    return this.readLocalFile(resolved)
   }
 
   private buildMediaForm(binary: ImageBinary): FormData {

@@ -51,7 +51,7 @@ function registerAppProtocol(): void {
 
     const candidate = path.resolve(resolvedRoot, `.${pathname}`)
     // Prevent escaping the renderer dist directory via crafted URLs.
-    if (!candidate.startsWith(resolvedRoot))
+    if (candidate !== resolvedRoot && !candidate.startsWith(`${resolvedRoot}${path.sep}`))
       return new Response(`Forbidden`, { status: 403 })
 
     let target = path.join(resolvedRoot, `index.html`)
@@ -199,6 +199,7 @@ function registerIpc(host: AcpHost, publisher: WeChatPublisher): void {
       return null
 
     const filePath = result.filePaths[0]
+    publisher.allowLocalImagePath(filePath)
     const raw = await fs.promises.readFile(filePath)
     const mime = mimeForExtension(path.extname(filePath))
     return {

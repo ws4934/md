@@ -6,6 +6,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import {
+  clampAgentModePermissionLevel,
   evaluatePermissionPolicy,
   getCustomExtraModes,
   mapAcpModeIdToPermissionLevel,
@@ -414,12 +415,42 @@ describe(`acpHost permission levels, ACP modes & article disk sync`, () => {
           args: [FAKE_AGENT_SCRIPT],
           env: {
             FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0`,
+            FAKE_AGENT_REQUIRE_PERMISSION: `1`,
             FAKE_AGENT_MODES_STYLE: `claude`,
             FAKE_AGENT_PUSH_MODE: `bypassPermissions`,
           },
           detectBinaries: [process.execPath],
           builtin: true,
           avatar: { letter: `P`, color: `#5B5BD6` },
+        },
+        {
+          id: `fake-push-restrict`,
+          name: `Fake Push Restrict`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0`,
+            FAKE_AGENT_MODES_STYLE: `claude`,
+            FAKE_AGENT_PUSH_MODE: `plan`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `R`, color: `#5B5BD6` },
+        },
+        {
+          id: `fake-init-bypass`,
+          name: `Fake Init Bypass`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0`,
+            FAKE_AGENT_REQUIRE_PERMISSION: `1`,
+            FAKE_AGENT_MODES_STYLE: `claude`,
+            FAKE_AGENT_INITIAL_MODE: `bypassPermissions`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `B`, color: `#5B5BD6` },
         },
       ],
       onEvent: (event) => {
@@ -508,7 +539,14 @@ describe(`acpHost permission levels, ACP modes & article disk sync`, () => {
       .join(``)
     expect(planText).toContain(`[permission:opt_reject_once]`)
 
-    // 5. Agent-initiated current_mode_update reflects back to mode_changed with mapped permissionLevel.
+    // 5. Agent-initiated current_mode_update cannot escalate permissions from ask -> bypass;
+    //    subsequent execute permission requests must still be surfaced to UI.
+    expect(clampAgentModePermissionLevel(`ask`, `bypass`)).toBe(`ask`)
+    expect(clampAgentModePermissionLevel(`ask`, `auto_edits`)).toBe(`ask`)
+    expect(clampAgentModePermissionLevel(`ask`, `plan`)).toBe(`plan`)
+    expect(clampAgentModePermissionLevel(`auto_edits`, `bypass`)).toBe(`auto_edits`)
+    expect(clampAgentModePermissionLevel(`bypass`, `ask`)).toBe(`ask`)
+
     events.length = 0
     const pushSess = await host.startSession({
       agentId: `fake-push-mode`,
@@ -517,9 +555,10 @@ describe(`acpHost permission levels, ACP modes & article disk sync`, () => {
       postTitle: `Push Mode`,
       content: `# Push`,
     })
+    // Turn 1: agent emits current_mode_update("bypassPermissions") during the turn.
     await host.prompt({
       sessionId: pushSess.sessionId,
-      text: `Trigger mode update`,
+      text: `Trigger mode escalation`,
       content: `# Push`,
       postTitle: `Push Mode`,
     })
@@ -527,7 +566,60 @@ describe(`acpHost permission levels, ACP modes & article disk sync`, () => {
       (e): e is Extract<AcpHostEvent, { type: `mode_changed` }> =>
         e.type === `mode_changed` && e.modeId === `bypassPermissions`,
     )
-    expect(modeChanged?.permissionLevel).toBe(`bypass`)
+    expect(modeChanged?.permissionLevel).toBe(`ask`)
+
+    // Turn 2: next execute permission request must STILL be surfaced to UI (not auto-approved).
+    events.length = 0
+    await host.prompt({
+      sessionId: pushSess.sessionId,
+      text: `Run command after attempted escalation`,
+      content: `# Push 2`,
+      postTitle: `Push Mode`,
+    })
+    const promptedAfterEscalation = events
+      .filter((e): e is Extract<AcpHostEvent, { type: `permission_requested` }> => e.type === `permission_requested`)
+      .map(e => e.request.toolKind)
+    expect(promptedAfterEscalation).toEqual([`execute`])
+
+    // 6. Agent-initiated current_mode_update MAY tighten permissions (ask -> plan).
+    events.length = 0
+    const restrictSess = await host.startSession({
+      agentId: `fake-push-restrict`,
+      permissionLevel: `ask`,
+      postId: `p4`,
+      postTitle: `Push Restrict`,
+      content: `# Restrict`,
+    })
+    await host.prompt({
+      sessionId: restrictSess.sessionId,
+      text: `Switch to plan`,
+      content: `# Restrict`,
+      postTitle: `Push Restrict`,
+    })
+    const restrictedEvent = events.find(
+      (e): e is Extract<AcpHostEvent, { type: `mode_changed` }> =>
+        e.type === `mode_changed` && e.modeId === `plan`,
+    )
+    expect(restrictedEvent?.permissionLevel).toBe(`plan`)
+
+    // 7. Agent advertising initial currentModeId="bypassPermissions" cannot override user's `ask` level.
+    events.length = 0
+    const initBypassSess = await host.startSession({
+      agentId: `fake-init-bypass`,
+      permissionLevel: `ask`,
+      postId: `p5`,
+      postTitle: `Init Bypass`,
+      content: `# Init`,
+    })
+    expect(initBypassSess.permissionLevel).toBe(`ask`)
+    expect(initBypassSess.currentModeId).toBe(`default`)
+    await host.prompt({
+      sessionId: initBypassSess.sessionId,
+      text: `Run command under ask`,
+      content: `# Init`,
+      postTitle: `Init Bypass`,
+    })
+    expect(events.filter(e => e.type === `permission_requested`).map(e => e.request.toolKind)).toEqual([`execute`])
   })
 
   it(`syncs article back to editor on completed edit tool call and at turn end`, async () => {

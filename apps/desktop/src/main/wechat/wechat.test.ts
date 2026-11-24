@@ -1,11 +1,11 @@
 import type { WeChatPublishProgressEvent } from '@md/shared/types'
-import { describe, expect, it, vi } from 'vitest'
-import { extractIpFromWeChatError, mapWeChatError, sanitizeWeChatText } from './errors'
 import {
   extractUploadableImageUrls,
   isWeChatHostedImage,
   rewriteHtmlImageSources,
-} from './html-images'
+} from '@md/shared/utils/wechat-html-images'
+import { describe, expect, it, vi } from 'vitest'
+import { extractIpFromWeChatError, mapWeChatError, sanitizeWeChatText } from './errors'
 import { WeChatPublisher } from './publisher'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -275,6 +275,7 @@ describe(`weChatPublisher state machine`, () => {
       sleepFn: async () => {},
       onProgress: ev => events.push(ev),
     })
+    publisher.allowLocalImagePath(`/tmp/local-cover.png`)
 
     const success = await publisher.publish({
       publishId: `pub-direct-1`,
@@ -396,5 +397,57 @@ describe(`weChatPublisher state machine`, () => {
     expect(published.ok).toBe(true)
     expect(tokenCalls).toBe(1)
     expect(endpoints.some(u => u.includes(`/cgi-bin/media/uploadimg`))).toBe(true)
+  })
+
+  it(`normalizes protocol-relative cover URLs to https and rejects unpicked local file paths`, async () => {
+    const fetchedUrls: string[] = []
+    const readLocalFile = vi.fn(async () => ({
+      buffer: new Uint8Array([0x89, 0x50, 0x4E, 0x47]),
+      mimeType: `image/png`,
+      filename: `secret.png`,
+    }))
+
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === `string` ? input : input instanceof URL ? input.toString() : input.url
+      fetchedUrls.push(url)
+      if (url.endsWith(`/cgi-bin/stable_token`))
+        return jsonResponse({ access_token: `tok_proto`, expires_in: 7200 })
+      if (url === `https://cdn.example.com/proto-cover.png`)
+        return binaryResponse(new Uint8Array([1, 2, 3]), `image/png`)
+      if (url.includes(`/cgi-bin/material/add_material`))
+        return jsonResponse({ media_id: `cover_proto` })
+      if (url.includes(`/cgi-bin/draft/add`))
+        return jsonResponse({ media_id: `draft_proto` })
+      throw new Error(`Unexpected URL: ${url}`)
+    }) as unknown as typeof fetch
+
+    const publisher = new WeChatPublisher({
+      fetchFn: mockFetch,
+      readLocalFile,
+    })
+
+    const protoResult = await publisher.publish({
+      credentials: { appID: `wx_proto`, appsecret: `sec_proto` },
+      mode: `draft`,
+      title: `Protocol Relative Cover`,
+      contentHtml: `<p>Body</p>`,
+      coverSource: `//cdn.example.com/proto-cover.png`,
+      needOpenComment: false,
+    })
+    expect(protoResult.ok).toBe(true)
+    expect(fetchedUrls).toContain(`https://cdn.example.com/proto-cover.png`)
+    expect(readLocalFile).not.toHaveBeenCalled()
+
+    const blockedResult = await publisher.publish({
+      credentials: { appID: `wx_proto`, appsecret: `sec_proto` },
+      mode: `draft`,
+      title: `Arbitrary Local Cover`,
+      contentHtml: `<p>Body</p>`,
+      coverSource: `/tmp/not-picked-by-user.png`,
+      needOpenComment: false,
+    })
+    expect(blockedResult.ok).toBe(false)
+    expect(blockedResult.error).toMatch(/image picker/i)
+    expect(readLocalFile).not.toHaveBeenCalled()
   })
 })

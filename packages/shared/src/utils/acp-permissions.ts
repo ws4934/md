@@ -29,6 +29,29 @@ export type AcpPermissionPolicyAction = `allow` | `reject` | `ask`
 
 const LEVEL_SET = new Set<string>(ACP_PERMISSION_LEVELS)
 
+const PERMISSION_PRIVILEGE_RANK: Record<AcpPermissionLevel, number> = {
+  plan: 0,
+  ask: 1,
+  auto_edits: 2,
+  bypass: 3,
+}
+
+/**
+ * Clamp an agent-reported permission level against the current level so an
+ * agent-originated mode update can tighten or preserve permissions, never
+ * silently escalate above the user-approved ceiling.
+ */
+export function clampAgentModePermissionLevel(
+  currentLevel: AcpPermissionLevel,
+  reportedLevel: AcpPermissionLevel | null,
+): AcpPermissionLevel {
+  if (!reportedLevel)
+    return currentLevel
+  return PERMISSION_PRIVILEGE_RANK[reportedLevel] <= PERMISSION_PRIVILEGE_RANK[currentLevel]
+    ? reportedLevel
+    : currentLevel
+}
+
 const MODE_ID_ALIASES: Record<AcpPermissionLevel, readonly string[]> = {
   ask: [`default`, `ask`, `prompt`, `normal`, `standard`, `suggest`, `code`, `write`],
   auto_edits: [`acceptedits`, `accept_edits`, `accept-edits`, `autoedits`, `auto_edits`, `auto-edits`, `autoedit`, `auto_edit`, `auto-edit`, `edit`],

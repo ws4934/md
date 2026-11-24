@@ -24,7 +24,7 @@ const pushModeUpdate = process.env.FAKE_AGENT_PUSH_MODE || ``
 
 const SESSION_ID = `fake_sess_01`
 let currentModelId = `opus-5.5`
-let currentModeId = `default`
+let currentModeId = process.env.FAKE_AGENT_INITIAL_MODE || `default`
 const modeHistory = []
 let currentCwd = process.cwd()
 let nextClientRequestId = 1000
