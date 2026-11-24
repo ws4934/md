@@ -359,13 +359,10 @@ export function mapPermissionRequest(
   }
 }
 
+// Allow once only: an "always" answer would write a permanent grant into the agent's own settings.
+// Without an allow-once option the request falls through to the UI as a normal permission card.
 export function selectAutoAcceptOption(options: PermissionOption[]): PermissionOption | null {
-  return (
-    options.find(opt => opt.kind === `allow_once`)
-    ?? options.find(opt => opt.kind === `allow_always`)
-    ?? options.find(opt => opt.kind.startsWith(`allow`))
-    ?? null
-  )
+  return options.find(opt => opt.kind === `allow_once`) ?? null
 }
 
 export function buildPermissionResponse(

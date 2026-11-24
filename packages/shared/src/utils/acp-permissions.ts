@@ -101,6 +101,18 @@ export function mapPermissionLevelToAcpModeId(
   return null
 }
 
+/**
+ * Agent mode a permission level runs on. Agents without a native bypass mode (e.g. Antigravity)
+ * run bypass on their ask mode, which prompts for everything, and the client approves each request.
+ */
+export function resolveNativeModeIdForLevel(
+  level: AcpPermissionLevel,
+  modes: readonly AcpModeInfo[],
+): string | null {
+  return mapPermissionLevelToAcpModeId(level, modes)
+    ?? (level === `bypass` ? mapPermissionLevelToAcpModeId(`ask`, modes) : null)
+}
+
 export function agentHasPlanMode(modes: readonly AcpModeInfo[]): boolean {
   return mapPermissionLevelToAcpModeId(`plan`, modes) !== null
 }

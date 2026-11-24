@@ -20,6 +20,7 @@ import { createSafeNdJsonStream } from './ndjson-stream'
 import { probeAcpAgent, ProbeCache } from './probe'
 import { AcpRegistry } from './registry'
 import { AcpSession, appendUtf8RingChunk, decodeUtf8Ring, DEFAULT_CLIENT_CAPABILITIES } from './session'
+import { selectAutoAcceptOption } from './translator'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FAKE_AGENT_SCRIPT = path.resolve(__dirname, `../../../scripts/fake-acp-agent.mjs`)
@@ -1051,5 +1052,14 @@ describe(`performance and reliability guards (P-1, P-2, O-1, O-2, O-5)`, () => {
       claude: `model-3`,
       codex: `model-2`,
     })
+  })
+})
+
+describe(`selectAutoAcceptOption`, () => {
+  it(`auto-approves with allow once only, never a permanent grant`, () => {
+    const once = { optionId: `once`, name: `Allow`, kind: `allow_once` } as const
+    const always = { optionId: `always`, name: `Always`, kind: `allow_always` } as const
+    expect(selectAutoAcceptOption([always, once])?.optionId).toBe(`once`)
+    expect(selectAutoAcceptOption([always])).toBeNull()
   })
 })

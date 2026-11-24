@@ -20,7 +20,7 @@ import {
   evaluatePermissionPolicy,
   isEditToolKind,
   mapAcpModeIdToPermissionLevel,
-  mapPermissionLevelToAcpModeId,
+  resolveNativeModeIdForLevel,
 } from '@md/shared/utils/acp-permissions'
 import { ProbeCache } from './probe'
 import { AcpRegistry } from './registry'
@@ -197,7 +197,10 @@ export class AcpHost {
       },
       onEvent: (event) => {
         if (event.type === `mode_changed`) {
-          if (!permissionState.applyingHostMode) {
+          // Client-side bypass holds while the agent stays on the native mode it runs on.
+          const onClientBypassMode = permissionState.level === `bypass`
+            && event.modeId === resolveNativeModeIdForLevel(`bypass`, sessionRef.current?.modes ?? [])
+          if (!permissionState.applyingHostMode && !onClientBypassMode) {
             const mappedLevel = mapAcpModeIdToPermissionLevel(event.modeId)
             // Agent-originated mode updates may keep or restrict permissions, never escalate.
             permissionState.level = clampAgentModePermissionLevel(permissionState.level, mappedLevel)
@@ -268,7 +271,7 @@ export class AcpHost {
 
     const targetModeId
       = (params.modeId && session.modes.some(m => m.id === params.modeId) ? params.modeId : null)
-        ?? mapPermissionLevelToAcpModeId(permissionState.level, session.modes)
+        ?? resolveNativeModeIdForLevel(permissionState.level, session.modes)
 
     try {
       if (targetModeId && targetModeId !== session.currentModeId) {
@@ -427,7 +430,7 @@ export class AcpHost {
       managed.permissionState.level = params.permissionLevel
       targetModeId
         = (params.modeId && managed.session.modes.some(m => m.id === params.modeId) ? params.modeId : null)
-          ?? mapPermissionLevelToAcpModeId(params.permissionLevel, managed.session.modes)
+          ?? resolveNativeModeIdForLevel(params.permissionLevel, managed.session.modes)
 
       if (targetModeId && targetModeId !== managed.session.currentModeId) {
         managed.permissionState.applyingHostMode = true

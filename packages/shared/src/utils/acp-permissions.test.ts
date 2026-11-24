@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mapAcpModeIdToPermissionLevel, mapPermissionLevelToAcpModeId } from './acp-permissions'
+import { mapAcpModeIdToPermissionLevel, mapPermissionLevelToAcpModeId, resolveNativeModeIdForLevel } from './acp-permissions'
 
 describe(`acp permission mode mapping`, () => {
   it(`does not treat agent "auto" modes as bypass`, () => {
@@ -13,5 +13,12 @@ describe(`acp permission mode mapping`, () => {
     const agyModes = [`default`, `accept-edits`, `auto`, `plan`].map(id => ({ id, name: id }))
     expect(mapPermissionLevelToAcpModeId(`bypass`, agyModes)).toBeNull()
     expect(mapPermissionLevelToAcpModeId(`auto_edits`, agyModes)).toBe(`accept-edits`)
+  })
+
+  it(`runs bypass on the agent ask mode when it has no native bypass mode`, () => {
+    const agyModes = [`default`, `accept-edits`, `auto`, `plan`].map(id => ({ id, name: id }))
+    expect(resolveNativeModeIdForLevel(`bypass`, agyModes)).toBe(`default`)
+    const claudeModes = [`default`, `acceptEdits`, `plan`, `bypassPermissions`].map(id => ({ id, name: id }))
+    expect(resolveNativeModeIdForLevel(`bypass`, claudeModes)).toBe(`bypassPermissions`)
   })
 })
