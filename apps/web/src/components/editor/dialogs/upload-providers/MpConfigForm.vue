@@ -8,7 +8,8 @@ import { useUploadProviderConfig } from './useUploadProviderConfig'
 const { t } = useI18n()
 const isWebsite = window.location.protocol.startsWith(`http`)
 const isCfWorkers = import.meta.env.CF_WORKERS === `1`
-const isProxyRequired = computed(() => isWebsite && !isCfWorkers)
+const isDesktop = Boolean(window.mdDesktop?.isDesktop)
+const isProxyRequired = computed(() => isWebsite && !isCfWorkers && !isDesktop)
 const schema = computed(() => toTypedSchema(z.object({
   proxyOrigin: isProxyRequired.value
     ? requiredString(t(`upload.validation.proxyRequired`))

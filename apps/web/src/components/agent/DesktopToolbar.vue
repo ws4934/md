@@ -1,33 +1,24 @@
 <script setup lang="ts">
-import { Loader2, Palette, Send, Sparkles } from '@lucide/vue'
-import { useEditorRefresh } from '@/composables/useEditorRefresh'
-import { delay } from '@/lib/delay'
-import { processClipboardContent } from '@/services/export'
+import { Palette, Send, Sparkles } from '@lucide/vue'
 import { useAgentStore } from '@/stores/agent'
 import { usePostStore } from '@/stores/post'
-import { useThemeStore } from '@/stores/theme'
 import { useUIStore } from '@/stores/ui'
 
 const emit = defineEmits<{
-  startCopy: []
-  endCopy: []
+  openPublish: []
 }>()
 
 const { t } = useI18n()
 const postStore = usePostStore()
 const uiStore = useUIStore()
-const themeStore = useThemeStore()
 const agentStore = useAgentStore()
-const { editorRefresh } = useEditorRefresh()
 
 const { currentPost } = storeToRefs(postStore)
 const { viewMode, isOpenRightSlider } = storeToRefs(uiStore)
-const { primaryColor } = storeToRefs(themeStore)
 const { isPanelOpen } = storeToRefs(agentStore)
 
 const isEditingTitle = ref(false)
 const titleDraft = ref(``)
-const isPublishing = ref(false)
 
 const viewOptions = computed(() => [
   { id: `edit` as const, label: t(`agent.toolbar.edit`) },
@@ -46,34 +37,6 @@ function commitTitleEdit() {
   if (currentPost.value && titleDraft.value.trim())
     postStore.renamePost(currentPost.value.id, titleDraft.value.trim())
   isEditingTitle.value = false
-}
-
-async function publishToWeChat() {
-  if (isPublishing.value)
-    return
-  isPublishing.value = true
-  emit(`startCopy`)
-
-  try {
-    await nextTick()
-    await delay(150)
-    const processed = await processClipboardContent(primaryColor.value)
-    const item = new ClipboardItem({
-      'text/html': new Blob([processed.html], { type: `text/html` }),
-      'text/plain': new Blob([processed.plainText], { type: `text/plain` }),
-    })
-    await navigator.clipboard.write([item])
-    toast.success(t(`agent.toolbar.copiedToWeChat`))
-    editorRefresh()
-  }
-  catch (error) {
-    toast.error(t(`toast.copyFailed`, { message: error instanceof Error ? error.message : String(error) }))
-    editorRefresh()
-  }
-  finally {
-    emit(`endCopy`)
-    isPublishing.value = false
-  }
 }
 </script>
 
@@ -162,13 +125,12 @@ async function publishToWeChat() {
 
       <button
         type="button"
-        :disabled="isPublishing"
-        class="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold transition-opacity hover:opacity-90 disabled:opacity-60"
+        data-testid="desktop-publish-trigger"
+        class="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold transition-opacity hover:opacity-90"
         style="background-color: var(--dt-ink); color: var(--dt-on-ink)"
-        @click="publishToWeChat"
+        @click="emit('openPublish')"
       >
-        <Loader2 v-if="isPublishing" class="size-3.5 animate-spin" />
-        <Send v-else class="size-3.5" />
+        <Send class="size-3.5" />
         <span>{{ t('agent.toolbar.publish') }}</span>
       </button>
     </div>

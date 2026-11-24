@@ -1,5 +1,9 @@
 export const IPC_CHANNELS = {
   PICK_FILES: `md:dialog:pick-files`,
+  PICK_IMAGE: `md:dialog:pick-image`,
+  OPEN_EXTERNAL: `md:shell:open-external`,
+  WECHAT_PUBLISH: `md:wechat:publish`,
+  WECHAT_PUBLISH_PROGRESS: `md:wechat:publish-progress`,
   ACP_LIST_AGENTS: `md:acp:list-agents`,
   ACP_DETECT_AGENTS: `md:acp:detect-agents`,
   ACP_GET_SETTINGS: `md:acp:get-settings`,

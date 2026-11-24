@@ -5,6 +5,8 @@ import type {
   AcpSettings,
   AcpStartSessionParams,
   DesktopBridge,
+  WeChatPublishProgressEvent,
+  WeChatPublishRequest,
 } from '@md/shared/types'
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC_CHANNELS } from '../shared/ipc-channels'
@@ -17,6 +19,21 @@ const desktopBridge: DesktopBridge = {
   isDesktop: true,
   platform: hostPlatform,
   pickFiles: () => ipcRenderer.invoke(IPC_CHANNELS.PICK_FILES),
+  pickImage: () => ipcRenderer.invoke(IPC_CHANNELS.PICK_IMAGE),
+  openExternal: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.OPEN_EXTERNAL, url),
+  wechat: {
+    publish: (request: WeChatPublishRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.WECHAT_PUBLISH, request),
+    onProgress: (listener: (event: WeChatPublishProgressEvent) => void) => {
+      const handler = (_ipcEvent: Electron.IpcRendererEvent, payload: WeChatPublishProgressEvent) => {
+        listener(payload)
+      }
+      ipcRenderer.on(IPC_CHANNELS.WECHAT_PUBLISH_PROGRESS, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.WECHAT_PUBLISH_PROGRESS, handler)
+      }
+    },
+  },
   acp: {
     listAgents: () => ipcRenderer.invoke(IPC_CHANNELS.ACP_LIST_AGENTS),
     detectAgents: () => ipcRenderer.invoke(IPC_CHANNELS.ACP_DETECT_AGENTS),

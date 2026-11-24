@@ -67,6 +67,7 @@ declare module 'vue' {
     CustomComponentDialog: typeof import('./src/components/editor/dialogs/CustomComponentDialog.vue')['default']
     CustomComponentForm: typeof import('./src/components/editor/dialogs/CustomComponentForm.vue')['default']
     CustomUploadForm: typeof import('./src/components/editor/dialogs/CustomUploadForm.vue')['default']
+    DesktopPublishDialog: typeof import('./src/components/agent/DesktopPublishDialog.vue')['default']
     DesktopSidebar: typeof import('./src/components/agent/DesktopSidebar.vue')['default']
     DesktopToolbar: typeof import('./src/components/agent/DesktopToolbar.vue')['default']
     DesktopWorkspace: typeof import('./src/components/agent/DesktopWorkspace.vue')['default']

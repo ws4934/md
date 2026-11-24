@@ -7,6 +7,7 @@ import { useScrollSync } from '@/composables/useScrollSync'
 import { useAgentStore } from '@/stores/agent'
 import { useUIStore } from '@/stores/ui'
 import AgentPanel from './AgentPanel.vue'
+import DesktopPublishDialog from './DesktopPublishDialog.vue'
 import DesktopSidebar from './DesktopSidebar.vue'
 import DesktopToolbar from './DesktopToolbar.vue'
 import NewArticlePrompt from './NewArticlePrompt.vue'
@@ -66,6 +67,7 @@ useScrollSync(getEditorView, getPreviewContainer, enableScrollSync)
 
 const backLight = ref(false)
 const isCoping = ref(false)
+const isShowPublishDialog = ref(false)
 let copyEndTimer: ReturnType<typeof setTimeout> | null = null
 
 function startCopy() {
@@ -131,7 +133,7 @@ onUnmounted(() => {
     <!-- Main editing workspace (Screens 01, 02, 05) -->
     <template v-else>
       <main class="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <DesktopToolbar @start-copy="startCopy" @end-copy="endCopy" />
+        <DesktopToolbar @open-publish="isShowPublishDialog = true" />
 
         <div class="flex min-h-0 flex-1 overflow-hidden">
           <!-- Editor pane -->
@@ -182,6 +184,11 @@ onUnmounted(() => {
     </template>
 
     <!-- Dialogs -->
+    <DesktopPublishDialog
+      v-model:open="isShowPublishDialog"
+      @start-copy="startCopy"
+      @end-copy="endCopy"
+    />
     <PreferencesDialog v-model:open="isShowPreferencesDialog" />
     <UploadImgDialog v-if="isShowUploadImgDialog" @upload-image="handleUploadImage" />
     <TableEditDialog v-if="isShowTableEditDialog" />

@@ -1,4 +1,5 @@
-import type { AcpAgentConfig, AcpHostEvent } from '@md/shared/types'
+import type { AcpAgentConfig, AcpHostEvent, WeChatPublishProgressEvent, WeChatPublishRequest } from '@md/shared/types'
+import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -6,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, shell } from 'electron'
 import { IPC_CHANNELS } from '../shared/ipc-channels'
 import { AcpHost } from './acp/host'
+import { mimeForExtension, WeChatPublisher } from './wechat/publisher'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -58,10 +60,16 @@ function registerAppProtocol(): void {
 
 let mainWindow: BrowserWindow | null = null
 let acpHost: AcpHost | null = null
+let wechatPublisher: WeChatPublisher | null = null
 
 function broadcastAcpEvent(event: AcpHostEvent): void {
   if (mainWindow && !mainWindow.isDestroyed())
     mainWindow.webContents.send(IPC_CHANNELS.ACP_EVENT, event)
+}
+
+function broadcastWeChatProgress(event: WeChatPublishProgressEvent): void {
+  if (mainWindow && !mainWindow.isDestroyed())
+    mainWindow.webContents.send(IPC_CHANNELS.WECHAT_PUBLISH_PROGRESS, event)
 }
 
 function buildOptionalFakeAgents(): AcpAgentConfig[] {
@@ -131,7 +139,7 @@ function createMainWindow(): BrowserWindow {
   return win
 }
 
-function registerIpc(host: AcpHost): void {
+function registerIpc(host: AcpHost, publisher: WeChatPublisher): void {
   ipcMain.handle(IPC_CHANNELS.PICK_FILES, async () => {
     const owner = mainWindow ?? BrowserWindow.getFocusedWindow() ?? undefined
     const options: Electron.OpenDialogOptions = {
@@ -147,6 +155,38 @@ function registerIpc(host: AcpHost): void {
       name: path.basename(filePath),
     }))
   })
+
+  ipcMain.handle(IPC_CHANNELS.PICK_IMAGE, async () => {
+    const owner = mainWindow ?? BrowserWindow.getFocusedWindow() ?? undefined
+    const options: Electron.OpenDialogOptions = {
+      properties: [`openFile`],
+      filters: [
+        { name: `Images`, extensions: [`png`, `jpg`, `jpeg`, `gif`, `webp`, `bmp`] },
+      ],
+    }
+    const result = owner
+      ? await dialog.showOpenDialog(owner, options)
+      : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0)
+      return null
+
+    const filePath = result.filePaths[0]
+    const raw = await fs.promises.readFile(filePath)
+    const mime = mimeForExtension(path.extname(filePath))
+    return {
+      path: filePath,
+      name: path.basename(filePath),
+      dataUrl: `data:${mime};base64,${Buffer.from(raw).toString(`base64`)}`,
+    }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.OPEN_EXTERNAL, async (_event, url: string) => {
+    if (typeof url === `string` && /^https?:\/\//i.test(url.trim()))
+      await shell.openExternal(url.trim())
+  })
+
+  ipcMain.handle(IPC_CHANNELS.WECHAT_PUBLISH, (_event, request: WeChatPublishRequest) =>
+    publisher.publish(request))
 
   ipcMain.handle(IPC_CHANNELS.ACP_LIST_AGENTS, () => host.listAgents())
   ipcMain.handle(IPC_CHANNELS.ACP_DETECT_AGENTS, () => host.detectAgents())
@@ -174,7 +214,10 @@ app.whenReady().then(() => {
     extraBuiltinAgents: buildOptionalFakeAgents(),
     onEvent: broadcastAcpEvent,
   })
-  registerIpc(acpHost)
+  wechatPublisher = new WeChatPublisher({
+    onProgress: broadcastWeChatProgress,
+  })
+  registerIpc(acpHost, wechatPublisher)
   mainWindow = createMainWindow()
 
   const smokeExitMs = Number(process.env.MD_DESKTOP_SMOKE_EXIT_MS ?? 0)

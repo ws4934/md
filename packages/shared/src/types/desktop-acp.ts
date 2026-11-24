@@ -1,3 +1,5 @@
+import type { DesktopPickedImage, DesktopWeChatApi } from './desktop-wechat'
+
 export interface AcpAgentAvatar {
   letter: string
   color: string
@@ -213,5 +215,8 @@ export interface DesktopBridge {
   isDesktop: true
   platform: string
   acp: DesktopAcpApi
+  wechat: DesktopWeChatApi
   pickFiles: () => Promise<DesktopPickedFile[]>
+  pickImage: () => Promise<DesktopPickedImage | null>
+  openExternal: (url: string) => Promise<void>
 }
