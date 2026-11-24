@@ -65,6 +65,16 @@ export const BUILTIN_AGENTS: AcpAgentConfig[] = [
     builtin: true,
     avatar: { letter: `O`, color: `#8A877F` },
   },
+  {
+    // Native binary from the Antigravity installer (no npm package), speaks ACP via `agy acp`.
+    id: `antigravity`,
+    name: `Antigravity CLI`,
+    command: `agy`,
+    args: [`acp`],
+    detectBinaries: [`agy`],
+    builtin: true,
+    avatar: { letter: `A`, color: `#0F9D8A` },
+  },
 ]
 
 const CUSTOM_AVATAR_COLORS = [`#5B5BD6`, `#0A9E55`, `#D97757`, `#4C7DF0`, `#7A5AF8`, `#A86500`]
