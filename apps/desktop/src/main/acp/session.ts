@@ -4,6 +4,7 @@ import type {
   ContentBlock,
   CreateTerminalRequest,
   KillTerminalRequest,
+  McpServer,
   PermissionOption,
   ReleaseTerminalRequest,
   RequestPermissionRequest,
@@ -71,6 +72,7 @@ export interface AcpSessionOptions {
   args: string[]
   cwd: string
   env?: Record<string, string>
+  mcpServers?: McpServer[]
   pathOverride?: string
   initialModelId?: string | null
   initialThinkingLevel?: string | null
@@ -315,7 +317,7 @@ export class AcpSession {
         this.connection!.agent.request<ExtendedNewSessionResponse>(`session/new`, {
           cwd: this.options.cwd,
           // Always pass mcpServers (even empty) because some agents reject omitted fields.
-          mcpServers: [],
+          mcpServers: this.options.mcpServers ?? [],
         }),
         this.timeouts.sessionNewMs,
         `ACP session/new timed out after ${this.timeouts.sessionNewMs}ms`,
@@ -352,7 +354,7 @@ export class AcpSession {
         this.connection!.agent.request<ExtendedNewSessionResponse>(`session/load`, {
           sessionId,
           cwd: this.options.cwd,
-          mcpServers: [],
+          mcpServers: this.options.mcpServers ?? [],
         }),
         this.timeouts.sessionLoadMs,
         `ACP session/load timed out after ${this.timeouts.sessionLoadMs}ms`,

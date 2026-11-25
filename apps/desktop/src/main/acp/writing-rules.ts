@@ -1,4 +1,6 @@
 // Syntax mirrors packages/core/src/extensions/*; keep in sync when an extension's syntax changes.
+export const IMAGE_GEN_WRITING_RULE = `- Illustrations: call the \`generate_image\` tool to generate custom illustrations and embed the returned \`images/...\` relative path in Markdown.`
+
 export const ARTICLE_WRITING_RULES = `[Writing rules] The article is rendered by doocs/md into a WeChat Official Account (公众号) post. Follow these rules whenever you write or edit it:
 - Write in the language of the user's request unless asked otherwise.
 - Standard GitHub-flavored Markdown: headings, lists, tables, blockquotes, fenced code blocks with a language tag.
@@ -23,3 +25,13 @@ Extended syntax supported by this editor (use it where it helps the reader, do n
   <TableBlock headers='["A","B"]' rows='[["1","2"]]' caption="..." />
   <InfoGrid items='[{"label":"...","value":"..."}]' cols="2" />
   <BadgeGroup tags='["...","..."]' />`
+
+export function buildArticleWritingRules(options?: { imageGenEnabled?: boolean }): string {
+  if (!options?.imageGenEnabled)
+    return ARTICLE_WRITING_RULES
+  const anchor = `- Links: write`
+  const idx = ARTICLE_WRITING_RULES.indexOf(anchor)
+  if (idx === -1)
+    return `${ARTICLE_WRITING_RULES}\n${IMAGE_GEN_WRITING_RULE}`
+  return `${ARTICLE_WRITING_RULES.slice(0, idx)}${IMAGE_GEN_WRITING_RULE}\n${ARTICLE_WRITING_RULES.slice(idx)}`
+}

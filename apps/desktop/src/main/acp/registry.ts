@@ -100,6 +100,7 @@ export interface AcpRegistryOptions {
   settingsPath: string
   pathOverride?: string
   extraBuiltinAgents?: AcpAgentConfig[]
+  resolveAgentAvailability?: (agentId: string) => boolean | null | Promise<boolean | null>
   onEvent?: (event: AcpHostEvent) => void
 }
 
@@ -107,6 +108,7 @@ export class AcpRegistry {
   private readonly settingsPath: string
   private readonly pathOverride?: string
   private readonly extraBuiltinAgents: AcpAgentConfig[]
+  private readonly resolveAgentAvailability?: AcpRegistryOptions[`resolveAgentAvailability`]
   private readonly onEvent?: (event: AcpHostEvent) => void
 
   private settings: AcpSettings = createDefaultAcpSettings()
@@ -120,6 +122,7 @@ export class AcpRegistry {
     this.settingsPath = options.settingsPath
     this.pathOverride = options.pathOverride
     this.extraBuiltinAgents = options.extraBuiltinAgents ?? []
+    this.resolveAgentAvailability = options.resolveAgentAvailability
     this.onEvent = options.onEvent
   }
 
@@ -285,6 +288,15 @@ export class AcpRegistry {
 
     await Promise.all(
       configs.map(async (config) => {
+        const availabilityOverride = await this.resolveAgentAvailability?.(config.id) ?? null
+        if (availabilityOverride !== null) {
+          this.detectionCache.set(config.id, {
+            installed: availabilityOverride,
+            resolvedPath: availabilityOverride ? config.command : undefined,
+          })
+          return
+        }
+
         const override = this.settings.commandOverrides[config.id]
         const binariesToCheck = override?.command
           ? [override.command]
@@ -316,10 +328,53 @@ export class AcpRegistry {
     return statuses
   }
 
+  /**
+   * Re-evaluates dynamic availability overrides (e.g. built-in API agent config)
+   * without re-scanning PATH or spawning a login shell.
+   */
+  async refreshAvailability(): Promise<AcpAgentStatus[]> {
+    await this.ensureLoaded()
+    if (this.detectionCache.size === 0)
+      return this.detectAgents({ forceShell: false })
+
+    if (this.resolveAgentAvailability) {
+      const configs = this.getAllConfigs()
+      await Promise.all(
+        configs.map(async (config) => {
+          const availabilityOverride = await this.resolveAgentAvailability?.(config.id) ?? null
+          if (availabilityOverride !== null) {
+            this.detectionCache.set(config.id, {
+              installed: availabilityOverride,
+              resolvedPath: availabilityOverride ? config.command : undefined,
+            })
+          }
+        }),
+      )
+    }
+
+    const statuses = this.buildStatuses()
+    this.onEvent?.({ type: `agents_changed`, agents: statuses })
+    return statuses
+  }
+
   async listAgents(): Promise<AcpAgentStatus[]> {
     await this.ensureLoaded()
     if (this.detectionCache.size === 0)
       return this.detectAgents({ forceShell: false })
+    if (this.resolveAgentAvailability) {
+      const configs = this.getAllConfigs()
+      await Promise.all(
+        configs.map(async (config) => {
+          const availabilityOverride = await this.resolveAgentAvailability?.(config.id) ?? null
+          if (availabilityOverride !== null) {
+            this.detectionCache.set(config.id, {
+              installed: availabilityOverride,
+              resolvedPath: availabilityOverride ? config.command : undefined,
+            })
+          }
+        }),
+      )
+    }
     return this.buildStatuses()
   }
 

@@ -6,6 +6,8 @@ import { build } from 'esbuild'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, `..`)
 
+const ESM_CJS_SHIM_BANNER = `import { createRequire as __mdCreateRequire } from 'node:module'; const require = __mdCreateRequire(import.meta.url);`
+
 export async function buildDesktopBundles(): Promise<void> {
   await Promise.all([
     build({
@@ -17,6 +19,7 @@ export async function buildDesktopBundles(): Promise<void> {
       target: `node22`,
       sourcemap: true,
       external: [`electron`, `@agentclientprotocol/sdk`],
+      banner: { js: ESM_CJS_SHIM_BANNER },
     }),
     build({
       entryPoints: [path.join(rootDir, `src/preload/index.ts`)],
@@ -27,6 +30,26 @@ export async function buildDesktopBundles(): Promise<void> {
       target: `node22`,
       sourcemap: true,
       external: [`electron`],
+    }),
+    build({
+      entryPoints: [path.join(rootDir, `src/agents/api-agent/index.ts`)],
+      outfile: path.join(rootDir, `dist/agents/api-agent.js`),
+      bundle: true,
+      platform: `node`,
+      format: `esm`,
+      target: `node22`,
+      sourcemap: true,
+      banner: { js: ESM_CJS_SHIM_BANNER },
+    }),
+    build({
+      entryPoints: [path.join(rootDir, `src/agents/image-mcp/index.ts`)],
+      outfile: path.join(rootDir, `dist/agents/image-mcp.js`),
+      bundle: true,
+      platform: `node`,
+      format: `esm`,
+      target: `node22`,
+      sourcemap: true,
+      banner: { js: ESM_CJS_SHIM_BANNER },
     }),
   ])
 }

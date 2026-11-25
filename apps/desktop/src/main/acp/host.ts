@@ -1,4 +1,4 @@
-import type { ContentBlock } from '@agentclientprotocol/sdk/unstable'
+import type { ContentBlock, McpServer } from '@agentclientprotocol/sdk/unstable'
 import type {
   AcpAgentConfig,
   AcpAgentStatus,
@@ -28,7 +28,7 @@ import { ProbeCache } from './probe'
 import { AcpRegistry } from './registry'
 import { AcpSession } from './session'
 import { isMethodNotFoundError } from './translator'
-import { ARTICLE_WRITING_RULES } from './writing-rules'
+import { buildArticleWritingRules } from './writing-rules'
 
 export interface AcpActiveSessionSummary {
   sessionId: string
@@ -57,6 +57,14 @@ export interface AcpHostOptions {
   dataDir: string
   pathOverride?: string
   extraBuiltinAgents?: AcpAgentConfig[]
+  resolveAgentAvailability?: (agentId: string) => boolean | null | Promise<boolean | null>
+  /** Runtime-only env vars injected when spawning a session or probe (never returned in AcpAgentStatus). */
+  resolveAgentRuntimeEnv?: (
+    agentId: string,
+    context: { workspaceDir?: string, forProbe?: boolean },
+  ) => Record<string, string> | undefined | Promise<Record<string, string> | undefined>
+  resolveSessionMcpServers?: (agentId: string, workspaceDir: string) => McpServer[] | Promise<McpServer[]>
+  isImageGenConfigured?: () => boolean | Promise<boolean>
   onEvent?: (event: AcpHostEvent) => void
 }
 
@@ -69,7 +77,12 @@ const WORKSPACE_IMAGE_MIME: Record<string, string> = {
   '.webp': `image/webp`,
 }
 
-export function buildPromptText(params: AcpPromptParams, articlePath: string, includeRules: boolean): string {
+export function buildPromptText(
+  params: AcpPromptParams,
+  articlePath: string,
+  includeRules: boolean,
+  options?: { imageGenEnabled?: boolean },
+): string {
   const attachments = params.attachments?.filter(Boolean) ?? []
   const contextHeader = [
     `[Context] You are editing the open Markdown article in doocs/md.`,
@@ -81,7 +94,7 @@ export function buildPromptText(params: AcpPromptParams, articlePath: string, in
     `Edit "${articlePath}" directly on disk to update the article.`,
   ].join(`\n`)
   return includeRules
-    ? `${contextHeader}\n\n${ARTICLE_WRITING_RULES}\n\n${params.text}`
+    ? `${contextHeader}\n\n${buildArticleWritingRules({ imageGenEnabled: options?.imageGenEnabled })}\n\n${params.text}`
     : `${contextHeader}\n\n${params.text}`
 }
 
@@ -92,11 +105,19 @@ export class AcpHost {
   private readonly probeCache: ProbeCache
   private readonly sessions = new Map<string, ManagedSession>()
   private readonly activeWorkspaceDirs = new Set<string>()
+  private readonly resolveAgentAvailability?: AcpHostOptions[`resolveAgentAvailability`]
+  private readonly resolveAgentRuntimeEnv?: AcpHostOptions[`resolveAgentRuntimeEnv`]
+  private readonly resolveSessionMcpServers?: AcpHostOptions[`resolveSessionMcpServers`]
+  private readonly isImageGenConfigured?: AcpHostOptions[`isImageGenConfigured`]
   private readonly onEvent?: (event: AcpHostEvent) => void
 
   constructor(options: AcpHostOptions) {
     this.workspacesRoot = path.join(options.dataDir, `acp-workspaces`)
     this.pathOverride = options.pathOverride
+    this.resolveAgentAvailability = options.resolveAgentAvailability
+    this.resolveAgentRuntimeEnv = options.resolveAgentRuntimeEnv
+    this.resolveSessionMcpServers = options.resolveSessionMcpServers
+    this.isImageGenConfigured = options.isImageGenConfigured
     this.onEvent = options.onEvent
     this.probeCache = new ProbeCache({
       cachePath: path.join(options.dataDir, `acp-probe-cache.json`),
@@ -105,6 +126,7 @@ export class AcpHost {
       settingsPath: path.join(options.dataDir, `acp-settings.json`),
       pathOverride: options.pathOverride,
       extraBuiltinAgents: options.extraBuiltinAgents,
+      resolveAgentAvailability: options.resolveAgentAvailability,
       onEvent: options.onEvent,
     })
     // Best-effort cleanup of orphaned workspace folders left by prior crashes / SIGKILLs.
@@ -176,14 +198,38 @@ export class AcpHost {
     return this.registry.cancelInstall(agentId)
   }
 
+  invalidateAgentProbe(agentId: string): void {
+    this.probeCache.invalidate(agentId)
+  }
+
+  refreshAgentAvailability(): Promise<AcpAgentStatus[]> {
+    return this.registry.refreshAvailability()
+  }
+
   async probeAgent(agentId: string, options?: { force?: boolean }): Promise<AcpProbeResult> {
+    const availability = await this.resolveAgentAvailability?.(agentId) ?? null
+    if (availability === false) {
+      return {
+        agentId,
+        models: [],
+        currentModelId: null,
+        modes: [],
+        currentModeId: null,
+        commands: [],
+        probedAt: Date.now(),
+        error: `Agent is not configured`,
+      }
+    }
+
     const launch = await this.registry.resolveLaunchSpec(agentId)
+    const runtimeEnv = await this.resolveAgentRuntimeEnv?.(agentId, { forProbe: true })
+    const mergedEnv = runtimeEnv ? { ...launch.env, ...runtimeEnv } : launch.env
     return this.probeCache.probe(
       {
         agentId,
         command: launch.command,
         args: launch.args,
-        env: launch.env,
+        env: mergedEnv,
         pathOverride: this.pathOverride,
       },
       options,
@@ -204,6 +250,23 @@ export class AcpHost {
     await fs.mkdir(workspaceDir, { recursive: true })
     await fs.writeFile(articlePath, params.content, `utf8`)
 
+    let mergedEnv = launch.env
+    let mcpServers: McpServer[] = []
+    try {
+      const runtimeEnv = await this.resolveAgentRuntimeEnv?.(params.agentId, {
+        workspaceDir,
+        forProbe: false,
+      })
+      if (runtimeEnv)
+        mergedEnv = { ...launch.env, ...runtimeEnv }
+      mcpServers = await this.resolveSessionMcpServers?.(params.agentId, workspaceDir) ?? []
+    }
+    catch (error) {
+      this.activeWorkspaceDirs.delete(workspaceDir)
+      await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined)
+      throw error
+    }
+
     const initialModelId = params.modelId ?? settings.lastModelByAgent[params.agentId] ?? null
     const initialThinkingLevel = params.thinkingLevel ?? settings.lastThinkingLevelByAgent[params.agentId] ?? null
     const initialLevel: AcpPermissionLevel
@@ -223,7 +286,8 @@ export class AcpHost {
       command: launch.command,
       args: launch.args,
       cwd: workspaceDir,
-      env: launch.env,
+      env: mergedEnv,
+      mcpServers,
       pathOverride: this.pathOverride,
       initialModelId,
       initialThinkingLevel,
@@ -430,10 +494,11 @@ export class AcpHost {
     // Rules ride on the first turn only; the agent keeps them in its own conversation history.
     const includeRules = !managed.writingRulesSent
     managed.writingRulesSent = true
+    const imageGenEnabled = includeRules ? Boolean(await this.isImageGenConfigured?.()) : false
     const blocks: ContentBlock[] = [
       {
         type: `text`,
-        text: buildPromptText(params, managed.articlePath, includeRules),
+        text: buildPromptText(params, managed.articlePath, includeRules, { imageGenEnabled }),
       },
     ]
 
