@@ -203,6 +203,7 @@ describe(`useAgentStore thinking level state`, () => {
       isDesktop: true,
       platform: `darwin`,
       acp: acpMock,
+      ai: {} as never,
       wechat: {} as never,
       pickFiles: vi.fn(async () => []),
       pickImage: vi.fn(async () => null),

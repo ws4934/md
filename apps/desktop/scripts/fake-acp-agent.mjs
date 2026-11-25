@@ -39,6 +39,7 @@ const modeHistory = []
 const setModelHistory = []
 const setConfigHistory = []
 let currentCwd = process.cwd()
+let receivedMcpServers = []
 let nextClientRequestId = 1000
 const pendingClientRequests = new Map()
 
@@ -567,6 +568,16 @@ async function handlePrompt(id, params) {
     })
   }
 
+  if (receivedMcpServers.length > 0) {
+    sendUpdate({
+      sessionUpdate: `agent_message_chunk`,
+      content: {
+        type: `text`,
+        text: `\n\n[mcp:${receivedMcpServers.map(s => s.name).join(`,`)}]`,
+      },
+    })
+  }
+
   sendResult(id, { stopReason: `end_turn` })
 }
 
@@ -615,6 +626,7 @@ async function handleRequest(msg) {
         return
       }
       currentCwd = params.cwd
+      receivedMcpServers = params.mcpServers
 
       if (earlyUpdate) {
         sendUpdate({
@@ -655,6 +667,7 @@ async function handleRequest(msg) {
         return
       }
       currentCwd = params.cwd
+      receivedMcpServers = params.mcpServers
       sendResult(id, buildModelsMetadata())
       return
     }
