@@ -3,6 +3,8 @@ import { DEFAULT_PDF_EXPORT_OPTIONS, normalizePdfExportOptions } from '@/service
 import { store } from '@/storage'
 import { addPrefix } from '@/storage/prefix'
 
+export type PreferencesTab = `general` | `editor` | `preview` | `images` | `wechat` | `agents`
+
 /** Global UI state: dark mode, sidebars, dialogs, view mode, etc. */
 export const useUIStore = defineStore(`ui`, () => {
   const isDark = useDark()
@@ -173,11 +175,12 @@ export const useUIStore = defineStore(`ui`, () => {
   const isShowEditorStateDialog = ref(false)
   const toggleShowEditorStateDialog = useToggle(isShowEditorStateDialog)
 
+  // On desktop this drives the full-page settings view; `images` / `wechat` exist only there.
   const isShowPreferencesDialog = ref(false)
-  const preferencesInitialTab = ref<`general` | `editor` | `preview` | `agents`>(`general`)
+  const preferencesInitialTab = ref<PreferencesTab>(`general`)
   const toggleShowPreferencesDialog = useToggle(isShowPreferencesDialog)
 
-  function openPreferencesDialog(tab: `general` | `editor` | `preview` | `agents` = `general`) {
+  function openPreferencesDialog(tab: PreferencesTab = `general`) {
     preferencesInitialTab.value = tab
     isShowPreferencesDialog.value = true
   }

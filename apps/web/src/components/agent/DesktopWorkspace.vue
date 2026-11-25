@@ -31,7 +31,7 @@ import './desktop-theme.css'
 
 const DesktopPublishDialog = defineAsyncComponent(() => import('./DesktopPublishDialog.vue'))
 const RightSlider = defineAsyncComponent(() => import('@/components/editor/RightSlider.vue'))
-const PreferencesDialog = defineAsyncComponent(() => import('@/components/editor/dialogs/PreferencesDialog.vue'))
+const DesktopSettingsPage = defineAsyncComponent(() => import('./DesktopSettingsPage.vue'))
 const UploadImgDialog = defineAsyncComponent(() => import('@/components/editor/dialogs/UploadImgDialog.vue'))
 const TableEditDialog = defineAsyncComponent(() => import('@/components/editor/dialogs/TableEditDialog.vue'))
 const ImportMarkdownDialog = defineAsyncComponent(() => import('@/components/editor/dialogs/ImportMarkdownDialog.vue'))
@@ -678,7 +678,7 @@ onUnmounted(() => {
       @start-copy="startCopy"
       @end-copy="endCopy"
     />
-    <PreferencesDialog v-model:open="isShowPreferencesDialog" />
+    <DesktopSettingsPage v-if="isShowPreferencesDialog" />
     <UploadImgDialog v-if="isShowUploadImgDialog" @upload-image="handleUploadImage" />
     <TableEditDialog v-if="isShowTableEditDialog" />
     <ImportMarkdownDialog v-if="isShowImportMdDialog" />

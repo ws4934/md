@@ -425,6 +425,9 @@ declare global {
   export type { SyncStatus } from './src/stores/sync'
   import('./src/stores/sync')
   // @ts-ignore
+  export type { PreferencesTab } from './src/stores/ui'
+  import('./src/stores/ui')
+  // @ts-ignore
   export type { SlashCommandGroup, SlashCommandItem } from './src/composables/slashCommands'
   import('./src/composables/slashCommands')
   // @ts-ignore

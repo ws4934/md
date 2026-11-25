@@ -229,6 +229,23 @@ export default {
       editor: `编辑`,
       preview: `预览`,
       agents: `Agents`,
+      images: `图片与图床`,
+      wechat: `公众号`,
+    },
+    backToEditor: `返回编辑`,
+    sectionHint: {
+      general: `界面语言与外观。`,
+      editor: `编辑器视图与写作辅助。`,
+      preview: `预览设备与字数统计。`,
+      images: `插入、粘贴的图片以及 Agent 生成的图片，都会上传到这里选择的图床。`,
+      wechat: `用于发布到公众号，公众号图床也使用这组凭证。`,
+    },
+    imageHost: {
+      label: `图床`,
+      hint: `上传图片使用的服务`,
+      configTitle: `{host} 配置`,
+      mpSharedNote: `公众号图床使用「公众号」设置中的 AppID 与 AppSecret。`,
+      openWechat: `前往公众号设置`,
     },
     language: {
       label: `语言`,

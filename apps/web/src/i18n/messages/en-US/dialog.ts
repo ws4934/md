@@ -229,6 +229,23 @@ export default {
       editor: `Editor`,
       preview: `Preview`,
       agents: `Agents`,
+      images: `Images`,
+      wechat: `WeChat`,
+    },
+    backToEditor: `Back to editor`,
+    sectionHint: {
+      general: `Interface language and appearance.`,
+      editor: `Editor view and writing aids.`,
+      preview: `Preview device and word count.`,
+      images: `Inserted, pasted and agent-generated images are uploaded to the host chosen here.`,
+      wechat: `Used for publishing to WeChat; the WeChat image host uses the same credentials.`,
+    },
+    imageHost: {
+      label: `Image host`,
+      hint: `Service used to upload images`,
+      configTitle: `{host} settings`,
+      mpSharedNote: `The WeChat image host uses the AppID and AppSecret from WeChat settings.`,
+      openWechat: `Open WeChat settings`,
     },
     language: {
       label: `Language`,

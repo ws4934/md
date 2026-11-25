@@ -72,6 +72,7 @@ declare module 'vue' {
     CustomComponentForm: typeof import('./src/components/editor/dialogs/CustomComponentForm.vue')['default']
     CustomUploadForm: typeof import('./src/components/editor/dialogs/CustomUploadForm.vue')['default']
     DesktopPublishDialog: typeof import('./src/components/agent/DesktopPublishDialog.vue')['default']
+    DesktopSettingsPage: typeof import('./src/components/agent/DesktopSettingsPage.vue')['default']
     DesktopSidebar: typeof import('./src/components/agent/DesktopSidebar.vue')['default']
     DesktopSplitHandle: typeof import('./src/components/agent/DesktopSplitHandle.vue')['default']
     DesktopToolbar: typeof import('./src/components/agent/DesktopToolbar.vue')['default']
@@ -122,6 +123,7 @@ declare module 'vue' {
     HoverCard: typeof import('./src/components/ui/hover-card/HoverCard.vue')['default']
     HoverCardContent: typeof import('./src/components/ui/hover-card/HoverCardContent.vue')['default']
     HoverCardTrigger: typeof import('./src/components/ui/hover-card/HoverCardTrigger.vue')['default']
+    ImageHostSettings: typeof import('./src/components/editor/dialogs/upload-providers/ImageHostSettings.vue')['default']
     ImportMarkdownDialog: typeof import('./src/components/editor/dialogs/ImportMarkdownDialog.vue')['default']
     Input: typeof import('./src/components/ui/input/Input.vue')['default']
     InsertDropdown: typeof import('./src/components/editor/editor-header/InsertDropdown.vue')['default']
@@ -169,6 +171,7 @@ declare module 'vue' {
     PostSlider: typeof import('./src/components/editor/post-slider/index.vue')['default']
     PostTaskDialog: typeof import('./src/components/editor/editor-header/PostTaskDialog.vue')['default']
     PreferencesDialog: typeof import('./src/components/editor/dialogs/PreferencesDialog.vue')['default']
+    PreferencesSection: typeof import('./src/components/editor/dialogs/PreferencesSection.vue')['default']
     PreviewPanel: typeof import('./src/components/editor/PreviewPanel.vue')['default']
     Progress: typeof import('./src/components/ui/progress/Progress.vue')['default']
     QiniuConfigForm: typeof import('./src/components/editor/dialogs/upload-providers/QiniuConfigForm.vue')['default']
@@ -221,5 +224,6 @@ declare module 'vue' {
     UploadProviderTextField: typeof import('./src/components/editor/dialogs/upload-providers/UploadProviderTextField.vue')['default']
     UpyunConfigForm: typeof import('./src/components/editor/dialogs/upload-providers/UpyunConfigForm.vue')['default']
     VersionDiffViewer: typeof import('./src/components/editor/post-slider/VersionDiffViewer.vue')['default']
+    WeChatAccountSettings: typeof import('./src/components/agent/WeChatAccountSettings.vue')['default']
   }
 }

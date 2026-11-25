@@ -229,6 +229,23 @@ export default {
       editor: `エディター`,
       preview: `プレビュー`,
       agents: `Agents`,
+      images: `画像`,
+      wechat: `WeChat 公式アカウント`,
+    },
+    backToEditor: `エディターに戻る`,
+    sectionHint: {
+      general: `表示言語と外観。`,
+      editor: `エディターの表示と執筆補助。`,
+      preview: `プレビュー端末と文字数。`,
+      images: `挿入・貼り付けした画像と Agent が生成した画像は、ここで選んだ画像ホストにアップロードされます。`,
+      wechat: `WeChat への公開に使用し、WeChat 画像ホストも同じ認証情報を使います。`,
+    },
+    imageHost: {
+      label: `画像ホスト`,
+      hint: `画像のアップロード先`,
+      configTitle: `{host} の設定`,
+      mpSharedNote: `WeChat 画像ホストは WeChat 設定の AppID と AppSecret を使用します。`,
+      openWechat: `WeChat 設定を開く`,
     },
     language: {
       label: `言語`,

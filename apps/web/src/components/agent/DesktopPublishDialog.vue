@@ -14,8 +14,6 @@ import {
   CheckCircle2,
   Copy,
   ExternalLink,
-  Eye,
-  EyeOff,
   ImagePlus,
   Info,
   Loader2,
@@ -34,6 +32,7 @@ import { useMpAccountsStore } from '@/stores/mpAccounts'
 import { usePostStore } from '@/stores/post'
 import { useRenderStore } from '@/stores/render'
 import { useThemeStore } from '@/stores/theme'
+import { useUIStore } from '@/stores/ui'
 
 const props = defineProps<{
   open: boolean
@@ -48,7 +47,6 @@ const emit = defineEmits<{
 const MP_CONFIG_KEY = `mpConfig`
 const LAST_AUTHOR_KEY = `desktop_wechat_last_author`
 const MP_CONSOLE_URL = `https://mp.weixin.qq.com/`
-const MP_DEV_DOC_URL = `https://developers.weixin.qq.com/doc/offiaccount/Getting_Started/Getting_Started_Guide.html`
 
 const { t } = useI18n()
 const postStore = usePostStore()
@@ -56,6 +54,7 @@ const editorStore = useEditorStore()
 const renderStore = useRenderStore()
 const themeStore = useThemeStore()
 const mpAccountsStore = useMpAccountsStore()
+const uiStore = useUIStore()
 const { editorRefresh } = useEditorRefresh()
 
 const { currentPost } = storeToRefs(postStore)
@@ -67,14 +66,6 @@ const mpCredentials = ref<WeChatMpCredentials>({
   appsecret: ``,
   proxyOrigin: ``,
 })
-
-const credForm = ref<WeChatMpCredentials>({
-  appID: ``,
-  appsecret: ``,
-  proxyOrigin: ``,
-})
-const showSecret = ref(false)
-const isEditingCredentials = ref(false)
 
 const title = ref(``)
 const digest = ref(``)
@@ -136,7 +127,6 @@ const accountSummaryText = computed(() => {
 
 const canSubmit = computed(() =>
   hasCredentials.value
-  && !isEditingCredentials.value
   && phase.value !== `running`
   && Boolean(title.value.trim())
   && Boolean(coverSource.value.trim()),
@@ -216,8 +206,6 @@ async function loadInitialState() {
     appsecret: saved?.appsecret?.trim() ?? ``,
     proxyOrigin: saved?.proxyOrigin?.trim() ?? ``,
   }
-  credForm.value = { ...mpCredentials.value }
-  isEditingCredentials.value = !hasCredentials.value
 
   const markdown = editorStore.getContent()
   if (renderStore.isDirty || !renderStore.output)
@@ -259,29 +247,10 @@ function closeDialog() {
   emit(`update:open`, false)
 }
 
-function openCredentialsEditor() {
-  credForm.value = { ...mpCredentials.value }
-  showSecret.value = false
-  isEditingCredentials.value = true
-  confirmingPublish.value = false
-}
-
-async function saveCredentials() {
-  const appID = credForm.value.appID.trim()
-  const appsecret = credForm.value.appsecret.trim()
-  const proxyOrigin = credForm.value.proxyOrigin?.trim().replace(/\/+$/, ``) ?? ``
-
-  if (!appID || !appsecret) {
-    toast.error(t(`agent.publish.credentialsRequired`))
-    return
-  }
-
-  const next: WeChatMpCredentials = { appID, appsecret, proxyOrigin }
-  await store.setJSON(MP_CONFIG_KEY, next)
-  mpCredentials.value = next
-  isEditingCredentials.value = false
-  errorState.value = null
-  toast.success(t(`common.saveSuccess`))
+// Credentials live in Settings → WeChat (shared with the WeChat image host).
+function openAccountSettings() {
+  emit(`update:open`, false)
+  uiStore.openPreferencesDialog(`wechat`)
 }
 
 async function pickCoverImage() {
@@ -479,15 +448,24 @@ onUnmounted(() => {
                 type="button"
                 class="ml-0.5 cursor-pointer font-medium transition-opacity hover:opacity-80"
                 style="color: var(--dt-accent)"
-                @click="isEditingCredentials ? (isEditingCredentials = false) : openCredentialsEditor()"
+                @click="openAccountSettings"
               >
-                {{ isEditingCredentials ? t('agent.publish.backToForm') : t('agent.publish.configureAccount') }}
+                {{ t('agent.publish.configureAccount') }}
               </button>
             </div>
 
             <div v-else class="flex items-center gap-1.5 text-[12.5px]" style="color: var(--dt-amber)">
               <AlertCircle class="size-3.5 shrink-0" />
               <span>{{ t('agent.publish.notConfiguredHint') }}</span>
+              <button
+                type="button"
+                data-testid="publish-open-account-settings"
+                class="ml-0.5 cursor-pointer font-medium transition-opacity hover:opacity-80"
+                style="color: var(--dt-accent)"
+                @click="openAccountSettings"
+              >
+                {{ t('agent.publish.goToSettings') }}
+              </button>
             </div>
           </div>
 
@@ -503,105 +481,8 @@ onUnmounted(() => {
           </button>
         </div>
 
-        <!-- Inline MP Credentials Form -->
-        <div v-if="isEditingCredentials && phase !== 'running'" class="flex flex-col gap-4 px-6 py-5">
-          <div
-            class="flex items-start gap-2 rounded-lg px-3 py-2.5 text-xs leading-relaxed"
-            style="background-color: var(--dt-canvas); color: var(--dt-ink2)"
-          >
-            <Info class="mt-0.5 size-3.5 shrink-0" style="color: var(--dt-ink3)" />
-            <span>{{ t('agent.publish.credentialsReuseNote') }}</span>
-          </div>
-
-          <div class="flex flex-col gap-3">
-            <label class="flex flex-col gap-1.5">
-              <span class="text-xs font-medium" style="color: var(--dt-ink2)">AppID</span>
-              <input
-                v-model="credForm.appID"
-                type="text"
-                autocomplete="off"
-                :placeholder="t('upload.placeholders.appId')"
-                class="h-9 w-full rounded-lg px-3 text-[13.5px] outline-none"
-                style="background-color: var(--dt-canvas); border: 1px solid var(--dt-line); color: var(--dt-ink)"
-              >
-            </label>
-
-            <label class="flex flex-col gap-1.5">
-              <span class="text-xs font-medium" style="color: var(--dt-ink2)">AppSecret</span>
-              <div
-                class="flex h-9 w-full items-center rounded-lg px-3"
-                style="background-color: var(--dt-canvas); border: 1px solid var(--dt-line)"
-              >
-                <input
-                  v-model="credForm.appsecret"
-                  :type="showSecret ? 'text' : 'password'"
-                  autocomplete="off"
-                  :placeholder="t('upload.placeholders.appSecret')"
-                  class="min-w-0 flex-1 bg-transparent text-[13.5px] outline-none"
-                  style="color: var(--dt-ink)"
-                >
-                <button
-                  type="button"
-                  class="ml-2 cursor-pointer"
-                  style="color: var(--dt-ink3)"
-                  @click="showSecret = !showSecret"
-                >
-                  <EyeOff v-if="showSecret" class="size-4" />
-                  <Eye v-else class="size-4" />
-                </button>
-              </div>
-            </label>
-
-            <label class="flex flex-col gap-1.5">
-              <span class="text-xs font-medium" style="color: var(--dt-ink2)">
-                {{ t('agent.publish.proxyOptionalLabel') }}
-              </span>
-              <input
-                v-model="credForm.proxyOrigin"
-                type="text"
-                autocomplete="off"
-                :placeholder="t('agent.publish.proxyOptionalPlaceholder')"
-                class="h-9 w-full rounded-lg px-3 text-[13.5px] outline-none"
-                style="background-color: var(--dt-canvas); border: 1px solid var(--dt-line); color: var(--dt-ink)"
-              >
-            </label>
-          </div>
-
-          <div class="flex items-center justify-between pt-1">
-            <button
-              type="button"
-              class="inline-flex cursor-pointer items-center gap-1 text-xs font-medium transition-opacity hover:opacity-80"
-              style="color: var(--dt-accent)"
-              @click="openExternal(MP_DEV_DOC_URL)"
-            >
-              <span>{{ t('agent.publish.devModeGuide') }}</span>
-              <ExternalLink class="size-3" />
-            </button>
-
-            <div class="flex items-center gap-2">
-              <button
-                v-if="hasCredentials"
-                type="button"
-                class="inline-flex h-8 cursor-pointer items-center rounded-lg px-3 text-xs font-medium transition-opacity hover:opacity-80"
-                style="color: var(--dt-ink2); border: 1px solid var(--dt-line)"
-                @click="isEditingCredentials = false"
-              >
-                {{ t('agent.settings.cancel') }}
-              </button>
-              <button
-                type="button"
-                class="inline-flex h-8 cursor-pointer items-center rounded-lg px-3.5 text-xs font-semibold transition-opacity hover:opacity-90"
-                style="background-color: var(--dt-ink); color: var(--dt-on-ink)"
-                @click="saveCredentials"
-              >
-                {{ t('agent.publish.saveCredentials') }}
-              </button>
-            </div>
-          </div>
-        </div>
-
         <!-- Progress View -->
-        <div v-else-if="phase === 'running'" class="flex flex-col gap-4 px-6 py-6">
+        <div v-if="phase === 'running'" class="flex flex-col gap-4 px-6 py-6">
           <div
             class="flex flex-col gap-3 rounded-xl p-4"
             style="background-color: var(--dt-canvas); border: 1px solid var(--dt-line)"
@@ -902,7 +783,7 @@ onUnmounted(() => {
                   v-if="errorState.errorCodeKey === 'invalid_credentials' || errorState.errorCodeKey === 'ip_not_whitelisted'"
                   type="button"
                   class="cursor-pointer font-medium underline underline-offset-2"
-                  @click="openCredentialsEditor"
+                  @click="openAccountSettings"
                 >
                   {{ t('agent.publish.editCredentials') }}
                 </button>
