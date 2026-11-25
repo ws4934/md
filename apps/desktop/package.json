@@ -6,6 +6,11 @@
   "private": true,
   "description": "Electron desktop edition of doocs/md with local ACP agent integration",
   "main": "dist/main/index.js",
+  "build": {
+    "asarUnpack": [
+      "dist/agents/**"
+    ]
+  },
   "scripts": {
     "dev": "tsx scripts/dev.ts",
     "build:main": "tsx scripts/build.ts",
@@ -17,7 +22,12 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.9.1",
+    "@ai-sdk/anthropic": "^4.0.108",
+    "@ai-sdk/google": "^4.0.126",
+    "@ai-sdk/openai-compatible": "^3.0.94",
     "@md/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "ai": "^7.0.181",
     "zod": "catalog:"
   },
   "devDependencies": {

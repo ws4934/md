@@ -5,6 +5,10 @@ import type {
   AcpSettings,
   AcpStartSessionParams,
   DesktopBridge,
+  DesktopImageGenConfigUpdate,
+  DesktopListRemoteModelsParams,
+  DesktopModelApiConfigUpdate,
+  DesktopTestImageGenParams,
   WeChatPublishProgressEvent,
   WeChatPublishRequest,
   WeChatUploadImageRequest,
@@ -37,6 +41,17 @@ const desktopBridge: DesktopBridge = {
         ipcRenderer.removeListener(IPC_CHANNELS.WECHAT_PUBLISH_PROGRESS, handler)
       }
     },
+  },
+  ai: {
+    getConfigs: () => ipcRenderer.invoke(IPC_CHANNELS.AI_GET_CONFIGS),
+    updateModelApiConfig: (patch: DesktopModelApiConfigUpdate) =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_UPDATE_MODEL_API, patch),
+    updateImageGenConfig: (patch: DesktopImageGenConfigUpdate) =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_UPDATE_IMAGE_GEN, patch),
+    listRemoteModels: (params: DesktopListRemoteModelsParams) =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_LIST_REMOTE_MODELS, params),
+    testImageGen: (params?: DesktopTestImageGenParams) =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_TEST_IMAGE_GEN, params),
   },
   acp: {
     listAgents: () => ipcRenderer.invoke(IPC_CHANNELS.ACP_LIST_AGENTS),

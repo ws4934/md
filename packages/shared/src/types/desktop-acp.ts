@@ -1,3 +1,4 @@
+import type { DesktopAiApi } from './desktop-ai'
 import type { DesktopPickedImage, DesktopWeChatApi } from './desktop-wechat'
 
 export interface AcpAgentAvatar {
@@ -264,6 +265,7 @@ export interface DesktopBridge {
   isDesktop: true
   platform: string
   acp: DesktopAcpApi
+  ai: DesktopAiApi
   wechat: DesktopWeChatApi
   pickFiles: () => Promise<DesktopPickedFile[]>
   pickImage: () => Promise<DesktopPickedImage | null>
