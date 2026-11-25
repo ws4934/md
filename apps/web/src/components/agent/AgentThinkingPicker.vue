@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AcpThinkingOption } from '@md/shared/types'
 import { Brain, Check } from '@lucide/vue'
-import { isKnownThinkingLevel } from '@md/shared/utils/acp-thinking'
+import { formatThinkingFallbackLabel, isKnownThinkingLevel } from '@md/shared/utils/acp-thinking'
 import { useAgentStore } from '@/stores/agent'
 
 const props = withDefaults(defineProps<{
@@ -27,7 +27,7 @@ function formatLevelLabel(option: AcpThinkingOption): string {
   const key = option.id.trim().toLowerCase()
   if (isKnownThinkingLevel(key))
     return t(`agent.thinking.levels.${key}`)
-  return option.name || option.id
+  return formatThinkingFallbackLabel(option)
 }
 
 const activeOption = computed<AcpThinkingOption | null>(() => {
@@ -70,8 +70,8 @@ onKeyStroke(`Escape`, () => {
       type="button"
       data-testid="thinking-level-pill"
       :disabled="disabled"
-      :title="t('agent.thinking.menuTitle')"
-      class="inline-flex h-7 cursor-pointer items-center gap-[5px] rounded-lg px-[7px] text-[12.5px] transition-colors disabled:opacity-50"
+      :title="`${t('agent.thinking.menuTitle')} · ${pillLabel}`"
+      class="inline-flex h-7 cursor-pointer items-center gap-1 rounded-lg px-1.5 text-[12.5px] transition-colors disabled:opacity-50"
       :style="{
         backgroundColor: isOpen ? 'var(--dt-subtle)' : 'transparent',
         color: 'var(--dt-ink2)',
@@ -85,8 +85,8 @@ onKeyStroke(`Escape`, () => {
     <div
       v-if="isOpen"
       data-testid="thinking-level-menu"
-      class="absolute z-40 flex w-[208px] flex-col gap-0.5 rounded-xl p-1.5"
-      :class="placement === 'up' ? 'bottom-full mb-2 right-[-76px]' : 'top-full mt-2 left-0'"
+      class="agent-thinking-menu absolute z-40 flex w-[208px] flex-col gap-0.5 rounded-xl p-1.5"
+      :class="placement === 'up' ? 'agent-thinking-menu--up bottom-full mb-2' : 'top-full mt-2 left-0'"
       style="
         background-color: var(--dt-surface);
         border: 1px solid var(--dt-line);
@@ -125,3 +125,23 @@ onKeyStroke(`Escape`, () => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.agent-thinking-menu--up {
+  right: -60px;
+}
+
+@container composer (max-width: 335px) {
+  .agent-thinking-menu--up {
+    left: 0;
+    right: auto;
+  }
+}
+
+@container composer (min-width: 440px) {
+  .agent-thinking-menu--up {
+    left: 0;
+    right: auto;
+  }
+}
+</style>

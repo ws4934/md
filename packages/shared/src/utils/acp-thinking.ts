@@ -1,6 +1,10 @@
 import type { AcpModelInfo, AcpThinkingOption } from '../types/desktop-acp'
 
 export const KNOWN_THINKING_LEVELS = [
+  `default`,
+  `auto`,
+  `off`,
+  `none`,
   `minimal`,
   `low`,
   `medium`,
@@ -11,6 +15,18 @@ export const KNOWN_THINKING_LEVELS = [
 ] as const
 
 export type KnownThinkingLevel = (typeof KNOWN_THINKING_LEVELS)[number]
+
+// Effort suffixes valid for splitting variant model IDs (excludes generic words like `default`/`auto`
+// so standalone models named `*-default` or `*-auto` are never mis-grouped).
+const VARIANT_SUFFIX_LEVELS = new Set<string>([
+  `minimal`,
+  `low`,
+  `medium`,
+  `high`,
+  `xhigh`,
+  `max`,
+  `ultra`,
+])
 
 const KNOWN_LEVEL_RANK = new Map<string, number>(
   KNOWN_THINKING_LEVELS.map((level, idx) => [level, idx]),
@@ -26,6 +42,16 @@ export function isKnownThinkingLevel(value: string | null | undefined): value is
   if (!value)
     return false
   return KNOWN_LEVEL_RANK.has(value.trim().toLowerCase())
+}
+
+/**
+ * Title-cases an unrecognized thinking level option for display fallback.
+ */
+export function formatThinkingFallbackLabel(option: Pick<AcpThinkingOption, `id` | `name`>): string {
+  const raw = (option.name?.trim() || option.id.trim()).replace(/[_-]+/g, ` `).trim()
+  if (!raw)
+    return option.id
+  return raw.replace(/\b[a-z]/g, ch => ch.toUpperCase())
 }
 
 export function sortThinkingOptions(options: readonly AcpThinkingOption[]): AcpThinkingOption[] {
@@ -72,7 +98,7 @@ function parseVariantSuffix(rawId: string, extraAllowedLevels: ReadonlySet<strin
   const bracketMatch = /^(.+)\[([\w-]+)\]$/.exec(rawId)
   if (bracketMatch) {
     const level = bracketMatch[2].toLowerCase()
-    if (KNOWN_LEVEL_RANK.has(level) || extraAllowedLevels.has(level)) {
+    if (VARIANT_SUFFIX_LEVELS.has(level) || extraAllowedLevels.has(level)) {
       return { baseId: bracketMatch[1], level, syntax: `bracket` }
     }
   }
@@ -80,7 +106,7 @@ function parseVariantSuffix(rawId: string, extraAllowedLevels: ReadonlySet<strin
   const dashMatch = /^(.+)-([a-z0-9]+)$/i.exec(rawId)
   if (dashMatch) {
     const level = dashMatch[2].toLowerCase()
-    if (KNOWN_LEVEL_RANK.has(level) || extraAllowedLevels.has(level)) {
+    if (VARIANT_SUFFIX_LEVELS.has(level) || extraAllowedLevels.has(level)) {
       return { baseId: dashMatch[1], level, syntax: `dash` }
     }
   }

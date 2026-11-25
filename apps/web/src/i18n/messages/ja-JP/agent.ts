@@ -37,6 +37,10 @@ export default {
     thinking: {
       menuTitle: `思考レベル`,
       levels: {
+        default: `デフォルト`,
+        auto: `自動`,
+        off: `オフ`,
+        none: `なし`,
         minimal: `最小`,
         low: `低`,
         medium: `中`,

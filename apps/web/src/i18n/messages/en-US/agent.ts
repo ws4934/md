@@ -37,6 +37,10 @@ export default {
     thinking: {
       menuTitle: `Thinking level`,
       levels: {
+        default: `Default`,
+        auto: `Auto`,
+        off: `Off`,
+        none: `None`,
         minimal: `Minimal`,
         low: `Low`,
         medium: `Medium`,

@@ -37,6 +37,10 @@ export default {
     thinking: {
       menuTitle: `思考深度`,
       levels: {
+        default: `默认`,
+        auto: `自动`,
+        off: `关闭`,
+        none: `无`,
         minimal: `极简`,
         low: `低`,
         medium: `中`,

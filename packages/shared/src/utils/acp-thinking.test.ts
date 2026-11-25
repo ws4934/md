@@ -1,8 +1,10 @@
 import type { AcpModelInfo, AcpThinkingOption } from '../types/desktop-acp'
 import { describe, expect, it } from 'vitest'
 import {
+  formatThinkingFallbackLabel,
   getModelThinkingOptions,
   groupVariantModels,
+  isKnownThinkingLevel,
   parseVariantModelId,
   resolveThinkingLevelForModel,
   resolveWireModelId,
@@ -217,16 +219,51 @@ describe(`acp-thinking helpers`, () => {
       thinkingLevel: `low`,
     })
 
-    // Sorting orders known levels canonically and keeps unknown custom values in original order.
+    // Sorting orders default/auto/off/none before effort levels and keeps unknown custom values in original order.
     expect(
       sortThinkingOptions([
         { id: `custom-b` },
         { id: `ultra` },
         { id: `high` },
+        { id: `default`, name: `Default` },
         { id: `minimal` },
         { id: `custom-a` },
         { id: `low` },
+        { id: `auto` },
+        { id: `off` },
+        { id: `none` },
       ]).map(o => o.id),
-    ).toEqual([`minimal`, `low`, `high`, `ultra`, `custom-b`, `custom-a`])
+    ).toEqual([`default`, `auto`, `off`, `none`, `minimal`, `low`, `high`, `ultra`, `custom-b`, `custom-a`])
+
+    expect(isKnownThinkingLevel(`default`)).toBe(true)
+    expect(isKnownThinkingLevel(`auto`)).toBe(true)
+    expect(isKnownThinkingLevel(`off`)).toBe(true)
+    expect(isKnownThinkingLevel(`none`)).toBe(true)
+    expect(formatThinkingFallbackLabel({ id: `super_deep` })).toBe(`Super Deep`)
+    expect(formatThinkingFallbackLabel({ id: `adaptive`, name: `adaptive` })).toBe(`Adaptive`)
+    expect(formatThinkingFallbackLabel({ id: `custom`, name: `Extra-effort` })).toBe(`Extra Effort`)
+  })
+
+  it(`keeps Claude Code context-window suffixes like opus[1m] and sonnet[1m] ungrouped`, () => {
+    const { models, hasVariants } = groupVariantModels({
+      rawModels: [
+        { id: `default`, name: `Default (recommended)` },
+        { id: `opus[1m]`, name: `Opus 5.5` },
+        { id: `sonnet`, name: `Sonnet 5` },
+        { id: `sonnet[1m]`, name: `Sonnet 5 (1M context)` },
+        { id: `haiku`, name: `Haiku 4.5` },
+      ],
+      thoughtConfigOptions: [
+        { id: `default`, name: `Default` },
+        { id: `low`, name: `Low` },
+        { id: `medium`, name: `Medium` },
+        { id: `high`, name: `High` },
+        { id: `xhigh`, name: `Xhigh` },
+        { id: `max`, name: `Max` },
+      ],
+    })
+
+    expect(hasVariants).toBe(false)
+    expect(models.map(m => m.id)).toEqual([`default`, `opus[1m]`, `sonnet`, `sonnet[1m]`, `haiku`])
   })
 })

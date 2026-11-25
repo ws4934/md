@@ -265,4 +265,98 @@ describe(`useAgentStore thinking level state`, () => {
     await agentStore.startNewSession()
     expect(agentStore.selectedThinkingLevel).toBe(`low`)
   })
+
+  it(`hides thinking options on Claude Haiku and restores remembered level when switching back to Sonnet`, async () => {
+    const claudeProbe: AcpProbeResult = {
+      agentId: `claude`,
+      currentModelId: `default`,
+      currentThinkingLevel: `xhigh`,
+      thinkingOptions: [
+        { id: `default`, name: `Default` },
+        { id: `low`, name: `Low` },
+        { id: `medium`, name: `Medium` },
+        { id: `high`, name: `High` },
+        { id: `xhigh`, name: `Xhigh` },
+        { id: `max`, name: `Max` },
+      ],
+      modes: [{ id: `default`, name: `Manual` }],
+      currentModeId: `default`,
+      commands: [],
+      probedAt: Date.now(),
+      models: [
+        { id: `default`, name: `Default (recommended)` },
+        { id: `opus[1m]`, name: `Opus 5.5` },
+        { id: `sonnet`, name: `Sonnet 5` },
+        { id: `haiku`, name: `Haiku 4.5` },
+      ],
+    }
+
+    currentSettings.defaultAgentId = `claude`
+    vi.mocked(acpMock.listAgents).mockResolvedValueOnce([
+      {
+        id: `claude`,
+        name: `Claude Code`,
+        builtin: true,
+        installed: true,
+        command: `claude-agent-acp`,
+        args: [],
+        avatar: { letter: `C`, color: `#D97757` },
+        isDefault: true,
+      },
+    ])
+    vi.mocked(acpMock.probeAgent).mockResolvedValueOnce(claudeProbe)
+    vi.mocked(acpMock.startSession).mockResolvedValueOnce({
+      sessionId: `sess-claude`,
+      modelId: `default`,
+      models: claudeProbe.models,
+      thinkingLevel: `default`,
+      thinkingOptions: claudeProbe.thinkingOptions!,
+      modes: claudeProbe.modes,
+      currentModeId: `default`,
+      permissionLevel: `ask`,
+      commands: [],
+    })
+
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+    await agentStore.init()
+    await agentStore.probeAgent(`claude`)
+
+    expect(agentStore.availableThinkingOptions.map(o => o.id)).toEqual([`default`, `low`, `medium`, `high`, `xhigh`, `max`])
+    await agentStore.setSessionThinkingLevel(`default`)
+    await agentStore.sendPrompt(`Hello`)
+
+    // Switching to Haiku emits thinking_changed with empty options (no effort config on Haiku).
+    vi.mocked(acpMock.setModel).mockImplementationOnce(async () => {
+      eventListener?.({
+        type: `thinking_changed`,
+        sessionId: `sess-claude`,
+        thinkingLevel: null,
+        thinkingOptions: [],
+      })
+      return { modelId: `haiku`, thinkingLevel: null }
+    })
+    await agentStore.selectAgentAndModel(`claude`, `haiku`)
+    expect(agentStore.availableThinkingOptions).toEqual([])
+    expect(agentStore.selectedThinkingLevel).toBeNull()
+
+    // Switching back to Sonnet forwards the remembered level (`default`) so the host re-applies it.
+    vi.mocked(acpMock.setModel).mockImplementationOnce(async (params) => {
+      eventListener?.({
+        type: `thinking_changed`,
+        sessionId: `sess-claude`,
+        thinkingLevel: params.thinkingLevel ?? `xhigh`,
+        thinkingOptions: claudeProbe.thinkingOptions,
+      })
+      return { modelId: `sonnet`, thinkingLevel: params.thinkingLevel ?? `xhigh` }
+    })
+    await agentStore.selectAgentAndModel(`claude`, `sonnet`)
+    expect(acpMock.setModel).toHaveBeenLastCalledWith({
+      sessionId: `sess-claude`,
+      modelId: `sonnet`,
+      thinkingLevel: `default`,
+    })
+    expect(agentStore.availableThinkingOptions.map(o => o.id)).toEqual([`default`, `low`, `medium`, `high`, `xhigh`, `max`])
+    expect(agentStore.selectedThinkingLevel).toBe(`default`)
+  })
 })

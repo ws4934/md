@@ -771,6 +771,7 @@ export const useAgentStore = defineStore(`agent`, () => {
 
       const targetModel = probe?.models.find(m => m.id === nextBaseModelId)
       const targetOptions = getModelThinkingOptions(targetModel, probe?.thinkingOptions, probe?.models)
+      const isVariantAgent = hasVariantModels(probe?.models)
       if (targetOptions.length > 0) {
         const currentDesired = parsed.thinkingLevel
           ?? (session?.agentId === agentId ? session.thinkingLevel : null)
@@ -797,18 +798,25 @@ export const useAgentStore = defineStore(`agent`, () => {
           }
         }
       }
+      else if (!isVariantAgent) {
+        // ConfigOption-only agents (e.g. Claude Code) may re-expose effort options when leaving a
+        // no-effort model like Haiku, so forward the remembered level without mutating draft state.
+        nextThinkingLevel = selectedThinkingLevelByAgent.value[agentId]
+          ?? settings.value.lastThinkingLevelByAgent[agentId]
+          ?? null
+      }
       else {
         nextThinkingLevel = null
       }
 
       if (session && session.agentId === agentId) {
         session.modelId = nextBaseModelId
-        session.thinkingLevel = nextThinkingLevel ?? null
+        session.thinkingLevel = targetOptions.length > 0 ? (nextThinkingLevel ?? null) : null
       }
 
       const settingsPatch: Partial<AcpSettings> = {
         lastModelByAgent: { [agentId]: nextBaseModelId },
-        ...(nextThinkingLevel ? { lastThinkingLevelByAgent: { [agentId]: nextThinkingLevel } } : {}),
+        ...(targetOptions.length > 0 && nextThinkingLevel ? { lastThinkingLevelByAgent: { [agentId]: nextThinkingLevel } } : {}),
       }
       void window.mdDesktop?.acp.updateSettings(settingsPatch)
     }
