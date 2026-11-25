@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import type { AcpPermissionLevel } from '@md/shared/types'
+import type { CSSProperties } from 'vue'
 import { Check, SlidersHorizontal } from '@lucide/vue'
+import { useFloatingMenu } from '@/composables/useFloatingMenu'
+import { computeFloatingMenuPosition } from '@/lib/agent/floating-menu'
 import { useAcpPermissionOptions } from '@/lib/agent/permission-options'
 import { useAgentStore } from '@/stores/agent'
 
@@ -21,8 +24,12 @@ const {
   activeCustomMode,
 } = storeToRefs(agentStore)
 
+const MENU_WIDTH = 316
+
 const isOpen = ref(false)
-const containerRef = ref<HTMLElement | null>(null)
+const triggerRef = ref<HTMLElement | null>(null)
+const menuRef = ref<HTMLElement | null>(null)
+const menuStyle = ref<CSSProperties>({})
 
 const permissionOptions = useAcpPermissionOptions(t)
 
@@ -35,36 +42,72 @@ const isDangerActive = computed(() => !activeCustomMode.value && activeOption.va
 const pillIcon = computed(() => activeCustomMode.value ? SlidersHorizontal : activeOption.value.icon)
 const pillLabel = computed(() => activeCustomMode.value ? activeCustomMode.value.name : activeOption.value.shortLabel)
 
+function updateMenuPosition() {
+  const trigger = triggerRef.value
+  if (!trigger)
+    return
+  const anchor = trigger.getBoundingClientRect()
+  const rect = menuRef.value?.getBoundingClientRect()
+  const estimatedRows = permissionOptions.value.length + customExtraModes.value.length
+  const pos = computeFloatingMenuPosition({
+    anchor,
+    menu: {
+      width: rect?.width || MENU_WIDTH,
+      height: rect?.height || estimatedRows * 52 + 44,
+    },
+    viewport: {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    },
+    preferredSide: props.placement === `up` ? `top` : `bottom`,
+    preferredAlign: `start`,
+  })
+  menuStyle.value = {
+    left: `${pos.left}px`,
+    top: `${pos.top}px`,
+    maxHeight: `${pos.maxHeight}px`,
+    maxWidth: `${pos.maxWidth}px`,
+  }
+}
+
+function closeMenu() {
+  isOpen.value = false
+}
+
 function toggleMenu() {
   if (props.disabled)
     return
-  isOpen.value = !isOpen.value
+  if (isOpen.value) {
+    closeMenu()
+    return
+  }
+  updateMenuPosition()
+  isOpen.value = true
 }
 
 function selectLevel(level: AcpPermissionLevel) {
-  isOpen.value = false
+  closeMenu()
   void agentStore.setSessionPermissionMode({ permissionLevel: level, modeId: null })
 }
 
 function selectCustomMode(modeId: string) {
-  isOpen.value = false
+  closeMenu()
   void agentStore.setSessionPermissionMode({ modeId })
 }
 
-onClickOutside(containerRef, () => {
-  if (isOpen.value)
-    isOpen.value = false
-})
-
-onKeyStroke(`Escape`, () => {
-  if (isOpen.value)
-    isOpen.value = false
+useFloatingMenu({
+  isOpen,
+  triggerRef,
+  menuRefs: [menuRef],
+  onReposition: updateMenuPosition,
+  onClose: closeMenu,
 })
 </script>
 
 <template>
-  <div ref="containerRef" class="relative inline-flex shrink-0">
+  <div class="relative inline-flex shrink-0">
     <button
+      ref="triggerRef"
       type="button"
       data-testid="permission-mode-pill"
       :disabled="disabled"
@@ -80,86 +123,89 @@ onKeyStroke(`Escape`, () => {
       <span class="max-w-[84px] truncate">{{ pillLabel }}</span>
     </button>
 
-    <div
-      v-if="isOpen"
-      data-testid="permission-mode-menu"
-      class="absolute z-40 flex w-[316px] flex-col gap-0.5 rounded-xl p-1.5"
-      :class="placement === 'up' ? 'bottom-full mb-2 right-[-44px]' : 'top-full mt-2 left-0'"
-      style="
-        background-color: var(--dt-surface);
-        border: 1px solid var(--dt-line);
-        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
-      "
-    >
-      <div class="px-2.5 pb-1.5 pt-1 text-[11.5px] font-semibold" style="color: var(--dt-ink3)">
-        {{ t('agent.permissionMode.menuTitle') }}
-      </div>
-
-      <button
-        v-for="opt in permissionOptions"
-        :key="opt.id"
-        type="button"
-        :data-testid="`perm-option-${opt.id}`"
-        class="flex min-h-[50px] w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors"
+    <Teleport to="body">
+      <div
+        v-if="isOpen"
+        ref="menuRef"
+        data-testid="permission-mode-menu"
+        class="fixed z-[120] flex w-[316px] flex-col gap-0.5 overflow-y-auto rounded-xl p-1.5"
         :style="{
-          backgroundColor: !activeCustomMode && currentPermissionLevel === opt.id ? 'var(--dt-subtle)' : 'transparent',
+          ...menuStyle,
+          backgroundColor: 'var(--dt-surface)',
+          border: '1px solid var(--dt-line)',
+          boxShadow: '0 16px 40px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06)',
         }"
-        @click="selectLevel(opt.id)"
       >
-        <component
-          :is="opt.icon"
-          class="size-4 shrink-0"
-          :style="{ color: opt.danger ? 'var(--dt-red)' : 'var(--dt-ink2)' }"
-        />
-        <div class="min-w-0 flex-1">
-          <div
-            class="truncate text-[13px] font-medium"
-            :style="{ color: opt.danger ? 'var(--dt-red)' : 'var(--dt-ink)' }"
-          >
-            {{ opt.title }}
-          </div>
-          <div class="truncate text-[11.5px]" style="color: var(--dt-ink3)">
-            {{ opt.desc }}
-          </div>
+        <div class="px-2.5 pb-1.5 pt-1 text-[11.5px] font-semibold" style="color: var(--dt-ink3)">
+          {{ t('agent.permissionMode.menuTitle') }}
         </div>
-        <Check
-          v-if="!activeCustomMode && currentPermissionLevel === opt.id"
-          class="size-[15px] shrink-0"
-          style="color: var(--dt-ink)"
-        />
-      </button>
-
-      <!-- Agent-specific custom extra modes below a divider -->
-      <template v-if="customExtraModes.length > 0">
-        <div class="my-1 h-px w-full" style="background-color: var(--dt-line)" />
 
         <button
-          v-for="mode in customExtraModes"
-          :key="mode.id"
+          v-for="opt in permissionOptions"
+          :key="opt.id"
           type="button"
-          :data-testid="`perm-custom-${mode.id}`"
-          class="flex min-h-[44px] w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors"
+          :data-testid="`perm-option-${opt.id}`"
+          class="flex min-h-[50px] w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors"
           :style="{
-            backgroundColor: activeCustomMode?.id === mode.id ? 'var(--dt-subtle)' : 'transparent',
+            backgroundColor: !activeCustomMode && currentPermissionLevel === opt.id ? 'var(--dt-subtle)' : 'transparent',
           }"
-          @click="selectCustomMode(mode.id)"
+          @click="selectLevel(opt.id)"
         >
-          <SlidersHorizontal class="size-4 shrink-0" style="color: var(--dt-ink2)" />
+          <component
+            :is="opt.icon"
+            class="size-4 shrink-0"
+            :style="{ color: opt.danger ? 'var(--dt-red)' : 'var(--dt-ink2)' }"
+          />
           <div class="min-w-0 flex-1">
-            <div class="truncate text-[13px] font-medium" style="color: var(--dt-ink)">
-              {{ mode.name }}
+            <div
+              class="truncate text-[13px] font-medium"
+              :style="{ color: opt.danger ? 'var(--dt-red)' : 'var(--dt-ink)' }"
+            >
+              {{ opt.title }}
             </div>
-            <div v-if="mode.description" class="truncate text-[11.5px]" style="color: var(--dt-ink3)">
-              {{ mode.description }}
+            <div class="truncate text-[11.5px]" style="color: var(--dt-ink3)">
+              {{ opt.desc }}
             </div>
           </div>
           <Check
-            v-if="activeCustomMode?.id === mode.id"
+            v-if="!activeCustomMode && currentPermissionLevel === opt.id"
             class="size-[15px] shrink-0"
             style="color: var(--dt-ink)"
           />
         </button>
-      </template>
-    </div>
+
+        <!-- Agent-specific custom extra modes below a divider -->
+        <template v-if="customExtraModes.length > 0">
+          <div class="my-1 h-px w-full" style="background-color: var(--dt-line)" />
+
+          <button
+            v-for="mode in customExtraModes"
+            :key="mode.id"
+            type="button"
+            :data-testid="`perm-custom-${mode.id}`"
+            class="flex min-h-[44px] w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors"
+            :style="{
+              backgroundColor: activeCustomMode?.id === mode.id ? 'var(--dt-subtle)' : 'transparent',
+            }"
+            @click="selectCustomMode(mode.id)"
+          >
+            <SlidersHorizontal class="size-4 shrink-0" style="color: var(--dt-ink2)" />
+            <div class="min-w-0 flex-1">
+              <div class="truncate text-[13px] font-medium" style="color: var(--dt-ink)">
+                {{ mode.name }}
+              </div>
+              <div v-if="mode.description" class="truncate text-[11.5px]" style="color: var(--dt-ink3)">
+                {{ mode.description }}
+              </div>
+            </div>
+            <Check
+              v-if="activeCustomMode?.id === mode.id"
+              class="size-[15px] shrink-0"
+              style="color: var(--dt-ink)"
+            />
+          </button>
+        </template>
+      </div>
+    </Teleport>
   </div>
 </template>

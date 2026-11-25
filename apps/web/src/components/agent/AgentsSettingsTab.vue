@@ -2,6 +2,7 @@
 import type { AcpAgentStatus, AcpPermissionLevel } from '@md/shared/types'
 import { Check, ChevronDown, Download, Plus, RefreshCw, Trash2 } from '@lucide/vue'
 import { formatCliArgs, parseCliArgs } from '@md/shared/utils/cli-args'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useAcpPermissionOptions } from '@/lib/agent/permission-options'
 import { useAgentStore } from '@/stores/agent'
 import AgentAvatar from './AgentAvatar.vue'
@@ -98,7 +99,6 @@ async function submitCustomAgent() {
 }
 
 const isDefaultPermOpen = ref(false)
-const defaultPermRef = ref<HTMLElement | null>(null)
 
 const permissionLevelOptions = useAcpPermissionOptions(t)
 
@@ -111,16 +111,6 @@ async function selectDefaultPermission(level: AcpPermissionLevel) {
   isDefaultPermOpen.value = false
   await agentStore.updateSettings({ defaultPermissionLevel: level })
 }
-
-onClickOutside(defaultPermRef, () => {
-  if (isDefaultPermOpen.value)
-    isDefaultPermOpen.value = false
-})
-
-onKeyStroke(`Escape`, () => {
-  if (isDefaultPermOpen.value)
-    isDefaultPermOpen.value = false
-})
 
 onMounted(() => {
   // Use cached agent list on open; only explicit "Re-detect" invalidates probes and spawns a login shell.
@@ -460,32 +450,35 @@ onMounted(() => {
           </p>
         </div>
 
-        <div ref="defaultPermRef" class="relative shrink-0">
-          <button
-            type="button"
-            data-testid="settings-default-permission-select"
-            class="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 text-[13px] transition-opacity hover:opacity-85"
-            style="
-              background-color: var(--dt-surface);
-              border: 1px solid var(--dt-line);
-              color: var(--dt-ink);
-            "
-            @click="isDefaultPermOpen = !isDefaultPermOpen"
-          >
-            <component
-              :is="selectedDefaultPerm.icon"
-              class="size-3.5 shrink-0"
-              :style="{ color: selectedDefaultPerm.danger ? 'var(--dt-red)' : 'var(--dt-ink2)' }"
-            />
-            <span :style="{ color: selectedDefaultPerm.danger ? 'var(--dt-red)' : 'var(--dt-ink)' }">
-              {{ selectedDefaultPerm.title }}
-            </span>
-            <ChevronDown class="size-3.5 shrink-0" style="color: var(--dt-ink3)" />
-          </button>
+        <Popover v-model:open="isDefaultPermOpen">
+          <PopoverTrigger as-child>
+            <button
+              type="button"
+              data-testid="settings-default-permission-select"
+              class="inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 text-[13px] transition-opacity hover:opacity-85"
+              style="
+                background-color: var(--dt-surface);
+                border: 1px solid var(--dt-line);
+                color: var(--dt-ink);
+              "
+            >
+              <component
+                :is="selectedDefaultPerm.icon"
+                class="size-3.5 shrink-0"
+                :style="{ color: selectedDefaultPerm.danger ? 'var(--dt-red)' : 'var(--dt-ink2)' }"
+              />
+              <span :style="{ color: selectedDefaultPerm.danger ? 'var(--dt-red)' : 'var(--dt-ink)' }">
+                {{ selectedDefaultPerm.title }}
+              </span>
+              <ChevronDown class="size-3.5 shrink-0" style="color: var(--dt-ink3)" />
+            </button>
+          </PopoverTrigger>
 
-          <div
-            v-if="isDefaultPermOpen"
-            class="absolute bottom-full right-0 z-50 mb-1.5 flex w-[300px] flex-col gap-0.5 rounded-xl p-1.5"
+          <PopoverContent
+            side="top"
+            align="end"
+            :side-offset="6"
+            class="z-[220] flex w-[300px] flex-col gap-0.5 rounded-xl p-1.5"
             style="
               background-color: var(--dt-surface);
               border: 1px solid var(--dt-line);
@@ -525,8 +518,8 @@ onMounted(() => {
                 style="color: var(--dt-ink)"
               />
             </button>
-          </div>
-        </div>
+          </PopoverContent>
+        </Popover>
       </div>
     </div>
   </div>

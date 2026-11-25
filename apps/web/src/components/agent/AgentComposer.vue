@@ -28,6 +28,48 @@ const { t } = useI18n()
 const text = ref(``)
 const attachments = ref<DesktopPickedFile[]>([])
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const cardRef = ref<HTMLElement | null>(null)
+const toolbarRef = ref<HTMLElement | null>(null)
+const controlsRef = ref<HTMLElement | null>(null)
+const submitRef = ref<HTMLElement | null>(null)
+const modelAvailableWidth = ref<number | null>(null)
+
+let layoutObserver: ResizeObserver | null = null
+
+function measureModelSlot() {
+  const card = cardRef.value
+  const toolbar = toolbarRef.value
+  if (!card || !toolbar)
+    return
+  // Matches the `@container composer (max-width: 335px)` two-row wrap threshold.
+  if (card.clientWidth <= 335) {
+    modelAvailableWidth.value = Math.max(0, Math.floor(toolbar.clientWidth))
+    return
+  }
+  const controlsWidth = controlsRef.value?.offsetWidth ?? 0
+  const submitWidth = submitRef.value?.offsetWidth ?? 0
+  modelAvailableWidth.value = Math.max(0, Math.floor(toolbar.clientWidth - controlsWidth - submitWidth - 8))
+}
+
+onMounted(() => {
+  measureModelSlot()
+  if (typeof ResizeObserver !== `undefined`) {
+    layoutObserver = new ResizeObserver(() => measureModelSlot())
+    if (cardRef.value)
+      layoutObserver.observe(cardRef.value)
+    if (toolbarRef.value)
+      layoutObserver.observe(toolbarRef.value)
+    if (controlsRef.value)
+      layoutObserver.observe(controlsRef.value)
+    if (submitRef.value)
+      layoutObserver.observe(submitRef.value)
+  }
+})
+
+onBeforeUnmount(() => {
+  layoutObserver?.disconnect()
+  layoutObserver = null
+})
 
 const canSend = computed(() => !props.disabled && text.value.trim().length > 0)
 
@@ -80,6 +122,7 @@ defineExpose({ focus })
 
 <template>
   <div
+    ref="cardRef"
     class="agent-composer-card flex w-full flex-col gap-2"
     :class="size === 'hero' ? 'rounded-2xl p-3.5' : 'rounded-[14px] p-2.5'"
     style="
@@ -119,12 +162,16 @@ defineExpose({ focus })
       @keydown="handleKeydown"
     />
 
-    <div class="agent-composer-toolbar">
+    <div ref="toolbarRef" class="agent-composer-toolbar">
       <div class="agent-composer-model">
-        <AgentModelPicker :placement="menuPlacement" :disabled="disabled" />
+        <AgentModelPicker
+          :placement="menuPlacement"
+          :disabled="disabled"
+          :available-width="modelAvailableWidth"
+        />
       </div>
 
-      <div class="agent-composer-controls">
+      <div ref="controlsRef" class="agent-composer-controls">
         <AgentThinkingPicker :placement="menuPlacement" :disabled="disabled" />
         <AgentPermissionPicker :placement="menuPlacement" :disabled="disabled" />
         <button
@@ -140,7 +187,7 @@ defineExpose({ focus })
         </button>
       </div>
 
-      <div class="agent-composer-submit">
+      <div ref="submitRef" class="agent-composer-submit">
         <button
           v-if="running"
           type="button"
