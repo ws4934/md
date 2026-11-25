@@ -9,7 +9,7 @@ import type {
   ToolKind,
 } from '@agentclientprotocol/sdk/unstable'
 import type { ModelMessage } from 'ai'
-import type { ApiAgentRuntimeConfig, ApiThoughtLevel } from './provider'
+import type { ApiAgentModeId, ApiAgentRuntimeConfig, ApiThoughtLevel } from './provider'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -23,15 +23,17 @@ import {
 } from '@agentclientprotocol/sdk/unstable'
 import { stepCountIs, streamText, tool } from 'ai'
 import { z } from 'zod'
+import { redactSecret } from '../../main/ai/sanitize'
 import { generateAndSaveWorkspaceImage } from '../shared/image-client'
 import {
+  API_AGENT_MODES,
   API_THOUGHT_LEVEL_OPTIONS,
   buildReasoningProviderOptions,
   createApiAgentLanguageModel,
   isUnsupportedReasoningError,
 } from './provider'
 
-type ApiModeId = `default` | `acceptEdits` | `plan` | `bypassPermissions`
+type ApiModeId = ApiAgentModeId
 
 interface SessionState {
   id: string
@@ -41,16 +43,13 @@ interface SessionState {
   modeId: ApiModeId
   thoughtLevel: ApiThoughtLevel
   messages: ModelMessage[]
+  lastAgentArticleContent: string | null
+  editQueue: Promise<unknown>
   alwaysAllowedKinds: Set<ToolKind>
   activeAbort: AbortController | null
 }
 
-const AVAILABLE_MODES: SessionMode[] = [
-  { id: `default`, name: `Default`, description: `Ask before editing the article or generating images` },
-  { id: `acceptEdits`, name: `Accept Edits`, description: `Auto-accept article edits` },
-  { id: `plan`, name: `Plan`, description: `Read-only planning mode` },
-  { id: `bypassPermissions`, name: `Bypass Permissions`, description: `Skip all permission prompts` },
-]
+const AVAILABLE_MODES: SessionMode[] = API_AGENT_MODES.map(m => ({ ...m }))
 
 const VALID_MODES = new Set<ApiModeId>([`default`, `acceptEdits`, `plan`, `bypassPermissions`])
 const VALID_THOUGHT_LEVELS = new Set<ApiThoughtLevel>([`default`, `low`, `medium`, `high`])
@@ -242,108 +241,117 @@ function buildToolsForTurn(params: {
 }) {
   const { client, session, imageBridge, abortSignal } = params
 
-  const applyArticleUpdate = async (opts: {
+  const applyArticleUpdate = (opts: {
+    toolCallId?: string
     title: string
     rawInput: Record<string, unknown>
     computeNext: (existing: string) => { ok: true, next: string } | { ok: false, error: string }
   }) => {
-    const toolCallId = `tc-${randomUUID().slice(0, 8)}`
-    const existing = await readArticleSafe(session.articlePath)
+    // Serialize concurrent tool calls within the same step so parallel edits never clobber article.md.
+    const run = async () => {
+      const toolCallId = opts.toolCallId || `tc-${randomUUID().slice(0, 8)}`
+      const existing = await readArticleSafe(session.articlePath)
 
-    if (session.modeId === `plan`) {
+      if (session.modeId === `plan`) {
+        await emitUpdate(client, session.id, {
+          sessionUpdate: `tool_call`,
+          toolCallId,
+          title: opts.title,
+          kind: `edit`,
+          status: `failed`,
+          locations: [{ path: session.articlePath }],
+          rawInput: opts.rawInput,
+          rawOutput: { error: `Plan mode is read-only` },
+        })
+        return { ok: false, error: `Plan mode is read-only; propose your plan without modifying article.md.` }
+      }
+
+      const computed = opts.computeNext(existing)
+      if (!computed.ok) {
+        await emitUpdate(client, session.id, {
+          sessionUpdate: `tool_call`,
+          toolCallId,
+          title: opts.title,
+          kind: `edit`,
+          status: `failed`,
+          locations: [{ path: session.articlePath }],
+          rawInput: opts.rawInput,
+          rawOutput: { error: computed.error },
+        })
+        return { ok: false, error: computed.error }
+      }
+
+      const diffContent: ToolCallContent[] = [
+        {
+          type: `diff`,
+          path: session.articlePath,
+          oldText: existing,
+          newText: computed.next,
+        },
+      ]
+
       await emitUpdate(client, session.id, {
         sessionUpdate: `tool_call`,
         toolCallId,
         title: opts.title,
         kind: `edit`,
-        status: `failed`,
+        status: `pending`,
         locations: [{ path: session.articlePath }],
+        content: diffContent,
         rawInput: opts.rawInput,
-        rawOutput: { error: `Plan mode is read-only` },
       })
-      return { ok: false, error: `Plan mode is read-only; propose your plan without modifying article.md.` }
-    }
 
-    const computed = opts.computeNext(existing)
-    if (!computed.ok) {
-      await emitUpdate(client, session.id, {
-        sessionUpdate: `tool_call`,
+      const allowed = await requestToolPermission({
+        client,
+        session,
         toolCallId,
         title: opts.title,
         kind: `edit`,
-        status: `failed`,
         locations: [{ path: session.articlePath }],
+        content: diffContent,
         rawInput: opts.rawInput,
-        rawOutput: { error: computed.error },
       })
-      return { ok: false, error: computed.error }
-    }
 
-    const diffContent: ToolCallContent[] = [
-      {
-        type: `diff`,
-        path: session.articlePath,
-        oldText: existing,
-        newText: computed.next,
-      },
-    ]
+      if (abortSignal.aborted || !allowed) {
+        const reason = abortSignal.aborted ? `Cancelled` : `Edit rejected by user`
+        await emitUpdate(client, session.id, {
+          sessionUpdate: `tool_call_update`,
+          toolCallId,
+          status: `failed`,
+          rawOutput: { error: reason },
+        })
+        return { ok: false, error: reason }
+      }
 
-    await emitUpdate(client, session.id, {
-      sessionUpdate: `tool_call`,
-      toolCallId,
-      title: opts.title,
-      kind: `edit`,
-      status: `pending`,
-      locations: [{ path: session.articlePath }],
-      content: diffContent,
-      rawInput: opts.rawInput,
-    })
-
-    const allowed = await requestToolPermission({
-      client,
-      session,
-      toolCallId,
-      title: opts.title,
-      kind: `edit`,
-      locations: [{ path: session.articlePath }],
-      content: diffContent,
-      rawInput: opts.rawInput,
-    })
-
-    if (abortSignal.aborted || !allowed) {
-      const reason = abortSignal.aborted ? `Cancelled` : `Edit rejected by user`
       await emitUpdate(client, session.id, {
         sessionUpdate: `tool_call_update`,
         toolCallId,
-        status: `failed`,
-        rawOutput: { error: reason },
+        status: `in_progress`,
       })
-      return { ok: false, error: reason }
+
+      await fs.writeFile(session.articlePath, computed.next, `utf8`)
+      session.lastAgentArticleContent = computed.next
+
+      await emitUpdate(client, session.id, {
+        sessionUpdate: `tool_call_update`,
+        toolCallId,
+        status: `completed`,
+        content: diffContent,
+      })
+
+      return { ok: true, path: session.articlePath, length: computed.next.length }
     }
 
-    await emitUpdate(client, session.id, {
-      sessionUpdate: `tool_call_update`,
-      toolCallId,
-      status: `in_progress`,
-    })
-
-    await fs.writeFile(session.articlePath, computed.next, `utf8`)
-
-    await emitUpdate(client, session.id, {
-      sessionUpdate: `tool_call_update`,
-      toolCallId,
-      status: `completed`,
-      content: diffContent,
-    })
-
-    return { ok: true, path: session.articlePath, length: computed.next.length }
+    const nextTask = session.editQueue.catch(() => undefined).then(run)
+    session.editQueue = nextTask
+    return nextTask
   }
 
   const readArticleTool = tool({
     description: `Read the full current Markdown content of article.md.`,
     inputSchema: z.object({}),
-    execute: async () => {
-      const toolCallId = `tc-${randomUUID().slice(0, 8)}`
+    execute: async (_input, options) => {
+      const toolCallId = options?.toolCallId || `tc-${randomUUID().slice(0, 8)}`
       await emitUpdate(client, session.id, {
         sessionUpdate: `tool_call`,
         toolCallId,
@@ -353,6 +361,7 @@ function buildToolsForTurn(params: {
         locations: [{ path: session.articlePath }],
       })
       const content = await readArticleSafe(session.articlePath)
+      session.lastAgentArticleContent = content
       await emitUpdate(client, session.id, {
         sessionUpdate: `tool_call_update`,
         toolCallId,
@@ -369,8 +378,9 @@ function buildToolsForTurn(params: {
       new_text: z.string().describe(`Replacement Markdown text`),
       replace_all: z.boolean().optional().describe(`Replace all occurrences when true; default false requires a unique match`),
     }),
-    execute: async ({ old_text, new_text, replace_all }) => {
+    execute: async ({ old_text, new_text, replace_all }, options) => {
       return applyArticleUpdate({
+        toolCallId: options?.toolCallId,
         title: `Edit article.md`,
         rawInput: { path: session.articlePath, old_text, new_text },
         computeNext: (existing) => {
@@ -393,8 +403,9 @@ function buildToolsForTurn(params: {
     inputSchema: z.object({
       content: z.string().describe(`Full Markdown content to write to article.md`),
     }),
-    execute: async ({ content }) => {
+    execute: async ({ content }, options) => {
       return applyArticleUpdate({
+        toolCallId: options?.toolCallId,
         title: `Write article.md`,
         rawInput: { path: session.articlePath, content },
         computeNext: () => ({ ok: true, next: content }),
@@ -418,8 +429,8 @@ function buildToolsForTurn(params: {
       filename: z.string().optional().describe(`Optional short filename slug without directory`),
       size: z.string().optional().describe(`Optional image size such as "1024x1024", "1536x1024", or "1024x1536"`),
     }),
-    execute: async ({ prompt, filename, size }) => {
-      const toolCallId = `tc-${randomUUID().slice(0, 8)}`
+    execute: async ({ prompt, filename, size }, options) => {
+      const toolCallId = options?.toolCallId || `tc-${randomUUID().slice(0, 8)}`
       const rawInput = { prompt, ...(filename ? { filename } : {}), ...(size ? { size } : {}) }
 
       if (session.modeId === `plan`) {
@@ -527,9 +538,17 @@ async function runPromptTurn(params: {
   const abortController = new AbortController()
   session.activeAbort = abortController
 
+  const currentDiskArticle = await readArticleSafe(session.articlePath)
+  const changedExternally = session.messages.length > 0
+    && session.lastAgentArticleContent !== null
+    && currentDiskArticle !== session.lastAgentArticleContent
+  const effectiveUserText = changedExternally
+    ? `[System note: article.md was updated outside this conversation since the previous turn (for example, local images/... paths were uploaded to hosted URLs or the user edited the article). Call read_article to inspect the latest article.md before calling edit_article or write_article.]\n\n${userText}`
+    : userText
+
   const turnMessages: ModelMessage[] = [
     ...session.messages,
-    { role: `user`, content: userText },
+    { role: `user`, content: effectiveUserText },
   ]
 
   const runStreamOnce = async (useReasoningOptions: boolean) => {
@@ -618,7 +637,8 @@ async function runPromptTurn(params: {
   catch (error) {
     if (abortController.signal.aborted || (error instanceof Error && error.name === `AbortError`))
       return `cancelled`
-    throw error
+    const rawMessage = error instanceof Error ? error.message : String(error)
+    throw new Error(redactSecret(rawMessage, config.apiKey))
   }
   finally {
     if (session.activeAbort === abortController)
@@ -664,6 +684,8 @@ async function main(): Promise<void> {
         modeId: `default`,
         thoughtLevel: `default`,
         messages: [],
+        lastAgentArticleContent: null,
+        editQueue: Promise.resolve(),
         alwaysAllowedKinds: new Set<ToolKind>(),
         activeAbort: null,
       }
@@ -682,13 +704,15 @@ async function main(): Promise<void> {
       if (!VALID_MODES.has(params.modeId as ApiModeId))
         throw RequestError.invalidParams(`Unsupported mode: ${params.modeId}`)
       session.modeId = params.modeId as ApiModeId
+      if (session.modeId === `default` || session.modeId === `plan`)
+        session.alwaysAllowedKinds.clear()
       await emitUpdate(client, session.id, {
         sessionUpdate: `current_mode_update`,
         currentModeId: session.modeId,
       })
       return {}
     })
-    .onRequest(`session/set_config_option`, ({ params }) => {
+    .onRequest(`session/set_config_option`, async ({ params, client }) => {
       const session = getSessionOrThrow(params.sessionId)
       const value = typeof params.value === `string` ? params.value : ``
       if (params.configId === `model`) {
@@ -700,6 +724,12 @@ async function main(): Promise<void> {
         if (!VALID_MODES.has(value as ApiModeId))
           throw RequestError.invalidParams(`Unsupported mode: ${value}`)
         session.modeId = value as ApiModeId
+        if (session.modeId === `default` || session.modeId === `plan`)
+          session.alwaysAllowedKinds.clear()
+        await emitUpdate(client, session.id, {
+          sessionUpdate: `current_mode_update`,
+          currentModeId: session.modeId,
+        })
       }
       else if (params.configId === `thought_level`) {
         if (!VALID_THOUGHT_LEVELS.has(value as ApiThoughtLevel))

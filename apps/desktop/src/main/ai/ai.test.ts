@@ -14,10 +14,13 @@ import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { buildDesktopBundles } from '../../../scripts/build'
+import { generateAndSaveWorkspaceImage } from '../../agents/shared/image-client'
 import { AcpHost, buildPromptText } from '../acp/host'
+import { AcpRegistry } from '../acp/registry'
 import { ARTICLE_WRITING_RULES, buildArticleWritingRules } from '../acp/writing-rules'
 import { AiConfigStore } from './config-store'
 import { ImageGenBridge } from './image-bridge'
+import { generateDesktopImage } from './image-service'
 import { resolveUnpackedAgentScript } from './paths'
 import {
   fetchRemoteModels,
@@ -220,6 +223,79 @@ async function startFakeOpenAiServer(apiKey = `sk-test-openai-secret`): Promise<
           choices: [{
             index: 0,
             delta: { role: `assistant`, content: `Edit result: ${toolResultText}` },
+            finish_reason: null,
+          }],
+        })
+        writeSseChunk(res, {
+          id,
+          object: `chat.completion.chunk`,
+          created,
+          model: modelId,
+          choices: [{ index: 0, delta: {}, finish_reason: `stop` }],
+        })
+        res.write(`data: [DONE]\n\n`)
+        res.end()
+        return
+      }
+
+      // Parallel edit_article scenario: two edits in a single assistant step.
+      if (latestUserText.includes(`TRIGGER_PARALLEL_EDIT`)) {
+        if (lastRole === `user`) {
+          const args1 = JSON.stringify({
+            old_text: `Alpha paragraph.`,
+            new_text: `Alpha updated.`,
+          })
+          const args2 = JSON.stringify({
+            old_text: `Beta paragraph.`,
+            new_text: `Beta updated.`,
+          })
+          writeSseChunk(res, {
+            id,
+            object: `chat.completion.chunk`,
+            created,
+            model: modelId,
+            choices: [{
+              index: 0,
+              delta: {
+                role: `assistant`,
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: `call_par_1`,
+                    type: `function`,
+                    function: { name: `edit_article`, arguments: args1 },
+                  },
+                  {
+                    index: 1,
+                    id: `call_par_2`,
+                    type: `function`,
+                    function: { name: `edit_article`, arguments: args2 },
+                  },
+                ],
+              },
+              finish_reason: null,
+            }],
+          })
+          writeSseChunk(res, {
+            id,
+            object: `chat.completion.chunk`,
+            created,
+            model: modelId,
+            choices: [{ index: 0, delta: {}, finish_reason: `tool_calls` }],
+          })
+          res.write(`data: [DONE]\n\n`)
+          res.end()
+          return
+        }
+
+        writeSseChunk(res, {
+          id,
+          object: `chat.completion.chunk`,
+          created,
+          model: modelId,
+          choices: [{
+            index: 0,
+            delta: { role: `assistant`, content: `Applied both parallel edits.` },
             finish_reason: null,
           }],
         })
@@ -1034,4 +1110,245 @@ describe(`api model ACP agent end-to-end through AcpHost`, () => {
     expect(cliEvents).toHaveLength(0)
     expect(cliText).toContain(`[mcp:md-image]`)
   }, 25_000)
+
+  it(`ignores commandOverrides for built-in api-model so decrypted API keys never reach overridden commands`, async () => {
+    const dir = await makeTempDir(`md-reg-sec-`)
+    const registry = new AcpRegistry({
+      settingsPath: path.join(dir, `acp-settings.json`),
+      extraBuiltinAgents: [
+        {
+          id: API_MODEL_AGENT_ID,
+          name: `API Model`,
+          command: process.execPath,
+          args: [API_AGENT_SCRIPT],
+          env: {},
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `M`, color: `#0284C7` },
+        },
+      ],
+    })
+
+    const updated = await registry.updateSettings({
+      commandOverrides: {
+        [API_MODEL_AGENT_ID]: {
+          command: `/usr/bin/env`,
+          args: [`hijacked`],
+        },
+      },
+    })
+    expect(updated.commandOverrides[API_MODEL_AGENT_ID]).toBeUndefined()
+
+    const spec = await registry.resolveLaunchSpec(API_MODEL_AGENT_ID)
+    expect(spec.command).toBe(process.execPath)
+    expect(spec.args).toEqual([API_AGENT_SCRIPT])
+  })
+
+  it(`blocks symlink workspace escapes, prevents parallel filename overwrites, and caps generated image size`, async () => {
+    const workspaceDir = await makeTempDir(`md-img-ws-`)
+    const outsideDir = await makeTempDir(`md-img-outside-`)
+
+    let returnOversized = false
+    const bridge = new ImageGenBridge({
+      getConfig: async () => ({
+        providerPreset: `custom`,
+        baseUrl: `http://127.0.0.1:9`,
+        model: `mock`,
+        size: `1024x1024`,
+        quality: ``,
+        hasApiKey: true,
+        apiKey: `k`,
+        isConfigured: true,
+      }),
+      generate: async () => {
+        const bytes = returnOversized ? Buffer.alloc(10 * 1024 * 1024 + 16, 1) : TINY_PNG_BYTES
+        return {
+          bytes,
+          base64: bytes.toString(`base64`),
+          mimeType: `image/png`,
+        }
+      },
+    })
+    openBridges.push(bridge)
+    const endpoint = await bridge.ensureStarted()
+
+    // 1. Symlink `<workspace>/images -> outsideDir` must be rejected without writing outside.
+    await fs.symlink(outsideDir, path.join(workspaceDir, `images`))
+    await expect(generateAndSaveWorkspaceImage({
+      bridgeUrl: endpoint.url,
+      bridgeToken: endpoint.token,
+      workspaceDir,
+      prompt: `Symlink escape attempt`,
+      filename: `escaped`,
+    })).rejects.toThrow(/symlink|outside|workspace/i)
+    expect(await fs.readdir(outsideDir)).toEqual([])
+
+    // Replace symlink with a real workspace directory.
+    await fs.unlink(path.join(workspaceDir, `images`))
+
+    // 2. Parallel writes with the same slug must both land as distinct files without clobbering.
+    const [resA, resB] = await Promise.all([
+      generateAndSaveWorkspaceImage({
+        bridgeUrl: endpoint.url,
+        bridgeToken: endpoint.token,
+        workspaceDir,
+        prompt: `First parallel hero`,
+        filename: `hero`,
+      }),
+      generateAndSaveWorkspaceImage({
+        bridgeUrl: endpoint.url,
+        bridgeToken: endpoint.token,
+        workspaceDir,
+        prompt: `Second parallel hero`,
+        filename: `hero`,
+      }),
+    ])
+    expect(new Set([resA.relativePath, resB.relativePath])).toEqual(
+      new Set([`images/hero.png`, `images/hero-2.png`]),
+    )
+
+    // 3. Oversized (> 10 MB) generated image must be rejected before writing to disk.
+    returnOversized = true
+    await expect(generateAndSaveWorkspaceImage({
+      bridgeUrl: endpoint.url,
+      bridgeToken: endpoint.token,
+      workspaceDir,
+      prompt: `Huge image`,
+      filename: `huge`,
+    })).rejects.toThrow(/10 MB|too large|exceeds/i)
+    await expect(fs.access(path.join(workspaceDir, `images`, `huge.png`))).rejects.toThrow()
+  })
+
+  it(`rejects non-http(s) baseUrl schemes, redacts leaked secrets in bridge errors, and enforces bridge prompt/concurrency limits`, async () => {
+    const badModels = await fetchRemoteModels({
+      protocol: `openai-compatible`,
+      baseUrl: `file:///etc/passwd`,
+      apiKey: `sk-secret`,
+    })
+    expect(badModels.ok).toBe(false)
+    expect(badModels.error).toMatch(/http/i)
+
+    await expect(generateDesktopImage({
+      baseUrl: `ftp://example.com/v1`,
+      apiKey: `sk-secret`,
+      model: `gpt-image-1`,
+      prompt: `test`,
+    })).rejects.toThrow(/http/i)
+
+    let releaseSlow!: () => void
+    const slowGate = new Promise<void>((resolve) => {
+      releaseSlow = resolve
+    })
+    let shouldLeakSecret = true
+    const secretKey = `sk-bridge-top-secret-xyz`
+
+    const bridge = new ImageGenBridge({
+      getConfig: async () => ({
+        providerPreset: `custom`,
+        baseUrl: `https://api.example.com/v1`,
+        model: `mock`,
+        size: `1024x1024`,
+        quality: ``,
+        hasApiKey: true,
+        apiKey: secretKey,
+        isConfigured: true,
+      }),
+      generate: async () => {
+        if (shouldLeakSecret)
+          throw new Error(`Upstream failed for key=${secretKey}`)
+        await slowGate
+        return { bytes: TINY_PNG_BYTES, base64: TINY_PNG_BASE64, mimeType: `image/png` }
+      },
+    })
+    openBridges.push(bridge)
+    const { url, token } = await bridge.ensureStarted()
+
+    // 1. Secret redaction in bridge error response.
+    const errRes = await fetch(url, {
+      method: `POST`,
+      headers: {
+        'Content-Type': `application/json`,
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ prompt: `hello` }),
+    })
+    expect(errRes.status).toBe(502)
+    const errText = await errRes.text()
+    expect(errText).not.toContain(secretKey)
+
+    // 2. Oversized prompt rejected with 400.
+    const hugePromptRes = await fetch(url, {
+      method: `POST`,
+      headers: {
+        'Content-Type': `application/json`,
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ prompt: `x`.repeat(10_000) }),
+    })
+    expect(hugePromptRes.status).toBe(400)
+
+    // 3. Concurrency limit rejects excess simultaneous image generations with 429.
+    shouldLeakSecret = false
+    const concurrentCalls = Array.from({ length: 6 }, () =>
+      fetch(url, {
+        method: `POST`,
+        headers: {
+          'Content-Type': `application/json`,
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ prompt: `concurrent` }),
+      }))
+    await new Promise(resolve => setTimeout(resolve, 60))
+    releaseSlow()
+    const statuses = (await Promise.all(concurrentCalls)).map(r => r.status)
+    expect(statuses).toContain(429)
+  })
+
+  it(`serializes parallel edit_article calls and informs the model when article.md changed externally between turns`, async () => {
+    const fakeServer = await startFakeOpenAiServer()
+    const events: AcpHostEvent[] = []
+    const { host } = await createWiredHost(fakeServer, {
+      configureImageGen: true,
+      onEvent: e => events.push(e),
+    })
+
+    const started = await host.startSession({
+      agentId: API_MODEL_AGENT_ID,
+      permissionLevel: `bypass`,
+      postId: `post-par`,
+      postTitle: `Parallel & External Sync Test`,
+      content: `# Heading\n\nAlpha paragraph.\n\nBeta paragraph.\n`,
+    })
+
+    // 1. Parallel edit_article calls in one step must both survive without clobbering.
+    await host.prompt({
+      sessionId: started.sessionId,
+      text: `TRIGGER_PARALLEL_EDIT`,
+      content: `# Heading\n\nAlpha paragraph.\n\nBeta paragraph.\n`,
+      postTitle: `Parallel & External Sync Test`,
+    })
+    const syncedPar = events.filter((e): e is Extract<AcpHostEvent, { type: `article_synced` }> => e.type === `article_synced`)
+    expect(syncedPar.length).toBeGreaterThanOrEqual(1)
+    const afterParallel = syncedPar[syncedPar.length - 1].content
+    expect(afterParallel).toContain(`Alpha updated.`)
+    expect(afterParallel).toContain(`Beta updated.`)
+
+    // 2. Simulate renderer uploading an image / user editing article.md between Turn 1 and Turn 2.
+    fakeServer.chatRequests.length = 0
+    const externallyUpdated = `${afterParallel}\n![Uploaded](https://cdn.example.com/hosted.png)\n`
+    await host.prompt({
+      sessionId: started.sessionId,
+      text: `Add a closing line.`,
+      content: externallyUpdated,
+      postTitle: `Parallel & External Sync Test`,
+    })
+    expect(fakeServer.chatRequests.length).toBeGreaterThanOrEqual(1)
+    const turn2Payload = JSON.stringify(fakeServer.chatRequests[0].messages)
+    expect(turn2Payload).toMatch(/article\.md.*changed|updated outside|read_article/i)
+  }, 20_000)
+
+  it(`keeps bundled image-mcp.js compact (< 50 KB)`, async () => {
+    const stat = await fs.stat(IMAGE_MCP_SCRIPT)
+    expect(stat.size).toBeLessThan(50 * 1024)
+  })
 })

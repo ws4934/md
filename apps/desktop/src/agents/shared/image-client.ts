@@ -9,6 +9,8 @@ export interface WorkspaceImageResult {
   mimeType: string
 }
 
+export const MAX_WORKSPACE_IMAGE_BYTES = 10 * 1024 * 1024
+
 const MIME_TO_EXT: Record<string, string> = {
   'image/png': `.png`,
   'image/jpeg': `.jpg`,
@@ -38,15 +40,44 @@ export function sanitizeImageSlug(raw: string | undefined, fallbackPrompt?: stri
   return `img-${randomBytes(4).toString(`hex`)}`
 }
 
-async function resolveUniqueImageFilename(imagesDir: string, slug: string, ext: string): Promise<string> {
-  const firstCandidate = `${slug}${ext}`
-  try {
-    await fs.access(path.join(imagesDir, firstCandidate))
+async function ensureConfinedImagesDir(workspaceDir: string): Promise<string> {
+  const workspaceReal = await fs.realpath(workspaceDir)
+  const candidateImagesDir = path.join(workspaceReal, `images`)
+  const existingStat = await fs.lstat(candidateImagesDir).catch(() => null)
+  if (existingStat?.isSymbolicLink())
+    throw new Error(`Refusing to write to symlinked workspace images directory`)
+
+  await fs.mkdir(candidateImagesDir, { recursive: true })
+  const imagesReal = await fs.realpath(candidateImagesDir)
+  if (!imagesReal.startsWith(`${workspaceReal}${path.sep}`))
+    throw new Error(`Workspace images directory resolved outside workspace`)
+  return imagesReal
+}
+
+async function writeUniqueImageFile(
+  imagesDir: string,
+  slug: string,
+  ext: string,
+  bytes: Buffer,
+): Promise<{ fileName: string, absolutePath: string }> {
+  const candidates: string[] = [`${slug}${ext}`]
+  for (let i = 2; i <= 20; i++)
+    candidates.push(`${slug}-${i}${ext}`)
+  candidates.push(`${slug}-${randomBytes(4).toString(`hex`)}${ext}`)
+
+  for (const fileName of candidates) {
+    const absolutePath = path.join(imagesDir, fileName)
+    try {
+      await fs.writeFile(absolutePath, bytes, { flag: `wx` })
+      return { fileName, absolutePath }
+    }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === `EEXIST`)
+        continue
+      throw error
+    }
   }
-  catch {
-    return firstCandidate
-  }
-  return `${slug}-${randomBytes(3).toString(`hex`)}${ext}`
+  throw new Error(`Failed to allocate unique image filename under images/`)
 }
 
 export async function generateAndSaveWorkspaceImage(params: {
@@ -61,6 +92,9 @@ export async function generateAndSaveWorkspaceImage(params: {
   const prompt = params.prompt.trim()
   if (!prompt)
     throw new Error(`prompt is required`)
+
+  // Verify workspace confinement upfront so a tampered workspace fails before spending API quota.
+  const imagesDir = await ensureConfinedImagesDir(params.workspaceDir)
 
   const response = await fetch(params.bridgeUrl, {
     method: `POST`,
@@ -93,19 +127,26 @@ export async function generateAndSaveWorkspaceImage(params: {
   if (!base64)
     throw new Error(`Image bridge returned empty image data`)
 
+  const bytes = Buffer.from(base64, `base64`)
+  if (bytes.byteLength === 0)
+    throw new Error(`Image bridge returned empty image bytes`)
+  if (bytes.byteLength > MAX_WORKSPACE_IMAGE_BYTES)
+    throw new Error(`Generated image exceeds maximum size of 10 MB`)
+
   const mimeType = typeof payload.mimeType === `string` && payload.mimeType.trim()
     ? payload.mimeType.trim()
     : `image/png`
 
   const ext = extensionForImageMime(mimeType)
   const slug = sanitizeImageSlug(params.filename, prompt)
-  const imagesDir = path.join(params.workspaceDir, `images`)
-  await fs.mkdir(imagesDir, { recursive: true })
-
-  const fileName = await resolveUniqueImageFilename(imagesDir, slug, ext)
-  const absolutePath = path.join(imagesDir, fileName)
-  const bytes = Buffer.from(base64, `base64`)
-  await fs.writeFile(absolutePath, bytes)
+  // Re-check confinement immediately before atomic exclusive write in case the workspace mutated mid-request.
+  const verifiedImagesDir = await ensureConfinedImagesDir(params.workspaceDir)
+  const { fileName, absolutePath } = await writeUniqueImageFile(
+    verifiedImagesDir || imagesDir,
+    slug,
+    ext,
+    bytes,
+  )
 
   return {
     relativePath: `images/${fileName}`,

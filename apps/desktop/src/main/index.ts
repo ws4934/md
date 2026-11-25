@@ -16,6 +16,7 @@ import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { API_MODEL_AGENT_ID } from '@md/shared/types'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, powerMonitor, protocol, safeStorage, shell } from 'electron'
+import { API_AGENT_MODES, API_THOUGHT_LEVEL_OPTIONS } from '../agents/api-agent/provider'
 import { IPC_CHANNELS } from '../shared/ipc-channels'
 import { AcpEventBatcher } from './acp/event-batcher'
 import { AcpHost } from './acp/host'
@@ -24,6 +25,7 @@ import { ImageGenBridge } from './ai/image-bridge'
 import { generateDesktopImage } from './ai/image-service'
 import { resolveUnpackedAgentScript } from './ai/paths'
 import { fetchRemoteModels } from './ai/remote-models'
+import { redactSecret } from './ai/sanitize'
 import { APP_HOST, APP_SCHEME, isSafeExternalUrl, resolveAppProtocolTarget } from './app-protocol'
 import { QuitGuard } from './quit-guard'
 import { mimeForExtension, WeChatPublisher } from './wechat/publisher'
@@ -254,10 +256,12 @@ function registerIpc(host: AcpHost, publisher: WeChatPublisher, configStore: AiC
     })
   })
   ipcMain.handle(IPC_CHANNELS.AI_TEST_IMAGE_GEN, async (_event, params?: DesktopTestImageGenParams) => {
+    let usedApiKey = ``
     try {
       const saved = await configStore.getResolvedImageGenConfig()
       const baseUrl = params?.baseUrl?.trim() || saved.baseUrl
       const apiKey = params?.apiKey?.trim() || saved.apiKey
+      usedApiKey = apiKey
       const model = params?.model?.trim() || saved.model
       const size = params?.size?.trim() || saved.size
       const quality = params?.quality?.trim() || saved.quality
@@ -278,9 +282,10 @@ function registerIpc(host: AcpHost, publisher: WeChatPublisher, configStore: AiC
       }
     }
     catch (error) {
+      const rawMessage = error instanceof Error ? error.message : String(error)
       return {
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: redactSecret(rawMessage, usedApiKey),
       }
     }
   })
@@ -337,6 +342,34 @@ app.whenReady().then(() => {
       if (agentId !== API_MODEL_AGENT_ID)
         return null
       return aiConfigStore!.isModelApiConfigured()
+    },
+    resolveDirectProbe: async (agentId) => {
+      if (agentId !== API_MODEL_AGENT_ID)
+        return null
+      const { modelApi } = await aiConfigStore!.getPublicConfigs()
+      if (!modelApi.hasApiKey || modelApi.enabledModels.length === 0)
+        return null
+      const currentModelId = modelApi.defaultModel && modelApi.enabledModels.includes(modelApi.defaultModel)
+        ? modelApi.defaultModel
+        : modelApi.enabledModels[0]
+      return {
+        agentId: API_MODEL_AGENT_ID,
+        models: modelApi.enabledModels.map(id => ({
+          id,
+          name: id,
+          isDefault: id === currentModelId,
+        })),
+        currentModelId,
+        thinkingOptions: API_THOUGHT_LEVEL_OPTIONS.map(o => ({
+          id: o.value,
+          name: o.name,
+        })),
+        currentThinkingLevel: `default`,
+        modes: API_AGENT_MODES.map(m => ({ ...m })),
+        currentModeId: `default`,
+        commands: [],
+        probedAt: Date.now(),
+      }
     },
     resolveAgentRuntimeEnv: async (agentId, context) => {
       if (agentId !== API_MODEL_AGENT_ID)

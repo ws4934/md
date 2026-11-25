@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { API_MODEL_AGENT_ID } from '@md/shared/types'
 import { createDefaultAcpSettings, DEFAULT_ACP_SETTINGS, migrateLegacyPermissionSettings } from '@md/shared/utils/acp-permissions'
 import { buildAgentEnv, resolveBinaryOnPath, resolveLoginShellPath, spawnAgentProcess, terminateProcessTree } from './process'
 
@@ -147,6 +148,8 @@ export class AcpRegistry {
           customAgents: Array.isArray(parsed.customAgents) ? parsed.customAgents : [],
           commandOverrides: { ...(parsed.commandOverrides ?? {}) },
         }
+        // Built-in API agent receives decrypted keys in runtime env; never allow overriding its command.
+        delete this.settings.commandOverrides[API_MODEL_AGENT_ID]
         if (migrated)
           await this.persist().catch(() => undefined)
       }
@@ -181,6 +184,11 @@ export class AcpRegistry {
 
   async updateSettings(patch: Partial<AcpSettings>): Promise<AcpSettings> {
     await this.ensureLoaded()
+    const mergedOverrides = patch.commandOverrides
+      ? { ...this.settings.commandOverrides, ...patch.commandOverrides }
+      : this.settings.commandOverrides
+    delete mergedOverrides[API_MODEL_AGENT_ID]
+
     this.settings = {
       ...this.settings,
       ...patch,
@@ -190,9 +198,7 @@ export class AcpRegistry {
       lastThinkingLevelByAgent: patch.lastThinkingLevelByAgent
         ? { ...this.settings.lastThinkingLevelByAgent, ...patch.lastThinkingLevelByAgent }
         : this.settings.lastThinkingLevelByAgent,
-      commandOverrides: patch.commandOverrides
-        ? { ...this.settings.commandOverrides, ...patch.commandOverrides }
-        : this.settings.commandOverrides,
+      commandOverrides: mergedOverrides,
     }
     await this.persist()
     const agents = patch.commandOverrides
@@ -242,7 +248,7 @@ export class AcpRegistry {
     if (!config)
       throw new Error(`Unknown ACP agent: ${agentId}`)
 
-    const override = this.settings.commandOverrides[agentId]
+    const override = agentId === API_MODEL_AGENT_ID ? undefined : this.settings.commandOverrides[agentId]
     if (override && override.command.trim()) {
       return {
         command: override.command.trim(),
@@ -381,7 +387,7 @@ export class AcpRegistry {
   private buildStatuses(): AcpAgentStatus[] {
     const configs = this.getAllConfigs()
     return configs.map((config) => {
-      const override = this.settings.commandOverrides[config.id]
+      const override = config.id === API_MODEL_AGENT_ID ? undefined : this.settings.commandOverrides[config.id]
       const detected = this.detectionCache.get(config.id)
       const activeInstall = this.activeInstalls.get(config.id)
       return {

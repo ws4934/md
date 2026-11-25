@@ -58,6 +58,8 @@ export interface AcpHostOptions {
   pathOverride?: string
   extraBuiltinAgents?: AcpAgentConfig[]
   resolveAgentAvailability?: (agentId: string) => boolean | null | Promise<boolean | null>
+  /** Optional fast-path probe resolver for agents whose metadata lives in-process (e.g. api-model). */
+  resolveDirectProbe?: (agentId: string) => AcpProbeResult | null | Promise<AcpProbeResult | null>
   /** Runtime-only env vars injected when spawning a session or probe (never returned in AcpAgentStatus). */
   resolveAgentRuntimeEnv?: (
     agentId: string,
@@ -106,6 +108,7 @@ export class AcpHost {
   private readonly sessions = new Map<string, ManagedSession>()
   private readonly activeWorkspaceDirs = new Set<string>()
   private readonly resolveAgentAvailability?: AcpHostOptions[`resolveAgentAvailability`]
+  private readonly resolveDirectProbe?: AcpHostOptions[`resolveDirectProbe`]
   private readonly resolveAgentRuntimeEnv?: AcpHostOptions[`resolveAgentRuntimeEnv`]
   private readonly resolveSessionMcpServers?: AcpHostOptions[`resolveSessionMcpServers`]
   private readonly isImageGenConfigured?: AcpHostOptions[`isImageGenConfigured`]
@@ -115,6 +118,7 @@ export class AcpHost {
     this.workspacesRoot = path.join(options.dataDir, `acp-workspaces`)
     this.pathOverride = options.pathOverride
     this.resolveAgentAvailability = options.resolveAgentAvailability
+    this.resolveDirectProbe = options.resolveDirectProbe
     this.resolveAgentRuntimeEnv = options.resolveAgentRuntimeEnv
     this.resolveSessionMcpServers = options.resolveSessionMcpServers
     this.isImageGenConfigured = options.isImageGenConfigured
@@ -219,6 +223,12 @@ export class AcpHost {
         probedAt: Date.now(),
         error: `Agent is not configured`,
       }
+    }
+
+    const directProbe = await this.resolveDirectProbe?.(agentId) ?? null
+    if (directProbe) {
+      this.probeCache.seed(directProbe)
+      return directProbe
     }
 
     const launch = await this.registry.resolveLaunchSpec(agentId)

@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { DEFAULT_PROTOCOL_BASE_URLS } from '@md/shared/types'
+import { isValidHttpBaseUrl, validateHttpBaseUrl } from './sanitize'
 
 export interface SecretCipher {
   isEncryptionAvailable: () => boolean
@@ -91,7 +92,9 @@ function createDefaultImageGenRecord(): StoredImageGenRecord {
 
 function normalizeBaseUrl(raw: string, fallback: string): string {
   const trimmed = raw.trim().replace(/\/+$/, ``)
-  return trimmed || fallback
+  if (!trimmed)
+    return fallback
+  return isValidHttpBaseUrl(trimmed) ? trimmed : fallback
 }
 
 function normalizeModelList(list: unknown): string[] {
@@ -332,7 +335,9 @@ export class AiConfigStore {
       : prev.protocol
 
     const nextBaseUrl = patch.baseUrl !== undefined
-      ? normalizeBaseUrl(patch.baseUrl, DEFAULT_PROTOCOL_BASE_URLS[nextProtocol])
+      ? (patch.baseUrl.trim()
+          ? validateHttpBaseUrl(patch.baseUrl)
+          : DEFAULT_PROTOCOL_BASE_URLS[nextProtocol])
       : prev.baseUrl
 
     const nextPreset = patch.providerPreset !== undefined
@@ -383,7 +388,7 @@ export class AiConfigStore {
       : prev.providerPreset
 
     const nextBaseUrl = patch.baseUrl !== undefined
-      ? patch.baseUrl.trim().replace(/\/+$/, ``)
+      ? (patch.baseUrl.trim() ? validateHttpBaseUrl(patch.baseUrl) : ``)
       : prev.baseUrl
 
     const nextApiKey = patch.apiKey !== undefined

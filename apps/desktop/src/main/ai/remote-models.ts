@@ -4,6 +4,7 @@ import type {
   DesktopRemoteModelInfo,
 } from '@md/shared/types'
 import { DEFAULT_PROTOCOL_BASE_URLS } from '@md/shared/types'
+import { redactSecret, validateHttpBaseUrl } from './sanitize'
 
 const DEFAULT_FETCH_TIMEOUT_MS = 15_000
 const MAX_PAGINATION_PAGES = 5
@@ -21,13 +22,6 @@ function dedupeModels(models: DesktopRemoteModelInfo[]): DesktopRemoteModelInfo[
     result.push(name && name !== id ? { id, name } : { id })
   }
   return result
-}
-
-function redactSecretInError(message: string, secret?: string): string {
-  let cleaned = message.replace(/([?&]key=)[^&\s]+/gi, `$1***`)
-  if (secret && secret.length >= 6)
-    cleaned = cleaned.split(secret).join(`***`)
-  return cleaned
 }
 
 export function parseOpenAiModelsResponse(payload: unknown): DesktopRemoteModelInfo[] {
@@ -180,7 +174,6 @@ export async function fetchRemoteModels(options: {
 }): Promise<DesktopListRemoteModelsResult> {
   const fetchImpl = options.fetchImpl ?? fetch
   const timeoutMs = options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS
-  const baseUrl = (options.baseUrl.trim() || DEFAULT_PROTOCOL_BASE_URLS[options.protocol]).replace(/\/+$/, ``)
   const apiKey = options.apiKey.trim()
 
   if (!apiKey) {
@@ -192,6 +185,7 @@ export async function fetchRemoteModels(options: {
   }
 
   try {
+    const baseUrl = validateHttpBaseUrl(options.baseUrl, DEFAULT_PROTOCOL_BASE_URLS[options.protocol])
     if (options.protocol === `openai-compatible`) {
       const payload = await fetchJsonWithTimeout(
         `${baseUrl}/models`,
@@ -280,7 +274,7 @@ export async function fetchRemoteModels(options: {
     return {
       ok: false,
       models: [],
-      error: redactSecretInError(rawMessage, apiKey),
+      error: redactSecret(rawMessage, apiKey),
     }
   }
 }

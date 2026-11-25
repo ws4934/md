@@ -5,6 +5,7 @@ import { Buffer } from 'node:buffer'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import http from 'node:http'
 import { generateDesktopImage } from './image-service'
+import { redactSecret } from './sanitize'
 
 export interface ImageBridgeConnectionInfo {
   url: string
@@ -22,7 +23,11 @@ export interface ImageGenBridgeOptions {
   }) => Promise<GeneratedDesktopImage>
 }
 
-const MAX_BODY_BYTES = 1024 * 1024
+const MAX_BODY_BYTES = 256 * 1024
+const BODY_READ_TIMEOUT_MS = 15_000
+const MAX_PROMPT_CHARS = 8_000
+const MAX_PARAM_CHARS = 64
+const MAX_CONCURRENT_REQUESTS = 4
 
 function sendJson(res: ServerResponse, statusCode: number, body: Record<string, unknown>): void {
   const payload = JSON.stringify(body)
@@ -45,16 +50,34 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let total = 0
+    let settled = false
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true
+        reject(new Error(`Request body timed out`))
+        req.destroy()
+      }
+    }, BODY_READ_TIMEOUT_MS)
+    const cleanup = () => clearTimeout(timer)
+
     req.on(`data`, (chunk: Buffer) => {
       total += chunk.length
       if (total > MAX_BODY_BYTES) {
-        reject(new Error(`Request body too large`))
-        req.destroy()
+        if (!settled) {
+          settled = true
+          cleanup()
+          reject(new Error(`Request body too large`))
+          req.destroy()
+        }
         return
       }
       chunks.push(chunk)
     })
     req.on(`end`, () => {
+      if (settled)
+        return
+      settled = true
+      cleanup()
       try {
         const raw = Buffer.concat(chunks).toString(`utf8`)
         const parsed = raw ? JSON.parse(raw) : {}
@@ -68,7 +91,13 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
         reject(new Error(`Invalid JSON body`))
       }
     })
-    req.on(`error`, reject)
+    req.on(`error`, (error) => {
+      if (settled)
+        return
+      settled = true
+      cleanup()
+      reject(error)
+    })
   })
 }
 
@@ -83,6 +112,7 @@ export class ImageGenBridge {
   private server: Server | null = null
   private startPromise: Promise<ImageBridgeConnectionInfo> | null = null
   private connectionInfo: ImageBridgeConnectionInfo | null = null
+  private activeRequests = 0
 
   constructor(options: ImageGenBridgeOptions) {
     this.getConfig = options.getConfig
@@ -160,16 +190,25 @@ export class ImageGenBridge {
       sendJson(res, 400, { error: `prompt is required` })
       return
     }
-
-    const config = await this.getConfig()
-    if (!config.isConfigured) {
-      sendJson(res, 503, { error: `Image generation is not configured` })
+    if (prompt.length > MAX_PROMPT_CHARS) {
+      sendJson(res, 400, { error: `prompt exceeds maximum length of ${MAX_PROMPT_CHARS} characters` })
       return
     }
 
-    const size = typeof body.size === `string` && body.size.trim() ? body.size.trim() : config.size
-    const quality = typeof body.quality === `string` && body.quality.trim() ? body.quality.trim() : config.quality
+    const rawSize = typeof body.size === `string` ? body.size.trim() : ``
+    const rawQuality = typeof body.quality === `string` ? body.quality.trim() : ``
+    if (rawSize.length > MAX_PARAM_CHARS || rawQuality.length > MAX_PARAM_CHARS) {
+      sendJson(res, 400, { error: `size or quality parameter is too long` })
+      return
+    }
 
+    if (this.activeRequests >= MAX_CONCURRENT_REQUESTS) {
+      sendJson(res, 429, { error: `Too many concurrent image generation requests` })
+      return
+    }
+
+    this.activeRequests += 1
+    let config: ResolvedImageGenConfig | null = null
     const abortController = new AbortController()
     const onClose = () => {
       if (!res.writableEnded)
@@ -178,6 +217,15 @@ export class ImageGenBridge {
     res.once(`close`, onClose)
 
     try {
+      config = await this.getConfig()
+      if (!config.isConfigured) {
+        sendJson(res, 503, { error: `Image generation is not configured` })
+        return
+      }
+
+      const size = rawSize || config.size
+      const quality = rawQuality || config.quality
+
       const result = await this.generateImpl({
         config,
         prompt,
@@ -194,12 +242,14 @@ export class ImageGenBridge {
     }
     catch (error) {
       if (!res.writableEnded) {
+        const rawMessage = error instanceof Error ? error.message : String(error)
         sendJson(res, 502, {
-          error: error instanceof Error ? error.message : String(error),
+          error: redactSecret(rawMessage, config?.apiKey),
         })
       }
     }
     finally {
+      this.activeRequests -= 1
       res.off(`close`, onClose)
     }
   }

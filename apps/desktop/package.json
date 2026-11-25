@@ -7,8 +7,12 @@
   "description": "Electron desktop edition of doocs/md with local ACP agent integration",
   "main": "dist/main/index.js",
   "build": {
+    "files": [
+      "dist/**/*",
+      "!**/*.map"
+    ],
     "asarUnpack": [
-      "dist/agents/**"
+      "dist/agents/*.js"
     ]
   },
   "scripts": {

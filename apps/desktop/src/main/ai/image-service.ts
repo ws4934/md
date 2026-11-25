@@ -1,5 +1,6 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { generateImage } from 'ai'
+import { redactSecret, validateHttpBaseUrl } from './sanitize'
 
 export interface GenerateDesktopImageParams {
   baseUrl: string
@@ -9,6 +10,7 @@ export interface GenerateDesktopImageParams {
   size?: string
   quality?: string
   abortSignal?: AbortSignal
+  timeoutMs?: number
 }
 
 export interface GeneratedDesktopImage {
@@ -18,20 +20,22 @@ export interface GeneratedDesktopImage {
 }
 
 const IMAGE_SIZE_RE = /^\d+x\d+$/
+const DEFAULT_IMAGE_TIMEOUT_MS = 120_000
 
 export async function generateDesktopImage(
   params: GenerateDesktopImageParams,
 ): Promise<GeneratedDesktopImage> {
-  const baseURL = params.baseUrl.trim().replace(/\/+$/, ``)
+  const rawBaseUrl = params.baseUrl.trim()
   const apiKey = params.apiKey.trim()
   const modelId = params.model.trim()
   const prompt = params.prompt.trim()
 
-  if (!baseURL || !apiKey || !modelId)
+  if (!rawBaseUrl || !apiKey || !modelId)
     throw new Error(`Image generation is not fully configured (baseUrl, apiKey, and model are required)`)
   if (!prompt)
     throw new Error(`Image prompt is required`)
 
+  const baseURL = validateHttpBaseUrl(rawBaseUrl)
   const provider = createOpenAICompatible({
     name: `openai-compatible`,
     baseURL,
@@ -48,18 +52,29 @@ export async function generateDesktopImage(
     ? { openaiCompatible: { quality } }
     : undefined
 
-  const result = await generateImage({
-    model: provider.imageModel(modelId),
-    prompt,
-    size,
-    providerOptions,
-    abortSignal: params.abortSignal,
-  })
+  const timeoutSignal = AbortSignal.timeout(params.timeoutMs ?? DEFAULT_IMAGE_TIMEOUT_MS)
+  const abortSignal = params.abortSignal
+    ? AbortSignal.any([timeoutSignal, params.abortSignal])
+    : timeoutSignal
 
-  const image = result.image
-  return {
-    bytes: image.uint8Array,
-    base64: image.base64,
-    mimeType: image.mediaType || `image/png`,
+  try {
+    const result = await generateImage({
+      model: provider.imageModel(modelId),
+      prompt,
+      size,
+      providerOptions,
+      abortSignal,
+    })
+
+    const image = result.image
+    return {
+      bytes: image.uint8Array,
+      base64: image.base64,
+      mimeType: image.mediaType || `image/png`,
+    }
+  }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(redactSecret(message, apiKey))
   }
 }

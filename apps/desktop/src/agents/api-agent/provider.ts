@@ -4,6 +4,7 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { DEFAULT_PROTOCOL_BASE_URLS } from '@md/shared/types'
+import { validateHttpBaseUrl } from '../../main/ai/sanitize'
 
 export interface ApiAgentRuntimeConfig {
   protocol: DesktopAiProtocol
@@ -12,6 +13,19 @@ export interface ApiAgentRuntimeConfig {
   enabledModels: string[]
   defaultModel: string
 }
+
+export type ApiAgentModeId = `default` | `acceptEdits` | `plan` | `bypassPermissions`
+
+export const API_AGENT_MODES: ReadonlyArray<{
+  id: ApiAgentModeId
+  name: string
+  description: string
+}> = [
+  { id: `default`, name: `Default`, description: `Ask before editing the article or generating images` },
+  { id: `acceptEdits`, name: `Accept Edits`, description: `Auto-accept article edits` },
+  { id: `plan`, name: `Plan`, description: `Read-only planning mode` },
+  { id: `bypassPermissions`, name: `Bypass Permissions`, description: `Skip all permission prompts` },
+]
 
 export type ApiThoughtLevel = `default` | `low` | `medium` | `high`
 
@@ -29,7 +43,7 @@ export function createApiAgentLanguageModel(
   config: ApiAgentRuntimeConfig,
   modelId: string,
 ): LanguageModel {
-  const baseURL = (config.baseUrl.trim() || DEFAULT_PROTOCOL_BASE_URLS[config.protocol]).replace(/\/+$/, ``)
+  const baseURL = validateHttpBaseUrl(config.baseUrl, DEFAULT_PROTOCOL_BASE_URLS[config.protocol])
 
   if (config.protocol === `anthropic`) {
     const provider = createAnthropic({
