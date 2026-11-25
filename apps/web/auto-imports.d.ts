@@ -242,6 +242,7 @@ declare global {
   const useFetch: typeof import('@vueuse/core').useFetch
   const useFileDialog: typeof import('@vueuse/core').useFileDialog
   const useFileSystemAccess: typeof import('@vueuse/core').useFileSystemAccess
+  const useFloatingMenu: typeof import('./src/composables/useFloatingMenu').useFloatingMenu
   const useFocus: typeof import('@vueuse/core').useFocus
   const useFocusWithin: typeof import('@vueuse/core').useFocusWithin
   const useFolderFileSync: typeof import('./src/composables/useFolderFileSync').useFolderFileSync
