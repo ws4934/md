@@ -27,6 +27,7 @@ import type { ChildProcess, ChildProcessWithoutNullStreams } from 'node:child_pr
 import type { ExtendedNewSessionResponse } from './translator'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
+import fsSync from 'node:fs'
 import path from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { client as createAcpClient, PROTOCOL_VERSION, RequestError } from '@agentclientprotocol/sdk/unstable'
@@ -491,6 +492,8 @@ export class AcpSession {
     if (!this.connection || !this._sessionId || this.closed)
       throw new Error(`ACP session is not active`)
 
+    const prevThinkingOptions = this._thinkingOptions
+    const prevThinkingLevel = this._currentThinkingLevel
     const modelOption = findSelectConfigOption(this._configOptions, `model`)
     const parsed = this._hasModelVariants
       ? parseVariantModelId(modelId, this._models)
@@ -498,10 +501,10 @@ export class AcpSession {
     const effectiveBaseId = parsed.baseModelId ?? modelId
     const effectiveDesiredThinking = thinkingLevel !== undefined
       ? thinkingLevel
-      : (parsed.thinkingLevel ?? this._currentThinkingLevel)
+      : (parsed.thinkingLevel ?? prevThinkingLevel)
     const resolved = this._hasModelVariants
       ? resolveWireModelId(effectiveBaseId, effectiveDesiredThinking, this._models)
-      : { wireModelId: modelId, baseModelId: modelId, thinkingLevel: this._currentThinkingLevel }
+      : { wireModelId: modelId, baseModelId: modelId, thinkingLevel: prevThinkingLevel }
 
     // Prefer unstable session/set_model when the agent advertised models via `models`.
     if (this._modelSource === `models` || !modelOption) {
@@ -533,10 +536,10 @@ export class AcpSession {
             })
           }
         }
-        else if (thinkingLevel !== undefined && this._thinkingOptions.length > 0) {
+        else if (effectiveDesiredThinking && this._thinkingOptions.length > 0) {
           const nextLevel = resolveThinkingLevelForModel(
             this._thinkingOptions,
-            thinkingLevel ?? this._currentThinkingLevel,
+            effectiveDesiredThinking,
           )
           if (nextLevel && nextLevel !== this._currentThinkingLevel) {
             try {
@@ -570,7 +573,8 @@ export class AcpSession {
     )
 
     if (response?.configOptions) {
-      this.syncFromConfigOptions(response.configOptions)
+      // Defer thinking_changed until any remembered/requested effort override is applied below.
+      this.syncFromConfigOptions(response.configOptions, { suppressThinkingEmit: true })
     }
     else if (this._currentModelId !== resolved.baseModelId) {
       this._currentModelId = resolved.baseModelId
@@ -585,16 +589,28 @@ export class AcpSession {
     if (!this._hasModelVariants && this._thinkingOptions.length > 0) {
       const nextLevel = resolveThinkingLevelForModel(
         this._thinkingOptions,
-        thinkingLevel ?? this._currentThinkingLevel,
+        effectiveDesiredThinking ?? this._currentThinkingLevel,
       )
       if (nextLevel && nextLevel !== this._currentThinkingLevel) {
         try {
-          await this.setThinkingLevel(nextLevel)
+          await this.applyThinkingConfigOption(nextLevel, { suppressEmit: true })
         }
         catch {
           // Keep agent's current thinking level if configOption rejects it.
         }
       }
+    }
+
+    if (
+      !sameThinkingOptions(prevThinkingOptions, this._thinkingOptions)
+      || prevThinkingLevel !== this._currentThinkingLevel
+    ) {
+      this.emit({
+        type: `thinking_changed`,
+        sessionId: this._sessionId,
+        thinkingLevel: this._currentThinkingLevel,
+        thinkingOptions: this._hasModelVariants ? undefined : this._thinkingOptions,
+      })
     }
 
     return { modelId: this._currentModelId, thinkingLevel: this._currentThinkingLevel }
@@ -621,10 +637,22 @@ export class AcpSession {
       return { thinkingLevel: result.thinkingLevel, modelId: result.modelId }
     }
 
+    await this.applyThinkingConfigOption(level)
+    return { thinkingLevel: this._currentThinkingLevel, modelId: this._currentModelId }
+  }
+
+  private async applyThinkingConfigOption(
+    level: string,
+    options?: { suppressEmit?: boolean },
+  ): Promise<void> {
+    if (!this.connection || !this._sessionId || this.closed)
+      throw new Error(`ACP session is not active`)
+
     const thoughtOption = findSelectConfigOption(this._configOptions, `thought_level`)
     if (!thoughtOption)
       throw new Error(`Agent does not expose thinking level selection`)
 
+    const suppress = Boolean(options?.suppressEmit)
     const response = await this.runBoundedRequest(
       this.connection.agent.request(`session/set_config_option`, {
         sessionId: this._sessionId,
@@ -636,9 +664,22 @@ export class AcpSession {
     )
 
     if (response?.configOptions) {
-      this.syncFromConfigOptions(response.configOptions)
+      this.syncFromConfigOptions(response.configOptions, { suppressThinkingEmit: suppress })
       if (this._currentThinkingLevel === null) {
         this._currentThinkingLevel = level
+        if (!suppress) {
+          this.emit({
+            type: `thinking_changed`,
+            sessionId: this._sessionId,
+            thinkingLevel: this._currentThinkingLevel,
+            thinkingOptions: this._hasModelVariants ? undefined : this._thinkingOptions,
+          })
+        }
+      }
+    }
+    else if (this._currentThinkingLevel !== level) {
+      this._currentThinkingLevel = level
+      if (!suppress) {
         this.emit({
           type: `thinking_changed`,
           sessionId: this._sessionId,
@@ -647,17 +688,6 @@ export class AcpSession {
         })
       }
     }
-    else if (this._currentThinkingLevel !== level) {
-      this._currentThinkingLevel = level
-      this.emit({
-        type: `thinking_changed`,
-        sessionId: this._sessionId,
-        thinkingLevel: this._currentThinkingLevel,
-        thinkingOptions: this._hasModelVariants ? undefined : this._thinkingOptions,
-      })
-    }
-
-    return { thinkingLevel: this._currentThinkingLevel, modelId: this._currentModelId }
   }
 
   async setMode(modeId: string): Promise<{ modeId: string | null }> {
@@ -934,10 +964,14 @@ export class AcpSession {
     this._modeSource = modeState.source
   }
 
-  private syncFromConfigOptions(configOptions: SessionConfigOption[]): void {
+  private syncFromConfigOptions(
+    configOptions: SessionConfigOption[],
+    options?: { suppressThinkingEmit?: boolean },
+  ): void {
     if (!this._sessionId)
       return
 
+    const suppressThinking = Boolean(options?.suppressThinkingEmit)
     this._configOptions = configOptions
     const thoughtState = deriveThinkingFromConfigOptions(configOptions)
 
@@ -967,11 +1001,13 @@ export class AcpSession {
         }
         if (nextThinking !== this._currentThinkingLevel) {
           this._currentThinkingLevel = nextThinking
-          this.emit({
-            type: `thinking_changed`,
-            sessionId: this._sessionId,
-            thinkingLevel: this._currentThinkingLevel,
-          })
+          if (!suppressThinking) {
+            this.emit({
+              type: `thinking_changed`,
+              sessionId: this._sessionId,
+              thinkingLevel: this._currentThinkingLevel,
+            })
+          }
         }
       }
       else {
@@ -989,7 +1025,7 @@ export class AcpSession {
           this._thinkingOptions = thoughtState.options
         if (levelChanged)
           this._currentThinkingLevel = thoughtState.currentLevel
-        if (optionsChanged || levelChanged) {
+        if (!suppressThinking && (optionsChanged || levelChanged)) {
           this.emit({
             type: `thinking_changed`,
             sessionId: this._sessionId,
@@ -1025,7 +1061,7 @@ export class AcpSession {
         this._thinkingOptions = derived.thinkingOptions
       if (levelChanged)
         this._currentThinkingLevel = derived.currentThinkingLevel
-      if (optionsChanged || levelChanged) {
+      if (!suppressThinking && (optionsChanged || levelChanged)) {
         this.emit({
           type: `thinking_changed`,
           sessionId: this._sessionId,
@@ -1217,19 +1253,41 @@ export class AcpSession {
     this.pendingPermissions.clear()
   }
 
-  private isInsideWorkspace(targetPath: string): boolean {
-    const workspaceRoot = path.resolve(this.options.cwd)
-    const resolved = path.resolve(workspaceRoot, targetPath)
-    return resolved === workspaceRoot || resolved.startsWith(`${workspaceRoot}${path.sep}`)
+  private resolveTerminalCwd(requestedCwd?: string | null): string {
+    const fallbackRoot = path.resolve(this.options.cwd)
+    let canonicalRoot = fallbackRoot
+    try {
+      canonicalRoot = fsSync.realpathSync.native(fallbackRoot)
+    }
+    catch {
+      return fallbackRoot
+    }
+
+    if (!requestedCwd || !requestedCwd.trim())
+      return canonicalRoot
+
+    const candidate = path.resolve(fallbackRoot, requestedCwd)
+    try {
+      const canonicalCandidate = fsSync.realpathSync.native(candidate)
+      if (
+        canonicalCandidate === canonicalRoot
+        || canonicalCandidate.startsWith(`${canonicalRoot}${path.sep}`)
+      ) {
+        return canonicalCandidate
+      }
+    }
+    catch {
+      // Missing/unreadable path falls back safely to the workspace root.
+    }
+
+    return canonicalRoot
   }
 
   private async handleCreateTerminal(params: CreateTerminalRequest): Promise<{ terminalId: string }> {
     const terminalId = randomUUID()
     const extraEnv = Object.fromEntries((params.env ?? []).map(entry => [entry.name, entry.value]))
     const env = await buildAgentEnv({ ...this.options.env, ...extraEnv }, this.options.pathOverride)
-    const cwd = params.cwd && this.isInsideWorkspace(params.cwd)
-      ? path.resolve(this.options.cwd, params.cwd)
-      : this.options.cwd
+    const cwd = this.resolveTerminalCwd(params.cwd)
 
     const child = spawnAgentProcess(params.command, params.args ?? [], { cwd, env })
 

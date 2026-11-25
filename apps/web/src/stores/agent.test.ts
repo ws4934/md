@@ -340,6 +340,26 @@ describe(`useAgentStore thinking level state`, () => {
     expect(agentStore.availableThinkingOptions).toEqual([])
     expect(agentStore.selectedThinkingLevel).toBeNull()
 
+    // Starting a brand-new draft session after Haiku must NOT lose Claude's probed thinking options!
+    await agentStore.startNewSession()
+    await agentStore.selectAgentAndModel(`claude`, `sonnet`)
+    expect(agentStore.availableThinkingOptions.map(o => o.id)).toEqual([`default`, `low`, `medium`, `high`, `xhigh`, `max`])
+    expect(agentStore.selectedThinkingLevel).toBe(`default`)
+
+    // Switch back to the live Haiku session (`sess-claude`) and verify switching back to Sonnet restores `'default'`.
+    const liveSess = agentStore.sessions.find(s => s.id !== agentStore.activeSessionId)!
+    liveSess.acpSessionId = `sess-claude`
+    await agentStore.switchSession(liveSess.id)
+    expect(agentStore.availableThinkingOptions).toEqual([])
+
+    // Failed setModel in a live session must NOT persist rejected model via updateSettings and must roll back cleanly.
+    vi.mocked(acpMock.updateSettings).mockClear()
+    vi.mocked(acpMock.setModel).mockRejectedValueOnce(new Error(`Model unavailable`))
+    await agentStore.selectAgentAndModel(`claude`, `opus[1m]`)
+    expect(acpMock.updateSettings).not.toHaveBeenCalled()
+    expect(agentStore.selectedModel?.id).toBe(`haiku`)
+    expect(toastErrorMock).toHaveBeenCalledWith(`Model unavailable`)
+
     // Switching back to Sonnet forwards the remembered level (`default`) so the host re-applies it.
     vi.mocked(acpMock.setModel).mockImplementationOnce(async (params) => {
       eventListener?.({

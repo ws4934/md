@@ -1511,4 +1511,125 @@ describe(`thinking level switching (variants vs configOption) and config_option_
       ),
     ).toBe(true)
   })
+
+  it(`preserves configOption thinking catalog across no-effort models and avoids spurious intermediate thinking_changed`, async () => {
+    const dataDir = await makeTempDir(`md-acp-claude-cfg-`)
+    const events: AcpHostEvent[] = []
+    const host = new AcpHost({
+      dataDir,
+      extraBuiltinAgents: [
+        {
+          id: `fake-claude-cfg`,
+          name: `Fake Claude Config`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_MODEL_STYLE: `claude_cfg`,
+            FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `C`, color: `#D97757` },
+        },
+      ],
+      onEvent: ev => events.push(ev),
+    })
+    openHosts.push(host)
+
+    // Probe discovers 3 effort levels on default model (`opus-5.5`).
+    const initialProbe = await host.probeAgent(`fake-claude-cfg`)
+    expect(initialProbe.thinkingOptions?.map(o => o.id)).toEqual([`low`, `medium`, `high`])
+
+    // Starting on no-effort `haiku-5.5` must NOT wipe the cached probe thinkingOptions!
+    const haikuSess = await host.startSession({
+      agentId: `fake-claude-cfg`,
+      modelId: `haiku-5.5`,
+      postId: `p-haiku`,
+      postTitle: `Haiku`,
+      content: `# Haiku`,
+    })
+    expect(haikuSess.thinkingOptions).toEqual([])
+    expect(haikuSess.thinkingLevel).toBeNull()
+
+    const cachedAfterHaiku = await host.probeAgent(`fake-claude-cfg`)
+    expect(cachedAfterHaiku.thinkingOptions?.map(o => o.id)).toEqual([`low`, `medium`, `high`])
+
+    // Switching to sonnet-5.5 with explicit `'low'` must NOT emit an intermediate `'high'` event.
+    events.length = 0
+    const toSonnet = await host.setModel({
+      sessionId: haikuSess.sessionId,
+      modelId: `sonnet-5.5`,
+      thinkingLevel: `low`,
+    })
+    expect(toSonnet).toEqual({ modelId: `sonnet-5.5`, thinkingLevel: `low` })
+    const thinkingEvents = events.filter(
+      (e): e is Extract<AcpHostEvent, { type: `thinking_changed` }> =>
+        e.type === `thinking_changed` && e.sessionId === haikuSess.sessionId,
+    )
+    expect(thinkingEvents.map(e => e.thinkingLevel)).toEqual([`low`])
+
+    // Switching to opus-5.5 without passing thinkingLevel must carry over `'low'` rather than resetting to `'high'`.
+    events.length = 0
+    const toOpus = await host.setModel({
+      sessionId: haikuSess.sessionId,
+      modelId: `opus-5.5`,
+    })
+    expect(toOpus).toEqual({ modelId: `opus-5.5`, thinkingLevel: `low` })
+    const opusThinkingEvents = events.filter(
+      (e): e is Extract<AcpHostEvent, { type: `thinking_changed` }> =>
+        e.type === `thinking_changed` && e.sessionId === haikuSess.sessionId,
+    )
+    expect(opusThinkingEvents).toEqual([])
+  })
+
+  it(`blocks symlink escape in terminal/create cwd while accepting realpaths inside symlinked workspaces`, async () => {
+    const outerDir = await makeTempDir(`md-acp-term-cwd-`)
+    const realWs = path.join(outerDir, `real-ws`)
+    const subDir = path.join(realWs, `nested`)
+    const outsideSecret = path.join(outerDir, `outside-secret`)
+    const aliasWs = path.join(outerDir, `alias-ws`)
+    await fs.mkdir(subDir, { recursive: true })
+    await fs.mkdir(outsideSecret, { recursive: true })
+    await fs.symlink(outsideSecret, path.join(realWs, `escape-link`))
+    await fs.symlink(realWs, aliasWs)
+
+    const session = new AcpSession({
+      agentId: `fake-term`,
+      command: process.execPath,
+      args: [FAKE_AGENT_SCRIPT],
+      cwd: aliasWs,
+    })
+    try {
+      await session.initializeNewSession()
+      const createTerminal = session as unknown as {
+        handleCreateTerminal: (p: { command: string, args: string[], cwd?: string }) => Promise<{ terminalId: string }>
+        handleWaitForTerminalExit: (p: { terminalId: string }) => Promise<unknown>
+        handleTerminalOutput: (p: { terminalId: string }) => Promise<{ output: string }>
+      }
+
+      // 1. Symlink pointing outside workspace must fall back to workspace cwd, never enter outsideSecret.
+      const escaped = await createTerminal.handleCreateTerminal.call(session, {
+        command: process.execPath,
+        args: [`-e`, `process.stdout.write(fs.realpathSync(process.cwd()))`],
+        cwd: `escape-link`,
+      })
+      await createTerminal.handleWaitForTerminalExit.call(session, escaped)
+      const escapedOut = await createTerminal.handleTerminalOutput.call(session, escaped)
+      expect(escapedOut.output.trim()).toBe(await fs.realpath(realWs))
+
+      // 2. Realpath subdirectory when workspace was opened via symlink (e.g. macOS /var -> /private/var) must succeed.
+      const realSubdirPath = await fs.realpath(subDir)
+      const validSub = await createTerminal.handleCreateTerminal.call(session, {
+        command: process.execPath,
+        args: [`-e`, `process.stdout.write(fs.realpathSync(process.cwd()))`],
+        cwd: realSubdirPath,
+      })
+      await createTerminal.handleWaitForTerminalExit.call(session, validSub)
+      const validOut = await createTerminal.handleTerminalOutput.call(session, validSub)
+      expect(validOut.output.trim()).toBe(realSubdirPath)
+    }
+    finally {
+      await session.close()
+    }
+  })
 })

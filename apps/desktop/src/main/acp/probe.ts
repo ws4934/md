@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { hasVariantModels } from '@md/shared/utils/acp-thinking'
 import { AcpSession } from './session'
 
 const COMMAND_QUIET_WINDOW_MS = 600
@@ -182,14 +183,18 @@ export class ProbeCache {
     if (result.error)
       return
     const prev = this.cache.get(result.agentId)
+    const models = result.models.length > 0 ? result.models : (prev?.models ?? [])
+    const thinkingOptions = hasVariantModels(models)
+      ? []
+      : (result.thinkingOptions && result.thinkingOptions.length > 0
+          ? result.thinkingOptions
+          : prev?.thinkingOptions)
     const merged: AcpProbeResult = {
       agentId: result.agentId,
-      models: result.models.length > 0 ? result.models : (prev?.models ?? []),
+      models,
       currentModelId: result.currentModelId ?? prev?.currentModelId ?? null,
-      thinkingOptions: result.thinkingOptions !== undefined ? result.thinkingOptions : prev?.thinkingOptions,
-      currentThinkingLevel: result.currentThinkingLevel !== undefined
-        ? result.currentThinkingLevel
-        : (prev?.currentThinkingLevel ?? null),
+      thinkingOptions,
+      currentThinkingLevel: result.currentThinkingLevel ?? prev?.currentThinkingLevel ?? null,
       modes: result.modes.length > 0 ? result.modes : (prev?.modes ?? []),
       currentModeId: result.currentModeId ?? prev?.currentModeId ?? null,
       commands: result.commands.length > 0 ? result.commands : (prev?.commands ?? []),

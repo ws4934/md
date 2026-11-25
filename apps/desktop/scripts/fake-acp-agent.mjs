@@ -302,6 +302,27 @@ function buildModelsMetadata() {
       configOptions: thoughtConfigOptions,
     }
   }
+  if (modelStyle === `claude_cfg`) {
+    const hasEffort = currentModelId !== `haiku-5.5`
+    const claudeConfigOptions = [
+      ...configOptions,
+      ...(hasEffort
+        ? [{
+            id: `effort`,
+            name: `Effort`,
+            category: `thought_level`,
+            type: `select`,
+            currentValue: currentThoughtLevel,
+            options: [
+              { value: `low`, name: `Low`, description: `Faster` },
+              { value: `medium`, name: `Medium`, description: `Balanced` },
+              { value: `high`, name: `High`, description: `Thorough` },
+            ],
+          }]
+        : []),
+    ]
+    return { configOptions: claudeConfigOptions }
+  }
   if (modelStyle === `configOptions`)
     return { configOptions }
   if (modelStyle === `both`) {
@@ -636,7 +657,7 @@ async function handleRequest(msg) {
       return
     }
     case `session/set_model`: {
-      if (modelStyle === `configOptions`) {
+      if (modelStyle === `configOptions` || modelStyle === `claude_cfg`) {
         sendError(id, -32601, `Method not found: session/set_model`)
         return
       }
@@ -679,9 +700,12 @@ async function handleRequest(msg) {
     }
     case `session/set_config_option`: {
       setConfigHistory.push(`${params.configId}=${params.value}`)
-      if (params.configId === `model`)
+      if (params.configId === `model`) {
         currentModelId = params.value
-      if (params.configId === `thought_level` || params.configId === `reasoning_effort`)
+        if (modelStyle === `claude_cfg` && params.value !== `haiku-5.5`)
+          currentThoughtLevel = `high`
+      }
+      if (params.configId === `thought_level` || params.configId === `reasoning_effort` || params.configId === `effort`)
         currentThoughtLevel = params.value
       if (params.configId === `mode`) {
         currentModeId = params.value

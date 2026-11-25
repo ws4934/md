@@ -53,6 +53,7 @@ export interface AgentConversationSession {
   agentId: string
   modelId: string | null
   thinkingLevel?: string | null
+  thinkingOptions?: AcpThinkingOption[]
   permissionLevel?: AcpPermissionLevel
   modeId?: string | null
   postId: string
@@ -234,7 +235,12 @@ export const useAgentStore = defineStore(`agent`, () => {
     if (!agent)
       return []
     const probe = probeByAgent.value[agent.id]
-    return getModelThinkingOptions(selectedModel.value, probe?.thinkingOptions, probe?.models)
+    const active = activeSession.value
+    const sessionOptions
+      = active?.acpSessionId && active.agentId === agent.id && active.thinkingOptions !== undefined
+        ? active.thinkingOptions
+        : probe?.thinkingOptions
+    return getModelThinkingOptions(selectedModel.value, sessionOptions, probe?.models)
   })
 
   const selectedThinkingLevel = computed<string | null>(() => {
@@ -324,7 +330,7 @@ export const useAgentStore = defineStore(`agent`, () => {
   })
 
   async function persistSessions(): Promise<void> {
-    const serializable = sessions.value.slice(0, MAX_STORED_SESSIONS).map(s => ({
+    const serializable = sessions.value.slice(0, MAX_STORED_SESSIONS).map(({ thinkingOptions: _liveOptions, ...s }) => ({
       ...s,
       acpSessionId: null,
       items: s.items.slice(-MAX_STORED_ITEMS_PER_SESSION).map(sanitizeItemForStorage),
@@ -626,14 +632,15 @@ export const useAgentStore = defineStore(`agent`, () => {
           if (event.thinkingLevel)
             selectedThinkingLevelByAgent.value[session.agentId] = event.thinkingLevel
           if (event.thinkingOptions !== undefined) {
+            session.thinkingOptions = event.thinkingOptions
             const prevProbe = probeByAgent.value[session.agentId]
-            if (prevProbe) {
+            if (prevProbe && event.thinkingOptions.length > 0 && !hasVariantModels(prevProbe.models)) {
               probeByAgent.value = {
                 ...probeByAgent.value,
                 [session.agentId]: {
                   ...prevProbe,
                   thinkingOptions: event.thinkingOptions,
-                  currentThinkingLevel: event.thinkingLevel,
+                  currentThinkingLevel: event.thinkingLevel ?? prevProbe.currentThinkingLevel ?? null,
                 },
               }
             }
@@ -656,8 +663,10 @@ export const useAgentStore = defineStore(`agent`, () => {
         delete nextRunning[event.sessionId]
         runningAcpSessions.value = nextRunning
         const session = findSessionByAcpId(event.sessionId)
-        if (session)
+        if (session) {
           session.acpSessionId = null
+          session.thinkingOptions = undefined
+        }
         break
       }
     }
@@ -754,11 +763,15 @@ export const useAgentStore = defineStore(`agent`, () => {
     const probe = probeByAgent.value[agentId]
     const prevModelId = selectedModelByAgent.value[agentId]
     const prevThinking = selectedThinkingLevelByAgent.value[agentId]
+    const prevSettingsModel = settings.value.lastModelByAgent[agentId]
+    const prevSettingsThinking = settings.value.lastThinkingLevelByAgent[agentId]
     const prevSessionModel = session?.modelId
     const prevSessionThinking = session?.thinkingLevel
+    const prevSessionThinkingOptions = session?.thinkingOptions
 
     let nextBaseModelId: string | undefined
     let nextThinkingLevel: string | null | undefined
+    let settingsPatch: Partial<AcpSettings> | null = null
 
     if (modelId) {
       const parsed = parseVariantModelId(modelId, probe?.models ?? [])
@@ -770,7 +783,11 @@ export const useAgentStore = defineStore(`agent`, () => {
       }
 
       const targetModel = probe?.models.find(m => m.id === nextBaseModelId)
-      const targetOptions = getModelThinkingOptions(targetModel, probe?.thinkingOptions, probe?.models)
+      const sessionOptions
+        = session?.acpSessionId && session.agentId === agentId && session.thinkingOptions !== undefined
+          ? session.thinkingOptions
+          : probe?.thinkingOptions
+      const targetOptions = getModelThinkingOptions(targetModel, sessionOptions, probe?.models)
       const isVariantAgent = hasVariantModels(probe?.models)
       if (targetOptions.length > 0) {
         const currentDesired = parsed.thinkingLevel
@@ -814,11 +831,10 @@ export const useAgentStore = defineStore(`agent`, () => {
         session.thinkingLevel = targetOptions.length > 0 ? (nextThinkingLevel ?? null) : null
       }
 
-      const settingsPatch: Partial<AcpSettings> = {
+      settingsPatch = {
         lastModelByAgent: { [agentId]: nextBaseModelId },
         ...(targetOptions.length > 0 && nextThinkingLevel ? { lastThinkingLevelByAgent: { [agentId]: nextThinkingLevel } } : {}),
       }
-      void window.mdDesktop?.acp.updateSettings(settingsPatch)
     }
 
     if (session?.acpSessionId && session.agentId === agentId && nextBaseModelId && window.mdDesktop?.acp) {
@@ -830,10 +846,15 @@ export const useAgentStore = defineStore(`agent`, () => {
         })
         session.modelId = result.modelId
         session.thinkingLevel = result.thinkingLevel
-        if (result.modelId)
-          selectedModelByAgent.value[agentId] = result.modelId
+        if (result.modelId) {
+          selectedModelByAgent.value = { ...selectedModelByAgent.value, [agentId]: result.modelId }
+          settings.value = {
+            ...settings.value,
+            lastModelByAgent: { ...settings.value.lastModelByAgent, [agentId]: result.modelId },
+          }
+        }
         if (result.thinkingLevel) {
-          selectedThinkingLevelByAgent.value[agentId] = result.thinkingLevel
+          selectedThinkingLevelByAgent.value = { ...selectedThinkingLevelByAgent.value, [agentId]: result.thinkingLevel }
           settings.value = {
             ...settings.value,
             lastThinkingLevelByAgent: {
@@ -844,15 +865,51 @@ export const useAgentStore = defineStore(`agent`, () => {
         }
       }
       catch (error) {
+        const restoredModels = { ...selectedModelByAgent.value }
         if (prevModelId !== undefined)
-          selectedModelByAgent.value = { ...selectedModelByAgent.value, [agentId]: prevModelId }
+          restoredModels[agentId] = prevModelId
+        else
+          delete restoredModels[agentId]
+        selectedModelByAgent.value = restoredModels
+
+        const restoredThinking = { ...selectedThinkingLevelByAgent.value }
         if (prevThinking !== undefined)
-          selectedThinkingLevelByAgent.value = { ...selectedThinkingLevelByAgent.value, [agentId]: prevThinking }
+          restoredThinking[agentId] = prevThinking
+        else
+          delete restoredThinking[agentId]
+        selectedThinkingLevelByAgent.value = restoredThinking
+
+        const restoredSettingsModels = { ...settings.value.lastModelByAgent }
+        if (prevSettingsModel !== undefined)
+          restoredSettingsModels[agentId] = prevSettingsModel
+        else
+          delete restoredSettingsModels[agentId]
+
+        const restoredSettingsThinking = { ...settings.value.lastThinkingLevelByAgent }
+        if (prevSettingsThinking !== undefined)
+          restoredSettingsThinking[agentId] = prevSettingsThinking
+        else
+          delete restoredSettingsThinking[agentId]
+
+        settings.value = {
+          ...settings.value,
+          lastModelByAgent: restoredSettingsModels,
+          lastThinkingLevelByAgent: restoredSettingsThinking,
+        }
+
         session.modelId = prevSessionModel ?? null
         session.thinkingLevel = prevSessionThinking
+        session.thinkingOptions = prevSessionThinkingOptions
         toast.error(error instanceof Error ? error.message : String(error))
+        return
       }
     }
+    else if (settingsPatch) {
+      void window.mdDesktop?.acp.updateSettings(settingsPatch)
+    }
+
+    if (session && session.agentId === agentId)
+      void persistSessions()
   }
 
   async function setSessionThinkingLevel(level: string): Promise<void> {
@@ -1104,20 +1161,26 @@ export const useAgentStore = defineStore(`agent`, () => {
         session.acpSessionId = started.sessionId
         session.modelId = started.modelId
         session.thinkingLevel = started.thinkingLevel
+        session.thinkingOptions = started.thinkingOptions
         session.permissionLevel = started.permissionLevel
         session.modeId = started.currentModeId
         if (started.models.length > 0 || started.modes.length > 0 || started.thinkingOptions.length > 0) {
+          const prevProbe = probeByAgent.value[agent.id]
+          const nextModels = started.models.length > 0 ? started.models : (prevProbe?.models ?? [])
+          const nextThinkingOptions = hasVariantModels(nextModels)
+            ? []
+            : (started.thinkingOptions.length > 0 ? started.thinkingOptions : prevProbe?.thinkingOptions)
           probeByAgent.value = {
             ...probeByAgent.value,
             [agent.id]: {
               agentId: agent.id,
-              models: started.models.length > 0 ? started.models : (probeByAgent.value[agent.id]?.models ?? []),
-              currentModelId: started.modelId ?? probeByAgent.value[agent.id]?.currentModelId ?? null,
-              thinkingOptions: started.thinkingOptions,
-              currentThinkingLevel: started.thinkingLevel,
-              modes: started.modes.length > 0 ? started.modes : (probeByAgent.value[agent.id]?.modes ?? []),
-              currentModeId: started.currentModeId ?? probeByAgent.value[agent.id]?.currentModeId ?? null,
-              commands: started.commands.length > 0 ? started.commands : (probeByAgent.value[agent.id]?.commands ?? []),
+              models: nextModels,
+              currentModelId: started.modelId ?? prevProbe?.currentModelId ?? null,
+              thinkingOptions: nextThinkingOptions,
+              currentThinkingLevel: started.thinkingLevel ?? prevProbe?.currentThinkingLevel ?? null,
+              modes: started.modes.length > 0 ? started.modes : (prevProbe?.modes ?? []),
+              currentModeId: started.currentModeId ?? prevProbe?.currentModeId ?? null,
+              commands: started.commands.length > 0 ? started.commands : (prevProbe?.commands ?? []),
               probedAt: Date.now(),
             },
           }
