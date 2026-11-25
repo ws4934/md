@@ -231,6 +231,8 @@ export default {
       agents: `Agents`,
       images: `画像`,
       wechat: `WeChat 公式アカウント`,
+      modelApi: `モデル API`,
+      imageGen: `画像生成`,
     },
     backToEditor: `エディターに戻る`,
     sectionHint: {
@@ -239,6 +241,8 @@ export default {
       preview: `プレビュー端末と文字数。`,
       images: `挿入・貼り付けした画像と Agent が生成した画像は、ここで選んだ画像ホストにアップロードされます。`,
       wechat: `WeChat への公開に使用し、WeChat 画像ホストも同じ認証情報を使います。`,
+      modelApi: `LLM API を設定すると、組み込みの API Model Agent として記事の編集に利用できます。`,
+      imageGen: `OpenAI 互換の画像生成 API を設定すると、モデル API とローカル CLI Agent の両方から利用できます。`,
     },
     imageHost: {
       label: `画像ホスト`,

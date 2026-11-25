@@ -231,6 +231,8 @@ export default {
       agents: `Agents`,
       images: `Images`,
       wechat: `WeChat`,
+      modelApi: `Model API`,
+      imageGen: `Image Gen`,
     },
     backToEditor: `Back to editor`,
     sectionHint: {
@@ -239,6 +241,8 @@ export default {
       preview: `Preview device and word count.`,
       images: `Inserted, pasted and agent-generated images are uploaded to the host chosen here.`,
       wechat: `Used for publishing to WeChat; the WeChat image host uses the same credentials.`,
+      modelApi: `Configure an LLM API to use the built-in API Model agent right alongside local CLIs.`,
+      imageGen: `Configure an OpenAI-compatible image generation endpoint shared by both the API agent and local CLI agents.`,
     },
     imageHost: {
       label: `Image host`,

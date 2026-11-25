@@ -2,6 +2,7 @@
 import type { AcpAgentStatus } from '@md/shared/types'
 import type { CSSProperties } from 'vue'
 import { Check, ChevronDown, ChevronRight, Loader2, Settings2 } from '@lucide/vue'
+import { API_MODEL_AGENT_ID } from '@md/shared/types'
 import { parseVariantModelId } from '@md/shared/utils/acp-thinking'
 import { useFloatingMenu } from '@/composables/useFloatingMenu'
 import {
@@ -219,7 +220,7 @@ function onHoverAgent(agent: AcpAgentStatus) {
 function onClickAgent(agent: AcpAgentStatus) {
   if (!agent.installed) {
     closeMenu()
-    uiStore.openPreferencesDialog(`agents`)
+    uiStore.openPreferencesDialog(agent.id === API_MODEL_AGENT_ID ? `modelApi` : `agents`)
     return
   }
   hoveredAgentId.value = agent.id
@@ -345,7 +346,7 @@ function openManageAgents() {
           <AgentAvatar :avatar="agent.avatar" :size="20" />
           <span class="min-w-0 flex-1 truncate font-medium">{{ agent.name }}</span>
           <span v-if="!agent.installed" class="shrink-0 text-xs" style="color: var(--dt-ink3)">
-            {{ t('agent.composer.notInstalled') }}
+            {{ agent.id === API_MODEL_AGENT_ID ? t('agent.composer.notConfigured') : t('agent.composer.notInstalled') }}
           </span>
           <ChevronRight
             v-else-if="activeSubmenuAgent?.id === agent.id"

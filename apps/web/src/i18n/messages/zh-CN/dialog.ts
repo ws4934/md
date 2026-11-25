@@ -231,6 +231,8 @@ export default {
       agents: `Agents`,
       images: `图片与图床`,
       wechat: `公众号`,
+      modelApi: `模型 API`,
+      imageGen: `生图`,
     },
     backToEditor: `返回编辑`,
     sectionHint: {
@@ -239,6 +241,8 @@ export default {
       preview: `预览设备与字数统计。`,
       images: `插入、粘贴的图片以及 Agent 生成的图片，都会上传到这里选择的图床。`,
       wechat: `用于发布到公众号，公众号图床也使用这组凭证。`,
+      modelApi: `配置大模型 API 后，可作为内置 Agent 直接在侧栏协作编辑文章。`,
+      imageGen: `配置独立的 OpenAI 兼容生图接口，供模型 API 与本地 CLI Agent 调用。`,
     },
     imageHost: {
       label: `图床`,

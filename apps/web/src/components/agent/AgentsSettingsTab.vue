@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import type { AcpAgentStatus, AcpPermissionLevel } from '@md/shared/types'
 import { Check, ChevronDown, Download, Plus, RefreshCw, Trash2 } from '@lucide/vue'
+import { API_MODEL_AGENT_ID } from '@md/shared/types'
 import { formatCliArgs, parseCliArgs } from '@md/shared/utils/cli-args'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useAcpPermissionOptions } from '@/lib/agent/permission-options'
 import { useAgentStore } from '@/stores/agent'
 import AgentAvatar from './AgentAvatar.vue'
+
+const emit = defineEmits<{
+  openModelApi: []
+}>()
 
 const { t } = useI18n()
 const agentStore = useAgentStore()
@@ -23,6 +28,13 @@ const customCommand = ref(``)
 const customArgs = ref(``)
 
 function statusSubtitle(agent: AcpAgentStatus): string {
+  if (agent.id === API_MODEL_AGENT_ID) {
+    if (agent.installed && agent.isDefault)
+      return t(`agent.settings.configuredDefault`)
+    if (agent.installed)
+      return t(`agent.settings.configured`)
+    return t(`agent.settings.notConfigured`)
+  }
   if (agent.installing)
     return t(`agent.settings.installing`)
   if (agent.installed && agent.isDefault)
@@ -45,6 +57,10 @@ async function handleRedetect() {
 }
 
 function toggleConfigure(agent: AcpAgentStatus) {
+  if (agent.id === API_MODEL_AGENT_ID) {
+    emit(`openModelApi`)
+    return
+  }
   if (configuringAgentId.value === agent.id) {
     configuringAgentId.value = null
     return
@@ -168,9 +184,38 @@ onMounted(() => {
             </div>
           </div>
 
+          <!-- Built-in API Model agent: optional Set Default + jump to Model API settings -->
+          <div v-if="agent.id === API_MODEL_AGENT_ID" class="flex items-center gap-2">
+            <button
+              v-if="agent.installed && !agent.isDefault"
+              type="button"
+              class="inline-flex h-7 cursor-pointer items-center justify-center rounded-lg px-2.5 text-xs font-medium transition-opacity hover:opacity-85"
+              style="
+                background-color: var(--dt-surface);
+                color: var(--dt-ink2);
+                border: 1px solid var(--dt-line);
+              "
+              @click="setAsDefault(agent.id)"
+            >
+              {{ t('agent.settings.setDefault') }}
+            </button>
+            <button
+              type="button"
+              class="inline-flex h-7 cursor-pointer items-center justify-center rounded-lg px-3 text-xs font-semibold transition-opacity hover:opacity-85"
+              style="
+                background-color: var(--dt-surface);
+                color: var(--dt-ink);
+                border: 1px solid var(--dt-line);
+              "
+              @click="toggleConfigure(agent)"
+            >
+              {{ t('agent.settings.configure') }}
+            </button>
+          </div>
+
           <!-- Installing: Cancel -->
           <button
-            v-if="agent.installing"
+            v-else-if="agent.installing"
             type="button"
             class="cursor-pointer px-2 text-[12.5px] font-medium transition-opacity hover:opacity-80"
             style="color: var(--dt-ink3)"
