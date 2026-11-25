@@ -43,21 +43,42 @@ interface CachedBlockEntry {
   /** True when rendered before MathJax finished loading; invalidated once MathJax is ready. */
   hasPendingMath: boolean
   bytes: number
+  lastHeadingStart?: number
+  lastCiteSig?: string
+  lastResolvedHtml?: string
+}
+
+interface FootnotesMemo {
+  key: string
+  rawHtml: string
+  extraHeadings: CollectedHeading[]
+  resolvedHeadingStart: number
+  resolvedHtml: string
+  resolvedNextId: number
 }
 
 const MAX_BLOCK_CACHE_ENTRIES = 16384
 const MAX_BLOCK_CACHE_BYTES = 48 * 1024 * 1024
+const LRU_PROMOTE_ENTRIES_THRESHOLD = (MAX_BLOCK_CACHE_ENTRIES * 3) >> 2
+const LRU_PROMOTE_BYTES_THRESHOLD = (MAX_BLOCK_CACHE_BYTES * 3) >> 2
 
 class BlockRenderCache {
   private map = new Map<string, CachedBlockEntry>()
   private totalBytes = 0
+  footnotesMemo: FootnotesMemo | null = null
 
   get(key: string, raw: string): CachedBlockEntry | undefined {
     const entry = this.map.get(key)
     if (!entry || entry.raw !== raw)
       return undefined
-    this.map.delete(key)
-    this.map.set(key, entry)
+    // Avoid per-block Map delete/re-insert churn on large documents until approaching eviction capacity.
+    if (
+      this.map.size >= LRU_PROMOTE_ENTRIES_THRESHOLD
+      || this.totalBytes >= LRU_PROMOTE_BYTES_THRESHOLD
+    ) {
+      this.map.delete(key)
+      this.map.set(key, entry)
+    }
     return entry
   }
 
@@ -83,6 +104,7 @@ class BlockRenderCache {
   clear(): void {
     this.map.clear()
     this.totalBytes = 0
+    this.footnotesMemo = null
   }
 }
 
@@ -688,6 +710,8 @@ export function renderMarkdownIncremental(
   // Pass 3: build document-wide cite footnote table (only iterates link-bearing blocks).
   const globalFootnotes: [number, string, string][] = []
   const linkToGlobalIdx = new Map<string, number>()
+  let footnotesH1 = 0x811C9DC5
+  let footnotesH2 = 0x9E3779B9
   if (citeStatus) {
     for (let i = 0; i < entries.length; i++) {
       const citeLinks = entries[i].citeLinks
@@ -699,6 +723,12 @@ export function renderMarkdownIncremental(
           const idx = globalFootnotes.length + 1
           linkToGlobalIdx.set(link, idx)
           globalFootnotes.push([idx, title, link])
+          const pair = `${title}\u0001${link}\u0002`
+          for (let k = 0; k < pair.length; k++) {
+            const c = pair.charCodeAt(k)
+            footnotesH1 = Math.imul(footnotesH1 ^ c, 0x01000193)
+            footnotesH2 = Math.imul(footnotesH2 ^ (c + idx), 0x85EBCA6B)
+          }
         }
       }
     }
@@ -723,20 +753,63 @@ export function renderMarkdownIncremental(
     const occ = (seenHashCount.get(rawHash) ?? 0) + 1
     seenHashCount.set(rawHash, occ)
 
-    let html = entry.sanitizedHtml
-    if (citeStatus && entry.citeLinks.length > 0) {
-      const localToGlobal: number[] = []
-      for (let j = 0; j < entry.citeLinks.length; j++) {
-        const c = entry.citeLinks[j]
-        localToGlobal[c.localIndex] = linkToGlobalIdx.get(c.link) ?? c.localIndex
-      }
-      html = html.replace(CITE_TAG_RE, (_, n) => `<sup>[${localToGlobal[Number(n)]}]</sup>`)
-    }
+    const hasCites = citeStatus && entry.citeLinks.length > 0
+    const hasHeadings = entry.headingMarkerCount > 0
 
-    if (entry.headingMarkerCount > 0) {
-      const resolved = applyHeadingIdsToString(html, headingId)
-      html = resolved.html
-      headingId = resolved.nextId
+    let html = entry.sanitizedHtml
+    if (hasCites || hasHeadings) {
+      let citeSig = ``
+      let localToGlobal: number[] | null = null
+      if (hasCites) {
+        if (entry.citeLinks.length === 1) {
+          const c = entry.citeLinks[0]
+          const g = linkToGlobalIdx.get(c.link) ?? c.localIndex
+          citeSig = `${c.localIndex}:${g}`
+        }
+        else {
+          localToGlobal = []
+          const parts: string[] = []
+          for (let j = 0; j < entry.citeLinks.length; j++) {
+            const c = entry.citeLinks[j]
+            const g = linkToGlobalIdx.get(c.link) ?? c.localIndex
+            localToGlobal[c.localIndex] = g
+            parts.push(`${c.localIndex}:${g}`)
+          }
+          citeSig = parts.join(`,`)
+        }
+      }
+
+      const startId = hasHeadings ? headingId : -1
+      if (
+        entry.lastResolvedHtml !== undefined
+        && entry.lastHeadingStart === startId
+        && entry.lastCiteSig === citeSig
+      ) {
+        html = entry.lastResolvedHtml
+        if (hasHeadings)
+          headingId += entry.headingMarkerCount
+      }
+      else {
+        if (hasCites) {
+          if (entry.citeLinks.length === 1) {
+            const c = entry.citeLinks[0]
+            const g = linkToGlobalIdx.get(c.link) ?? c.localIndex
+            html = html.replace(CITE_TAG_RE, (_, n) => `<sup>[${Number(n) === c.localIndex ? g : Number(n)}]</sup>`)
+          }
+          else {
+            const mapArr = localToGlobal!
+            html = html.replace(CITE_TAG_RE, (_, n) => `<sup>[${mapArr[Number(n)]}]</sup>`)
+          }
+        }
+        if (hasHeadings) {
+          const resolved = applyHeadingIdsToString(html, headingId)
+          html = resolved.html
+          headingId = resolved.nextId
+        }
+        entry.lastHeadingStart = startId
+        entry.lastCiteSig = citeSig
+        entry.lastResolvedHtml = html
+      }
     }
 
     if (entry.headings.length > 0) {
@@ -747,18 +820,68 @@ export function renderMarkdownIncremental(
     blocks.push({ key: `body:${rawHash}:${occ}`, html })
   }
 
-  // Restore document-level state on renderer before building footnotes (which also
-  // pushes the footnote `h4` heading into `renderer.getHeadings()`).
-  renderer.setCollectedState({
-    headings: allHeadings,
-    footnotes: globalFootnotes,
-  })
-
-  const footnotesHtml = renderer.buildFootnotes()
-  if (footnotesHtml) {
-    const resolved = applyHeadingIdsToString(footnotesHtml, headingId)
-    headingId = resolved.nextId
-    blocks.push({ key: `slot:footnotes`, html: resolved.html })
+  // Restore document-level state on renderer and memoize the footnotes HTML table across keystrokes.
+  if (globalFootnotes.length === 0) {
+    renderer.setCollectedState({
+      headings: allHeadings,
+      footnotes: globalFootnotes,
+    })
+    const footnotesHtml = renderer.buildFootnotes()
+    if (footnotesHtml) {
+      const resolved = applyHeadingIdsToString(footnotesHtml, headingId)
+      headingId = resolved.nextId
+      blocks.push({ key: `slot:footnotes`, html: resolved.html })
+    }
+  }
+  else {
+    const firstLink = globalFootnotes[0][2]
+    const lastLink = globalFootnotes[globalFootnotes.length - 1][2]
+    const footnotesKey = `${optionsFingerprint}\u0000${globalFootnotes.length}:${(footnotesH1 >>> 0).toString(36)}_${(footnotesH2 >>> 0).toString(36)}:${firstLink}:${lastLink}`
+    const memo = cache.footnotesMemo
+    if (memo && memo.key === footnotesKey) {
+      for (let i = 0; i < memo.extraHeadings.length; i++)
+        allHeadings.push(memo.extraHeadings[i])
+      renderer.setCollectedState({
+        headings: allHeadings,
+        footnotes: globalFootnotes,
+      })
+      if (memo.rawHtml) {
+        if (memo.resolvedHeadingStart !== headingId) {
+          const resolved = applyHeadingIdsToString(memo.rawHtml, headingId)
+          memo.resolvedHeadingStart = headingId
+          memo.resolvedHtml = resolved.html
+          memo.resolvedNextId = resolved.nextId
+        }
+        headingId = memo.resolvedNextId
+        blocks.push({ key: `slot:footnotes`, html: memo.resolvedHtml })
+      }
+    }
+    else {
+      const baseHeadingCount = allHeadings.length
+      renderer.setCollectedState({
+        headings: allHeadings,
+        footnotes: globalFootnotes,
+      })
+      const rawFootnotesHtml = renderer.buildFootnotes()
+      const extraHeadings = renderer.getHeadings().slice(baseHeadingCount)
+      let resolvedHtml = ``
+      let resolvedNextId = headingId
+      if (rawFootnotesHtml) {
+        const resolved = applyHeadingIdsToString(rawFootnotesHtml, headingId)
+        resolvedHtml = resolved.html
+        resolvedNextId = resolved.nextId
+        blocks.push({ key: `slot:footnotes`, html: resolvedHtml })
+      }
+      cache.footnotesMemo = {
+        key: footnotesKey,
+        rawHtml: rawFootnotesHtml,
+        extraHeadings,
+        resolvedHeadingStart: headingId,
+        resolvedHtml,
+        resolvedNextId,
+      }
+      headingId = resolvedNextId
+    }
   }
 
   blocks.push({ key: `slot:styles`, html: buildTrailingStylesHtml(renderer) })
