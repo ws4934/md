@@ -443,7 +443,7 @@ onUnmounted(() => {
     <div
       v-if="open"
       data-testid="desktop-publish-dialog"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4"
+      class="fixed inset-0 z-200 flex items-center justify-center p-4"
       style="background-color: rgba(28, 27, 25, 0.28)"
       @mousedown.self="closeDialog"
     >

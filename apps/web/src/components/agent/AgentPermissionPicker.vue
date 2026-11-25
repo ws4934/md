@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import type { AcpPermissionLevel } from '@md/shared/types'
-import type { CSSProperties } from 'vue'
 import { Check, SlidersHorizontal } from '@lucide/vue'
-import { useFloatingMenu } from '@/composables/useFloatingMenu'
-import { computeFloatingMenuPosition } from '@/lib/agent/floating-menu'
+import { useSingleFloatingMenu } from '@/composables/useFloatingMenu'
 import { useAcpPermissionOptions } from '@/lib/agent/permission-options'
 import { useAgentStore } from '@/stores/agent'
 
@@ -25,13 +23,24 @@ const {
 } = storeToRefs(agentStore)
 
 const MENU_WIDTH = 316
-
-const isOpen = ref(false)
 const triggerRef = ref<HTMLElement | null>(null)
 const menuRef = ref<HTMLElement | null>(null)
-const menuStyle = ref<CSSProperties>({})
-
 const permissionOptions = useAcpPermissionOptions(t)
+
+const {
+  isOpen,
+  menuStyle,
+  closeMenu,
+  toggleMenu,
+} = useSingleFloatingMenu({
+  triggerRef,
+  menuRef,
+  placement: () => props.placement,
+  disabled: () => props.disabled,
+  closeOnChange: () => agentStore.activeSessionId,
+  menuWidth: MENU_WIDTH,
+  estimateHeight: () => (permissionOptions.value.length + customExtraModes.value.length) * 52 + 44,
+})
 
 const activeOption = computed(() =>
   permissionOptions.value.find(o => o.id === currentPermissionLevel.value) ?? permissionOptions.value[0],
@@ -42,49 +51,6 @@ const isDangerActive = computed(() => !activeCustomMode.value && activeOption.va
 const pillIcon = computed(() => activeCustomMode.value ? SlidersHorizontal : activeOption.value.icon)
 const pillLabel = computed(() => activeCustomMode.value ? activeCustomMode.value.name : activeOption.value.shortLabel)
 
-function updateMenuPosition() {
-  const trigger = triggerRef.value
-  if (!trigger)
-    return
-  const anchor = trigger.getBoundingClientRect()
-  const rect = menuRef.value?.getBoundingClientRect()
-  const estimatedRows = permissionOptions.value.length + customExtraModes.value.length
-  const pos = computeFloatingMenuPosition({
-    anchor,
-    menu: {
-      width: rect?.width || MENU_WIDTH,
-      height: rect?.height || estimatedRows * 52 + 44,
-    },
-    viewport: {
-      width: window.innerWidth,
-      height: window.innerHeight,
-    },
-    preferredSide: props.placement === `up` ? `top` : `bottom`,
-    preferredAlign: `start`,
-  })
-  menuStyle.value = {
-    left: `${pos.left}px`,
-    top: `${pos.top}px`,
-    maxHeight: `${pos.maxHeight}px`,
-    maxWidth: `${pos.maxWidth}px`,
-  }
-}
-
-function closeMenu() {
-  isOpen.value = false
-}
-
-function toggleMenu() {
-  if (props.disabled)
-    return
-  if (isOpen.value) {
-    closeMenu()
-    return
-  }
-  updateMenuPosition()
-  isOpen.value = true
-}
-
 function selectLevel(level: AcpPermissionLevel) {
   closeMenu()
   void agentStore.setSessionPermissionMode({ permissionLevel: level, modeId: null })
@@ -94,14 +60,6 @@ function selectCustomMode(modeId: string) {
   closeMenu()
   void agentStore.setSessionPermissionMode({ modeId })
 }
-
-useFloatingMenu({
-  isOpen,
-  triggerRef,
-  menuRefs: [menuRef],
-  onReposition: updateMenuPosition,
-  onClose: closeMenu,
-})
 </script>
 
 <template>
@@ -110,6 +68,8 @@ useFloatingMenu({
       ref="triggerRef"
       type="button"
       data-testid="permission-mode-pill"
+      aria-haspopup="menu"
+      :aria-expanded="isOpen"
       :disabled="disabled"
       :title="`${t('agent.permissionMode.menuTitle')} · ${pillLabel}`"
       class="inline-flex h-7 cursor-pointer items-center gap-1 rounded-lg px-1.5 text-[12.5px] transition-colors disabled:opacity-50"
@@ -127,8 +87,9 @@ useFloatingMenu({
       <div
         v-if="isOpen"
         ref="menuRef"
+        role="menu"
         data-testid="permission-mode-menu"
-        class="fixed z-[120] flex w-[316px] flex-col gap-0.5 overflow-y-auto rounded-xl p-1.5"
+        class="fixed z-50 flex w-[316px] flex-col gap-0.5 overflow-y-auto rounded-xl p-1.5"
         :style="{
           ...menuStyle,
           backgroundColor: 'var(--dt-surface)',
@@ -144,7 +105,10 @@ useFloatingMenu({
           v-for="opt in permissionOptions"
           :key="opt.id"
           type="button"
+          role="menuitemradio"
+          :aria-checked="!activeCustomMode && currentPermissionLevel === opt.id"
           :data-testid="`perm-option-${opt.id}`"
+          :data-active="!activeCustomMode && currentPermissionLevel === opt.id ? 'true' : undefined"
           class="flex min-h-[50px] w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors"
           :style="{
             backgroundColor: !activeCustomMode && currentPermissionLevel === opt.id ? 'var(--dt-subtle)' : 'transparent',
@@ -182,7 +146,10 @@ useFloatingMenu({
             v-for="mode in customExtraModes"
             :key="mode.id"
             type="button"
+            role="menuitemradio"
+            :aria-checked="activeCustomMode?.id === mode.id"
             :data-testid="`perm-custom-${mode.id}`"
+            :data-active="activeCustomMode?.id === mode.id ? 'true' : undefined"
             class="flex min-h-[44px] w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors"
             :style="{
               backgroundColor: activeCustomMode?.id === mode.id ? 'var(--dt-subtle)' : 'transparent',

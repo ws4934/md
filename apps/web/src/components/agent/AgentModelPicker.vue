@@ -7,6 +7,8 @@ import { useFloatingMenu } from '@/composables/useFloatingMenu'
 import {
   computeCascadingMenuLayout,
   resolveModelPillDisplayMode,
+  scrollActiveOptionIntoView,
+  toFloatingBoxStyle,
 } from '@/lib/agent/floating-menu'
 import { useAgentStore } from '@/stores/agent'
 import { useUIStore } from '@/stores/ui'
@@ -75,6 +77,7 @@ const activeModelIdForSubmenu = computed(() => {
     return null
   const probe = probeByAgent.value[agent.id]
   const raw = agentStore.selectedModelByAgent[agent.id]
+    ?? agentStore.settings.lastModelByAgent[agent.id]
     ?? probe?.currentModelId
     ?? submenuModels.value[0]?.id
     ?? null
@@ -117,6 +120,15 @@ watch(
   () => nextTick(measureFullPill),
 )
 
+// Re-measure when an initially collapsed panel (`v-show="false"`) becomes visible.
+watch(
+  () => props.availableWidth,
+  (width, prevWidth) => {
+    if (width && width > 0 && (measuredFullWidth.value <= 0 || !prevWidth || prevWidth <= 0))
+      nextTick(measureFullPill)
+  },
+)
+
 function updateMenuPositions() {
   const trigger = triggerRef.value
   if (!trigger)
@@ -144,21 +156,9 @@ function updateMenuPositions() {
     preferredSide: props.placement === `up` ? `top` : `bottom`,
   })
 
-  primaryStyle.value = {
-    left: `${layout.primary.left}px`,
-    top: `${layout.primary.top}px`,
-    maxHeight: `${Math.min(MAX_MENU_HEIGHT, layout.primary.maxHeight)}px`,
-    maxWidth: `${layout.primary.maxWidth}px`,
-  }
-
-  if (layout.submenu) {
-    submenuStyle.value = {
-      left: `${layout.submenu.left}px`,
-      top: `${layout.submenu.top}px`,
-      maxHeight: `${Math.min(MAX_MENU_HEIGHT, layout.submenu.maxHeight)}px`,
-      maxWidth: `${layout.submenu.maxWidth}px`,
-    }
-  }
+  primaryStyle.value = toFloatingBoxStyle(layout.primary, MAX_MENU_HEIGHT)
+  if (layout.submenu)
+    submenuStyle.value = toFloatingBoxStyle(layout.submenu, MAX_MENU_HEIGHT)
 }
 
 const scheduleProbe = useDebounceFn((agentId: string) => {
@@ -193,13 +193,19 @@ useFloatingMenu({
   menuRefs: [primaryMenuRef, submenuRef],
   onReposition: updateMenuPositions,
   onClose: closeMenu,
+  disabled: () => props.disabled,
+  closeOnChange: () => agentStore.activeSessionId,
 })
 
 watch(
   [activeSubmenuAgent, () => submenuModels.value.length, isSubmenuProbing],
   () => {
-    if (isOpen.value)
-      nextTick(updateMenuPositions)
+    if (!isOpen.value)
+      return
+    nextTick(() => {
+      updateMenuPositions()
+      scrollActiveOptionIntoView(submenuRef.value)
+    })
   },
 )
 
@@ -260,6 +266,8 @@ function openManageAgents() {
       ref="triggerRef"
       type="button"
       data-testid="agent-model-pill"
+      aria-haspopup="menu"
+      :aria-expanded="isOpen"
       :disabled="disabled"
       :title="pillTooltip"
       class="inline-flex h-7 max-w-full min-w-0 cursor-pointer items-center gap-1.5 overflow-hidden rounded-lg pl-1 pr-2 text-[12.5px] transition-colors disabled:opacity-50"
@@ -307,8 +315,9 @@ function openManageAgents() {
       <div
         v-if="isOpen"
         ref="primaryMenuRef"
+        role="menu"
         data-testid="agent-picker-menu"
-        class="fixed z-[120] w-[260px] overflow-y-auto rounded-xl p-1.5"
+        class="fixed z-50 w-[260px] overflow-y-auto rounded-xl p-1.5"
         :style="{
           ...primaryStyle,
           backgroundColor: 'var(--dt-surface)',
@@ -320,7 +329,9 @@ function openManageAgents() {
           v-for="agent in agents"
           :key="agent.id"
           type="button"
+          role="menuitem"
           :data-testid="`agent-option-${agent.id}`"
+          :data-active="activeSubmenuAgent?.id === agent.id ? 'true' : undefined"
           class="flex h-[38px] w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors"
           :class="agent.installed ? 'cursor-pointer' : 'cursor-pointer opacity-55'"
           :style="{
@@ -328,6 +339,7 @@ function openManageAgents() {
             color: 'var(--dt-ink)',
           }"
           @mouseenter="onHoverAgent(agent)"
+          @focus="onHoverAgent(agent)"
           @click="onClickAgent(agent)"
         >
           <AgentAvatar :avatar="agent.avatar" :size="20" />
@@ -364,8 +376,9 @@ function openManageAgents() {
       <div
         v-if="isOpen && activeSubmenuAgent"
         ref="submenuRef"
+        role="menu"
         data-testid="model-picker-submenu"
-        class="fixed z-[120] w-[240px] overflow-y-auto rounded-xl p-1.5"
+        class="fixed z-50 w-[240px] overflow-y-auto rounded-xl p-1.5"
         :style="{
           ...submenuStyle,
           backgroundColor: 'var(--dt-surface)',
@@ -391,7 +404,10 @@ function openManageAgents() {
             v-for="model in submenuModels"
             :key="model.id"
             type="button"
+            role="menuitemradio"
+            :aria-checked="activeModelIdForSubmenu === model.id && selectedAgent?.id === activeSubmenuAgent.id"
             :data-testid="`model-option-${model.id}`"
+            :data-active="activeModelIdForSubmenu === model.id && selectedAgent?.id === activeSubmenuAgent.id ? 'true' : undefined"
             class="flex min-h-[42px] w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors"
             :style="{
               backgroundColor: activeModelIdForSubmenu === model.id && selectedAgent?.id === activeSubmenuAgent.id

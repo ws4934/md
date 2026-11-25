@@ -323,6 +323,7 @@ declare global {
   const useScrollSync: typeof import('./src/composables/useScrollSync').useScrollSync
   const useSessionStorage: typeof import('@vueuse/core').useSessionStorage
   const useShare: typeof import('@vueuse/core').useShare
+  const useSingleFloatingMenu: typeof import('./src/composables/useFloatingMenu').useSingleFloatingMenu
   const useSlashCommand: typeof import('./src/composables/useSlashCommand').useSlashCommand
   const useSlashMenuPosition: typeof import('./src/composables/useSlashMenuPosition').useSlashMenuPosition
   const useSlashMenuScrollHint: typeof import('./src/composables/useSlashMenuScrollHint').useSlashMenuScrollHint

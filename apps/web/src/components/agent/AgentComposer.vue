@@ -28,7 +28,6 @@ const { t } = useI18n()
 const text = ref(``)
 const attachments = ref<DesktopPickedFile[]>([])
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
-const cardRef = ref<HTMLElement | null>(null)
 const toolbarRef = ref<HTMLElement | null>(null)
 const controlsRef = ref<HTMLElement | null>(null)
 const submitRef = ref<HTMLElement | null>(null)
@@ -37,12 +36,11 @@ const modelAvailableWidth = ref<number | null>(null)
 let layoutObserver: ResizeObserver | null = null
 
 function measureModelSlot() {
-  const card = cardRef.value
   const toolbar = toolbarRef.value
-  if (!card || !toolbar)
+  if (!toolbar)
     return
-  // Matches the `@container composer (max-width: 335px)` two-row wrap threshold.
-  if (card.clientWidth <= 335) {
+  // `toolbar.clientWidth` equals the content-box inline-size queried by `@container composer (max-width: 335px)`.
+  if (toolbar.clientWidth <= 335) {
     modelAvailableWidth.value = Math.max(0, Math.floor(toolbar.clientWidth))
     return
   }
@@ -55,8 +53,6 @@ onMounted(() => {
   measureModelSlot()
   if (typeof ResizeObserver !== `undefined`) {
     layoutObserver = new ResizeObserver(() => measureModelSlot())
-    if (cardRef.value)
-      layoutObserver.observe(cardRef.value)
     if (toolbarRef.value)
       layoutObserver.observe(toolbarRef.value)
     if (controlsRef.value)
@@ -122,7 +118,6 @@ defineExpose({ focus })
 
 <template>
   <div
-    ref="cardRef"
     class="agent-composer-card flex w-full flex-col gap-2"
     :class="size === 'hero' ? 'rounded-2xl p-3.5' : 'rounded-[14px] p-2.5'"
     style="

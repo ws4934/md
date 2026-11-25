@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   computeCascadingMenuLayout,
   computeFloatingMenuPosition,
+  isFloatingAnchorHidden,
   resolveModelPillDisplayMode,
+  scrollActiveOptionIntoView,
+  toFloatingBoxStyle,
 } from './floating-menu'
 
 describe(`floating-menu positioning helpers`, () => {
@@ -124,5 +127,54 @@ describe(`floating-menu positioning helpers`, () => {
       hasModel: false,
       isDefaultModel: false,
     })).toBe(`full`)
+  })
+
+  it(`scrolls offscreen active options into center view and resets scrollTop when no active item exists`, () => {
+    const mockContainer = {
+      scrollTop: 0,
+      clientHeight: 338,
+      scrollHeight: 501,
+      getBoundingClientRect: () => ({ left: 0, top: 100, right: 240, bottom: 438, width: 240, height: 338 }),
+      querySelector: () => ({
+        offsetTop: 328,
+        offsetHeight: 42,
+        getBoundingClientRect: () => ({
+          left: 0,
+          top: 100 + 328 - mockContainer.scrollTop,
+          right: 240,
+          bottom: 100 + 370 - mockContainer.scrollTop,
+          width: 240,
+          height: 42,
+        }),
+      }),
+    } as unknown as HTMLElement
+
+    scrollActiveOptionIntoView(mockContainer)
+    // 328 - (338 - 42) / 2 = 180 -> clamped within [0, 163] -> 163, making item [328..370] fully visible.
+    expect(mockContainer.scrollTop).toBe(163)
+
+    // Already visible item does not jump scrollTop.
+    mockContainer.scrollTop = 150
+    scrollActiveOptionIntoView(mockContainer)
+    expect(mockContainer.scrollTop).toBe(150)
+
+    // Hovering an agent without an active model resets scrollTop to 0.
+    const noActiveContainer = {
+      scrollTop: 163,
+      clientHeight: 338,
+      scrollHeight: 501,
+      querySelector: () => null,
+    } as unknown as HTMLElement
+    scrollActiveOptionIntoView(noActiveContainer)
+    expect(noActiveContainer.scrollTop).toBe(0)
+
+    expect(isFloatingAnchorHidden({ width: 0, height: 0 })).toBe(true)
+    expect(isFloatingAnchorHidden({ width: 120, height: 28 })).toBe(false)
+    expect(toFloatingBoxStyle({ left: 20, top: 40, maxHeight: 420, maxWidth: 300 }, 340)).toEqual({
+      left: `20px`,
+      top: `40px`,
+      maxHeight: `340px`,
+      maxWidth: `300px`,
+    })
   })
 })

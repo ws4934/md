@@ -1,3 +1,5 @@
+import type { CSSProperties } from 'vue'
+
 export interface ViewportRect {
   left: number
   right: number
@@ -36,6 +38,8 @@ export interface CascadingMenuLayout {
 }
 
 export type ModelPillDisplayMode = `full` | `model-only` | `agent-default`
+
+export type FloatingBoxStyle = Pick<CSSProperties, `left` | `top` | `maxHeight` | `maxWidth`>
 
 const DEFAULT_OFFSET = 8
 const DEFAULT_PADDING = 12
@@ -339,4 +343,58 @@ export function resolveModelPillDisplayMode(params: {
   if (fullWidth <= availableWidth)
     return `full`
   return isDefaultModel ? `agent-default` : `model-only`
+}
+
+export function isFloatingAnchorHidden(anchor: Pick<ViewportRect, `width` | `height`>): boolean {
+  return anchor.width <= 0 && anchor.height <= 0
+}
+
+export function toFloatingBoxStyle(
+  box: Pick<CascadingPanelBox, `left` | `top` | `maxHeight` | `maxWidth`>,
+  maxHeightCap?: number,
+): FloatingBoxStyle {
+  const cappedHeight = maxHeightCap !== undefined
+    ? Math.min(maxHeightCap, box.maxHeight)
+    : box.maxHeight
+  return {
+    left: `${box.left}px`,
+    top: `${box.top}px`,
+    maxHeight: `${cappedHeight}px`,
+    maxWidth: `${box.maxWidth}px`,
+  }
+}
+
+/**
+ * Scrolls the `[data-active="true"]` option inside a scrollable menu container into
+ * comfortable vertical view, or resets `scrollTop = 0` when no active option exists
+ * (e.g. when hovering a non-selected agent in a cascading menu).
+ */
+export function scrollActiveOptionIntoView(container: HTMLElement | null | undefined): void {
+  if (!container)
+    return
+  const active = container.querySelector<HTMLElement>(`[data-active="true"]`)
+  if (!active) {
+    container.scrollTop = 0
+    return
+  }
+
+  const containerHeight = container.clientHeight
+  const scrollHeight = container.scrollHeight
+  if (containerHeight <= 0 || scrollHeight <= containerHeight)
+    return
+
+  const containerRect = container.getBoundingClientRect()
+  const activeRect = active.getBoundingClientRect()
+  const useRects = containerRect.height > 0 && activeRect.height > 0
+  const itemTop = useRects
+    ? activeRect.top - containerRect.top + container.scrollTop
+    : active.offsetTop
+  const itemHeight = useRects ? activeRect.height : active.offsetHeight
+
+  const viewTop = container.scrollTop
+  const viewBottom = viewTop + containerHeight
+  if (itemTop < viewTop || itemTop + itemHeight > viewBottom) {
+    const centered = itemTop - (containerHeight - itemHeight) / 2
+    container.scrollTop = Math.round(clamp(centered, 0, scrollHeight - containerHeight))
+  }
 }
