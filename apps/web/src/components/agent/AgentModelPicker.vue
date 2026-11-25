@@ -62,6 +62,16 @@ const activeModelIdForSubmenu = computed(() => {
   return parseVariantModelId(raw, probe?.models ?? []).baseModelId
 })
 
+const isDefaultModelSelected = computed(() =>
+  selectedModel.value?.id.trim().toLowerCase() === `default`,
+)
+
+const pillTooltip = computed(() => {
+  const agentName = selectedAgent.value?.name ?? t(`agent.composer.selectAgent`)
+  const modelName = selectedModel.value?.name
+  return modelName ? `${agentName} · ${modelName}` : agentName
+})
+
 const scheduleProbe = useDebounceFn((agentId: string) => {
   void agentStore.probeAgent(agentId)
 }, 120)
@@ -132,12 +142,17 @@ onKeyStroke(`Escape`, () => {
 </script>
 
 <template>
-  <div ref="containerRef" class="relative inline-flex min-w-0 shrink">
+  <div ref="containerRef" class="relative inline-flex max-w-full min-w-0 shrink">
     <button
       type="button"
       data-testid="agent-model-pill"
       :disabled="disabled"
-      class="inline-flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-lg pl-1 pr-2 text-[12.5px] transition-colors disabled:opacity-50"
+      :title="pillTooltip"
+      class="agent-model-trigger inline-flex h-7 max-w-full min-w-0 cursor-pointer items-center gap-1.5 overflow-hidden rounded-lg pl-1 pr-2 text-[12.5px] transition-colors disabled:opacity-50"
+      :class="{
+        'has-model': Boolean(selectedModel),
+        'is-default-model': isDefaultModelSelected,
+      }"
       :style="{
         backgroundColor: isOpen ? 'var(--dt-subtle)' : 'transparent',
         color: 'var(--dt-ink)',
@@ -145,15 +160,22 @@ onKeyStroke(`Escape`, () => {
       @click="toggleMenu"
     >
       <AgentAvatar v-if="selectedAgent" :avatar="selectedAgent.avatar" :size="18" class="shrink-0" />
-      <span class="min-w-0 max-w-[96px] truncate font-medium">
+      <span class="agent-model-agent-name min-w-0 truncate font-medium">
         {{ selectedAgent?.name ?? t('agent.composer.selectAgent') }}
       </span>
       <span
         v-if="selectedModel"
-        class="min-w-0 max-w-[82px] truncate"
+        class="agent-model-name min-w-0 truncate"
         style="color: var(--dt-ink3)"
       >
-        · {{ selectedModel.name }}
+        {{ selectedModel.name }}
+      </span>
+      <span
+        v-if="isDefaultModelSelected"
+        class="agent-model-default-short min-w-0 truncate"
+        style="color: var(--dt-ink3)"
+      >
+        {{ t('agent.thinking.levels.default') }}
       </span>
       <ChevronDown class="size-3.5 shrink-0" style="color: var(--dt-ink3)" />
     </button>
@@ -283,3 +305,40 @@ onKeyStroke(`Escape`, () => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.agent-model-agent-name {
+  flex-shrink: 0;
+  max-width: 128px;
+}
+
+.agent-model-default-short {
+  display: none;
+}
+
+/* At default 400px panel width (single-row composer), avoid double-truncating both agent and model:
+ * show avatar + model name for concrete models, or avatar + agent + short Default for generic defaults. */
+@container composer (min-width: 336px) and (max-width: 439px) {
+  .agent-model-trigger.has-model:not(.is-default-model) .agent-model-agent-name {
+    display: none;
+  }
+
+  .agent-model-trigger.has-model:not(.is-default-model) .agent-model-name {
+    color: var(--dt-ink) !important;
+    font-weight: 500;
+  }
+
+  .agent-model-trigger.is-default-model .agent-model-agent-name {
+    flex-shrink: 1;
+  }
+
+  .agent-model-trigger.is-default-model .agent-model-name {
+    display: none;
+  }
+
+  .agent-model-trigger.is-default-model .agent-model-default-short {
+    display: inline;
+    flex-shrink: 0;
+  }
+}
+</style>

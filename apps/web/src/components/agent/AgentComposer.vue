@@ -80,7 +80,7 @@ defineExpose({ focus })
 
 <template>
   <div
-    class="flex w-full flex-col gap-2"
+    class="agent-composer-card flex w-full flex-col gap-2"
     :class="size === 'hero' ? 'rounded-2xl p-3.5' : 'rounded-[14px] p-2.5'"
     style="
       background-color: var(--dt-surface);
@@ -119,9 +119,12 @@ defineExpose({ focus })
       @keydown="handleKeydown"
     />
 
-    <div class="flex items-center justify-between gap-2">
-      <div class="flex min-w-0 items-center gap-0.5">
+    <div class="agent-composer-toolbar">
+      <div class="agent-composer-model">
         <AgentModelPicker :placement="menuPlacement" :disabled="disabled" />
+      </div>
+
+      <div class="agent-composer-controls">
         <AgentThinkingPicker :placement="menuPlacement" :disabled="disabled" />
         <AgentPermissionPicker :placement="menuPlacement" :disabled="disabled" />
         <button
@@ -137,34 +140,82 @@ defineExpose({ focus })
         </button>
       </div>
 
-      <button
-        v-if="running"
-        type="button"
-        :title="t('agent.composer.stop')"
-        :aria-label="t('agent.composer.stop')"
-        class="inline-flex size-7 cursor-pointer items-center justify-center rounded-lg transition-opacity hover:opacity-90"
-        style="background-color: var(--dt-ink)"
-        @click="emit('stop')"
-      >
-        <span class="size-[9px] rounded-[2px]" style="background-color: var(--dt-on-ink)" />
-      </button>
+      <div class="agent-composer-submit">
+        <button
+          v-if="running"
+          type="button"
+          :title="t('agent.composer.stop')"
+          :aria-label="t('agent.composer.stop')"
+          class="inline-flex size-7 cursor-pointer items-center justify-center rounded-lg transition-opacity hover:opacity-90"
+          style="background-color: var(--dt-ink)"
+          @click="emit('stop')"
+        >
+          <span class="size-[9px] rounded-[2px]" style="background-color: var(--dt-on-ink)" />
+        </button>
 
-      <button
-        v-else
-        type="button"
-        :disabled="!canSend"
-        :title="t('agent.composer.send')"
-        :aria-label="t('agent.composer.send')"
-        class="inline-flex cursor-pointer items-center justify-center transition-opacity disabled:cursor-not-allowed"
-        :class="size === 'hero' ? 'size-8 rounded-[9px]' : 'size-7 rounded-lg'"
-        :style="{
-          backgroundColor: canSend ? 'var(--dt-accent)' : 'var(--dt-subtle)',
-          color: canSend ? '#FFFFFF' : 'var(--dt-ink3)',
-        }"
-        @click="submit"
-      >
-        <ArrowUp :class="size === 'hero' ? 'size-[17px]' : 'size-[15px]'" />
-      </button>
+        <button
+          v-else
+          type="button"
+          :disabled="!canSend"
+          :title="t('agent.composer.send')"
+          :aria-label="t('agent.composer.send')"
+          class="inline-flex cursor-pointer items-center justify-center transition-opacity disabled:cursor-not-allowed"
+          :class="size === 'hero' ? 'size-8 rounded-[9px]' : 'size-7 rounded-lg'"
+          :style="{
+            backgroundColor: canSend ? 'var(--dt-accent)' : 'var(--dt-subtle)',
+            color: canSend ? '#FFFFFF' : 'var(--dt-ink3)',
+          }"
+          @click="submit"
+        >
+          <ArrowUp :class="size === 'hero' ? 'size-[17px]' : 'size-[15px]'" />
+        </button>
+      </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.agent-composer-card {
+  container: composer / inline-size;
+}
+
+.agent-composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.agent-composer-model {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+}
+
+.agent-composer-controls {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+}
+
+.agent-composer-submit {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  margin-left: auto;
+  padding-left: 4px;
+}
+
+/* Below default width (e.g. 320px min panel), wrap controls onto a second row so every pill stays readable. */
+@container composer (max-width: 335px) {
+  .agent-composer-toolbar {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .agent-composer-model {
+    flex: 1 0 100%;
+  }
+}
+</style>

@@ -68,8 +68,8 @@ onKeyStroke(`Escape`, () => {
       type="button"
       data-testid="permission-mode-pill"
       :disabled="disabled"
-      :title="t('agent.permissionMode.menuTitle')"
-      class="inline-flex h-7 cursor-pointer items-center gap-[5px] rounded-lg px-[7px] text-[12.5px] transition-colors disabled:opacity-50"
+      :title="`${t('agent.permissionMode.menuTitle')} · ${pillLabel}`"
+      class="inline-flex h-7 cursor-pointer items-center gap-1 rounded-lg px-1.5 text-[12.5px] transition-colors disabled:opacity-50"
       :style="{
         backgroundColor: isOpen ? 'var(--dt-subtle)' : 'transparent',
         color: isDangerActive ? 'var(--dt-red)' : 'var(--dt-ink2)',
