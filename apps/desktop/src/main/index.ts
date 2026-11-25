@@ -7,13 +7,12 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, powerMonitor, pr
 import { IPC_CHANNELS } from '../shared/ipc-channels'
 import { AcpEventBatcher } from './acp/event-batcher'
 import { AcpHost } from './acp/host'
+import { APP_HOST, APP_SCHEME, isSafeExternalUrl, resolveAppProtocolTarget } from './app-protocol'
 import { QuitGuard } from './quit-guard'
 import { mimeForExtension, WeChatPublisher } from './wechat/publisher'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-const APP_SCHEME = `app`
-const APP_HOST = `md`
 const DEV_SERVER_URL = process.env.MD_DESKTOP_DEV_URL
 const QUIT_DISPOSE_TIMEOUT_MS = 4_000
 
@@ -41,30 +40,12 @@ function resolveRendererDir(): string {
 
 function registerAppProtocol(): void {
   const rendererDir = resolveRendererDir()
-  const resolvedRoot = path.resolve(rendererDir)
 
   protocol.handle(APP_SCHEME, async (request) => {
-    const url = new URL(request.url)
-    let pathname = decodeURIComponent(url.pathname)
-    if (pathname === `/` || pathname === ``)
-      pathname = `/index.html`
-
-    const candidate = path.resolve(resolvedRoot, `.${pathname}`)
-    // Prevent escaping the renderer dist directory via crafted URLs.
-    if (candidate !== resolvedRoot && !candidate.startsWith(`${resolvedRoot}${path.sep}`))
-      return new Response(`Forbidden`, { status: 403 })
-
-    let target = path.join(resolvedRoot, `index.html`)
-    try {
-      const stat = await fs.promises.stat(candidate)
-      if (stat.isFile())
-        target = candidate
-    }
-    catch {
-      // Missing asset falls back to SPA index.html.
-    }
-
-    return net.fetch(pathToFileURL(target).toString())
+    const resolved = await resolveAppProtocolTarget(request.url, rendererDir)
+    if (resolved.status !== 200)
+      return new Response(resolved.body, { status: resolved.status })
+    return net.fetch(pathToFileURL(resolved.filePath).toString())
   })
 }
 
@@ -143,8 +124,9 @@ function createMainWindow(): BrowserWindow {
   })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url))
-      void shell.openExternal(url)
+    const safeUrl = isSafeExternalUrl(url)
+    if (safeUrl)
+      void shell.openExternal(safeUrl)
     return { action: `deny` }
   })
 
@@ -210,8 +192,9 @@ function registerIpc(host: AcpHost, publisher: WeChatPublisher): void {
   })
 
   ipcMain.handle(IPC_CHANNELS.OPEN_EXTERNAL, async (_event, url: string) => {
-    if (typeof url === `string` && /^https?:\/\//i.test(url.trim()))
-      await shell.openExternal(url.trim())
+    const safeUrl = isSafeExternalUrl(url)
+    if (safeUrl)
+      await shell.openExternal(safeUrl)
   })
 
   ipcMain.handle(IPC_CHANNELS.SET_LOCALE, (_event, locale: string) => {
