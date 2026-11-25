@@ -50,6 +50,7 @@ export default {
         ultra: `Ultra`,
       },
     },
+    imageUploadFailed: `Failed to upload image {path}: {message}`,
     composer: {
       placeholder: `Ask Agent to continue…`,
       waitingPlaceholder: `Waiting for confirmation…`,

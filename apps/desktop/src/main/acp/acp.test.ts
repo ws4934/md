@@ -1645,3 +1645,40 @@ describe(`buildPromptText`, () => {
     expect(buildPromptText(params, `/w/article.md`, false)).not.toContain(`[Writing rules]`)
   })
 })
+
+describe(`readWorkspaceImage`, () => {
+  it(`reads images inside the session workspace and refuses anything else`, async () => {
+    const dataDir = await makeTempDir(`md-acp-ws-image-`)
+    const outside = await makeTempDir(`md-acp-ws-outside-`)
+    const host = new AcpHost({
+      dataDir,
+      extraBuiltinAgents: [{
+        id: `fake-images`,
+        name: `Fake Images`,
+        command: process.execPath,
+        args: [FAKE_AGENT_SCRIPT],
+        detectBinaries: [process.execPath],
+        builtin: true,
+        avatar: { letter: `I`, color: `#5B5BD6` },
+      }],
+    })
+    openHosts.push(host)
+    const { sessionId } = await host.startSession({ agentId: `fake-images`, postId: `p`, postTitle: `T`, content: `` })
+    const [workspaceId] = await fs.readdir(path.join(dataDir, `acp-workspaces`))
+    const workspaceDir = path.join(dataDir, `acp-workspaces`, workspaceId)
+    await fs.mkdir(path.join(workspaceDir, `images`))
+    await fs.writeFile(path.join(workspaceDir, `images`, `my chart.png`), Buffer.from([1, 2, 3]))
+    await fs.writeFile(path.join(outside, `secret.png`), Buffer.from([9]))
+    await fs.symlink(path.join(outside, `secret.png`), path.join(workspaceDir, `images`, `link.png`))
+    await fs.writeFile(path.join(workspaceDir, `notes.txt`), `x`)
+
+    const image = await host.readWorkspaceImage({ sessionId, path: `images/my%20chart.png` })
+    expect(image).toMatchObject({ mimeType: `image/png`, filename: `my chart.png` })
+    expect([...image.data]).toEqual([1, 2, 3])
+
+    await expect(host.readWorkspaceImage({ sessionId, path: `images/link.png` })).rejects.toThrow(/outside/)
+    await expect(host.readWorkspaceImage({ sessionId, path: path.join(outside, `secret.png`) })).rejects.toThrow(/outside/)
+    await expect(host.readWorkspaceImage({ sessionId, path: `../../secret.png` })).rejects.toThrow()
+    await expect(host.readWorkspaceImage({ sessionId, path: `notes.txt` })).rejects.toThrow(/Unsupported/)
+  })
+})

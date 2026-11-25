@@ -50,6 +50,7 @@ export default {
         ultra: `極限`,
       },
     },
+    imageUploadFailed: `圖片 {path} 上傳失敗：{message}`,
     composer: {
       placeholder: `讓 Agent 繼續…`,
       waitingPlaceholder: `等待確認…`,

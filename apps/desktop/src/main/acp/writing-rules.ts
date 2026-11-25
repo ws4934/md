@@ -3,7 +3,7 @@ export const ARTICLE_WRITING_RULES = `[Writing rules] The article is rendered by
 - Write in the language of the user's request unless asked otherwise.
 - Standard GitHub-flavored Markdown: headings, lists, tables, blockquotes, fenced code blocks with a language tag.
 - At most one \`#\` title at the top; use \`##\` / \`###\` for sections and avoid going deeper than \`####\`.
-- Images must use absolute https:// URLs. Local paths, file:// and relative paths do not display in WeChat.
+- Images: use an absolute https:// URL, or save the image (png/jpg/gif/webp, up to 10 MB) under \`images/\` in your working directory and reference it relatively, e.g. \`![description](images/chart.png)\`. The editor uploads such files to the user's image host and swaps in the hosted URL. Never reference files outside your working directory or use file:// URLs.
 - Links: write \`[text](https://...)\`. External links are rendered as numbered references at the end of the article, so give them meaningful text.
 - No raw HTML/CSS (<div>, <span style>, <script>, <iframe>, ...); the theme styles everything. Only the components listed below may be written as tags.
 

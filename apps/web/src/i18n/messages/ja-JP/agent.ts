@@ -50,6 +50,7 @@ export default {
         ultra: `極限`,
       },
     },
+    imageUploadFailed: `画像 {path} のアップロードに失敗しました：{message}`,
     composer: {
       placeholder: `Agent に続けて指示…`,
       waitingPlaceholder: `確認待ち…`,

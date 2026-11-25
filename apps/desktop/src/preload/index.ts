@@ -63,6 +63,7 @@ const desktopBridge: DesktopBridge = {
       optionId?: string
     }) => ipcRenderer.invoke(IPC_CHANNELS.ACP_RESPOND_PERMISSION, params),
     closeSession: sessionId => ipcRenderer.invoke(IPC_CHANNELS.ACP_CLOSE_SESSION, sessionId),
+    readWorkspaceImage: params => ipcRenderer.invoke(IPC_CHANNELS.ACP_READ_WORKSPACE_IMAGE, params),
     onEvent: (listener: (event: AcpHostEvent) => void) => {
       const handler = (_ipcEvent: Electron.IpcRendererEvent, payload: AcpHostEvent) => {
         listener(payload)

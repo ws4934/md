@@ -22,6 +22,7 @@ import {
 } from '@md/shared/utils/acp-thinking'
 import { computeCompactDiff } from '@md/shared/utils/compact-diff'
 import { uuidv4 } from '@md/shared/utils/uuid'
+import { useImageUploader } from '@/composables/useImageUploader'
 import { t } from '@/i18n/translate'
 import {
   clampLayoutWidth,
@@ -29,6 +30,7 @@ import {
   DESKTOP_LAYOUT_LIMITS,
   normalizeDesktopLayoutWidths,
 } from '@/lib/agent/desktop-layout'
+import { findLocalImageRefs, replaceImageRefs } from '@/lib/agent/workspace-images'
 import { store } from '@/storage'
 import { useEditorStore } from '@/stores/editor'
 import { usePostStore } from '@/stores/post'
@@ -362,6 +364,65 @@ export const useAgentStore = defineStore(`agent`, () => {
       postStore.updatePostContent(postId, content)
   }
 
+  const imageUploader = useImageUploader()
+  // Keyed `${acpSessionId}\u0000${ref}`: in-flight uploads shared by overlapping syncs, and errors already shown.
+  const workspaceImageUploads = new Map<string, Promise<string | null>>()
+  const reportedImageErrors = new Set<string>()
+
+  function uploadWorkspaceImage(acpSessionId: string, ref: string): Promise<string | null> {
+    const key = `${acpSessionId}\u0000${ref}`
+    const inFlight = workspaceImageUploads.get(key)
+    if (inFlight)
+      return inFlight
+    const pending = (async () => {
+      try {
+        const image = await window.mdDesktop!.acp.readWorkspaceImage({ sessionId: acpSessionId, path: ref })
+        // The uploader caches by content hash, so later syncs of an unchanged file skip the network.
+        return await imageUploader.upload(new File([image.data as BlobPart], image.filename, { type: image.mimeType })) || null
+      }
+      catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const errorKey = `${key}\u0000${message}`
+        if (!reportedImageErrors.has(errorKey)) {
+          reportedImageErrors.add(errorKey)
+          findSessionByAcpId(acpSessionId)?.items.push({
+            type: `error`,
+            id: uuidv4(),
+            message: t(`agent.imageUploadFailed`, { path: ref, message }),
+            timestamp: Date.now(),
+          })
+        }
+        return null
+      }
+      finally {
+        workspaceImageUploads.delete(key)
+      }
+    })()
+    workspaceImageUploads.set(key, pending)
+    return pending
+  }
+
+  /** Uploads images the agent saved in its workspace and swaps their local paths for hosted URLs. */
+  async function uploadSyncedWorkspaceImages(acpSessionId: string, postId: string, content: string): Promise<void> {
+    const refs = findLocalImageRefs(content)
+    if (refs.length === 0 || !window.mdDesktop?.acp)
+      return
+    const urls = new Map<string, string>()
+    await Promise.all(refs.map(async (ref) => {
+      const url = await uploadWorkspaceImage(acpSessionId, ref)
+      if (url)
+        urls.set(ref, url)
+    }))
+    if (urls.size === 0)
+      return
+    // Rewrite whatever the post holds now so edits made during the upload are kept.
+    const current = postStore.currentPostId === postId && editorStore.editor
+      ? editorStore.getContent()
+      : postStore.getPostById(postId)?.content
+    if (current !== undefined)
+      applySyncedArticleContent(postId, replaceImageRefs(current, urls))
+  }
+
   function findLastIndex<T>(arr: T[], predicate: (item: T) => boolean): number {
     for (let i = arr.length - 1; i >= 0; i--) {
       if (predicate(arr[i]))
@@ -608,6 +669,7 @@ export const useAgentStore = defineStore(`agent`, () => {
       }
       case `article_synced`: {
         applySyncedArticleContent(event.postId, event.content)
+        void uploadSyncedWorkspaceImages(event.sessionId, event.postId, event.content)
         break
       }
       case `model_changed`: {

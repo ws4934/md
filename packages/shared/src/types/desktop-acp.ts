@@ -244,7 +244,15 @@ export interface DesktopAcpApi {
     optionId?: string
   }) => Promise<void>
   closeSession: (sessionId: string) => Promise<void>
+  /** Reads an image the agent saved inside its session workspace (for upload to the user's image host). */
+  readWorkspaceImage: (params: { sessionId: string, path: string }) => Promise<AcpWorkspaceImage>
   onEvent: (listener: (event: AcpHostEvent) => void) => () => void
+}
+
+export interface AcpWorkspaceImage {
+  data: Uint8Array
+  mimeType: string
+  filename: string
 }
 
 export interface DesktopPickedFile {

@@ -10,6 +10,7 @@ import type {
   AcpSettings,
   AcpStartSessionParams,
   AcpStartSessionResult,
+  AcpWorkspaceImage,
 } from '@md/shared/types'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
@@ -57,6 +58,15 @@ export interface AcpHostOptions {
   pathOverride?: string
   extraBuiltinAgents?: AcpAgentConfig[]
   onEvent?: (event: AcpHostEvent) => void
+}
+
+const MAX_WORKSPACE_IMAGE_BYTES = 10 * 1024 * 1024
+const WORKSPACE_IMAGE_MIME: Record<string, string> = {
+  '.png': `image/png`,
+  '.jpg': `image/jpeg`,
+  '.jpeg': `image/jpeg`,
+  '.gif': `image/gif`,
+  '.webp': `image/webp`,
 }
 
 export function buildPromptText(params: AcpPromptParams, articlePath: string, includeRules: boolean): string {
@@ -574,6 +584,32 @@ export class AcpHost {
     if (!managed)
       return
     managed.session.respondPermission(params.requestId, params.decision, params.optionId)
+  }
+
+  /** Reads an image file the agent wrote inside its own workspace; anything outside it is refused. */
+  async readWorkspaceImage(params: { sessionId: string, path: string }): Promise<AcpWorkspaceImage> {
+    const managed = this.sessions.get(params.sessionId)
+    if (!managed)
+      throw new Error(`Unknown ACP session: ${params.sessionId}`)
+    let relPath = params.path
+    try {
+      relPath = decodeURI(relPath)
+    }
+    catch {
+      // Keep the raw path when it is not valid percent-encoding.
+    }
+    const mimeType = WORKSPACE_IMAGE_MIME[path.extname(relPath).toLowerCase()]
+    if (!mimeType)
+      throw new Error(`Unsupported image type: ${params.path}`)
+    // realpath both sides so symlinks cannot point outside the workspace.
+    const root = await fs.realpath(managed.workspaceDir)
+    const target = await fs.realpath(path.resolve(managed.workspaceDir, relPath))
+    if (!target.startsWith(`${root}${path.sep}`))
+      throw new Error(`Image is outside the session workspace: ${params.path}`)
+    const stat = await fs.stat(target)
+    if (!stat.isFile() || stat.size > MAX_WORKSPACE_IMAGE_BYTES)
+      throw new Error(`Image is not a file or exceeds ${MAX_WORKSPACE_IMAGE_BYTES / 1024 / 1024} MB: ${params.path}`)
+    return { data: new Uint8Array(await fs.readFile(target)), mimeType, filename: path.basename(target) }
   }
 
   async closeSession(sessionId: string): Promise<void> {

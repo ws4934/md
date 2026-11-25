@@ -5,6 +5,11 @@ import { createPinia, defineStore, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computed, onScopeDispose, reactive, ref, shallowRef } from 'vue'
 
+const { postMock, uploadMock } = vi.hoisted(() => ({
+  postMock: { id: `post-1`, title: `Test Post`, content: `# Test` },
+  uploadMock: vi.fn(async (file: File) => `https://cdn.test/${file.name}`),
+}))
+
 const toastErrorMock = vi.fn()
 const toastSuccessMock = vi.fn()
 
@@ -26,6 +31,10 @@ vi.mock(`@/i18n/translate`, () => ({
   t: (key: string) => key,
 }))
 
+vi.mock(`@/composables/useImageUploader`, () => ({
+  useImageUploader: () => ({ upload: uploadMock }),
+}))
+
 vi.mock(`@/storage`, () => ({
   store: {
     reactive: <T>(_key: string, initial: T) => ref(initial),
@@ -45,9 +54,11 @@ vi.mock(`@/stores/editor`, () => ({
 vi.mock(`@/stores/post`, () => ({
   usePostStore: () => ({
     currentPostId: `post-1`,
-    currentPost: { id: `post-1`, title: `Test Post`, content: `# Test` },
-    getPostById: () => ({ id: `post-1`, title: `Test Post`, content: `# Test` }),
-    updatePostContent: vi.fn(),
+    currentPost: postMock,
+    getPostById: () => postMock,
+    updatePostContent: (_id: string, content: string) => {
+      postMock.content = content
+    },
   }),
 }))
 
@@ -179,6 +190,7 @@ describe(`useAgentStore thinking level state`, () => {
       })),
       respondPermission: vi.fn(async () => undefined),
       closeSession: vi.fn(async () => undefined),
+      readWorkspaceImage: vi.fn(async () => ({ data: new Uint8Array(), mimeType: `image/png`, filename: `x.png` })),
       onEvent: vi.fn((listener) => {
         eventListener = listener
         return () => {
@@ -378,5 +390,54 @@ describe(`useAgentStore thinking level state`, () => {
     })
     expect(agentStore.availableThinkingOptions.map(o => o.id)).toEqual([`default`, `low`, `medium`, `high`, `xhigh`, `max`])
     expect(agentStore.selectedThinkingLevel).toBe(`default`)
+  })
+})
+
+describe(`useAgentStore workspace image upload`, () => {
+  const originalDesktop = window.mdDesktop
+
+  afterEach(() => {
+    window.mdDesktop = originalDesktop
+    postMock.content = `# Test`
+    uploadMock.mockClear()
+  })
+
+  it(`uploads agent-saved images on article sync, rewrites paths, and reports read failures once`, async () => {
+    setActivePinia(createPinia())
+    let emit: ((event: AcpHostEvent) => void) | null = null
+    const readWorkspaceImage = vi.fn(async ({ path }: { path: string }) => {
+      if (path.includes(`missing`))
+        throw new Error(`ENOENT`)
+      return { data: new Uint8Array([1, 2]), mimeType: `image/png`, filename: path.split(`/`).pop()! }
+    })
+    window.mdDesktop = {
+      acp: {
+        listAgents: vi.fn(async () => []),
+        getSettings: vi.fn(async () => createDefaultAcpSettings()),
+        onEvent: vi.fn((listener) => {
+          emit = listener
+          return () => {}
+        }),
+        readWorkspaceImage,
+      } as unknown as DesktopAcpApi,
+    } as never
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+    await agentStore.init()
+    agentStore.sessions.push({ id: `local-1`, acpSessionId: `sess-1`, items: [] } as never)
+
+    const content = `![chart](images/chart.png) ![gone](images/missing.png) ![web](https://x.com/a.png)`
+    emit!({ type: `article_synced`, sessionId: `sess-1`, postId: `post-1`, content })
+    await vi.waitFor(() => expect(postMock.content).toContain(`https://cdn.test/chart.png`))
+    expect(postMock.content).toBe(`![chart](https://cdn.test/chart.png) ![gone](images/missing.png) ![web](https://x.com/a.png)`)
+    expect(readWorkspaceImage).toHaveBeenCalledWith({ sessionId: `sess-1`, path: `images/chart.png` })
+    expect(uploadMock).toHaveBeenCalledTimes(1)
+
+    // A second sync retries the broken path but does not repeat the same error item.
+    emit!({ type: `article_synced`, sessionId: `sess-1`, postId: `post-1`, content })
+    await vi.waitFor(() => expect(readWorkspaceImage).toHaveBeenCalledTimes(4))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const errors = agentStore.sessions[0].items.filter(i => i.type === `error`)
+    expect(errors).toHaveLength(1)
   })
 })

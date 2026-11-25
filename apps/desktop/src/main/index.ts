@@ -223,6 +223,7 @@ function registerIpc(host: AcpHost, publisher: WeChatPublisher): void {
   ipcMain.handle(IPC_CHANNELS.ACP_SET_PERMISSION_MODE, (_event, params) => host.setPermissionMode(params))
   ipcMain.handle(IPC_CHANNELS.ACP_RESPOND_PERMISSION, (_event, params) => host.respondPermission(params))
   ipcMain.handle(IPC_CHANNELS.ACP_CLOSE_SESSION, (_event, sessionId) => host.closeSession(sessionId))
+  ipcMain.handle(IPC_CHANNELS.ACP_READ_WORKSPACE_IMAGE, (_event, params) => host.readWorkspaceImage(params))
 }
 
 app.whenReady().then(() => {
