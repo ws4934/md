@@ -27,6 +27,7 @@ import { ProbeCache } from './probe'
 import { AcpRegistry } from './registry'
 import { AcpSession } from './session'
 import { isMethodNotFoundError } from './translator'
+import { ARTICLE_WRITING_RULES } from './writing-rules'
 
 export interface AcpActiveSessionSummary {
   sessionId: string
@@ -43,6 +44,7 @@ interface ManagedSession {
   articlePath: string
   lastSyncedContent: string
   syncChain: Promise<void>
+  writingRulesSent: boolean
   permissionState: {
     level: AcpPermissionLevel
     applyingHostMode: boolean
@@ -55,6 +57,22 @@ export interface AcpHostOptions {
   pathOverride?: string
   extraBuiltinAgents?: AcpAgentConfig[]
   onEvent?: (event: AcpHostEvent) => void
+}
+
+export function buildPromptText(params: AcpPromptParams, articlePath: string, includeRules: boolean): string {
+  const attachments = params.attachments?.filter(Boolean) ?? []
+  const contextHeader = [
+    `[Context] You are editing the open Markdown article in doocs/md.`,
+    `Article title: ${params.postTitle || `Untitled`}`,
+    `Article file path: ${articlePath}`,
+    ...(attachments.length > 0
+      ? [`Attached reference files:\n${attachments.map(p => `- ${p}`).join(`\n`)}`]
+      : []),
+    `Edit "${articlePath}" directly on disk to update the article.`,
+  ].join(`\n`)
+  return includeRules
+    ? `${contextHeader}\n\n${ARTICLE_WRITING_RULES}\n\n${params.text}`
+    : `${contextHeader}\n\n${params.text}`
 }
 
 export class AcpHost {
@@ -266,6 +284,7 @@ export class AcpHost {
       articlePath,
       lastSyncedContent: params.content,
       syncChain: Promise.resolve(),
+      writingRulesSent: false,
       permissionState,
     })
 
@@ -398,21 +417,13 @@ export class AcpHost {
     await fs.writeFile(managed.articlePath, params.content, `utf8`)
     managed.lastSyncedContent = params.content
 
-    const attachments = params.attachments?.filter(Boolean) ?? []
-    const contextHeader = [
-      `[Context] You are editing the open Markdown article in doocs/md.`,
-      `Article title: ${params.postTitle || `Untitled`}`,
-      `Article file path: ${managed.articlePath}`,
-      ...(attachments.length > 0
-        ? [`Attached reference files:\n${attachments.map(p => `- ${p}`).join(`\n`)}`]
-        : []),
-      `Edit "${managed.articlePath}" directly on disk to update the article.`,
-    ].join(`\n`)
-
+    // Rules ride on the first turn only; the agent keeps them in its own conversation history.
+    const includeRules = !managed.writingRulesSent
+    managed.writingRulesSent = true
     const blocks: ContentBlock[] = [
       {
         type: `text`,
-        text: `${contextHeader}\n\n${params.text}`,
+        text: buildPromptText(params, managed.articlePath, includeRules),
       },
     ]
 

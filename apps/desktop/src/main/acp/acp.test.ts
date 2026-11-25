@@ -15,7 +15,7 @@ import {
 } from '@md/shared/utils/acp-permissions'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AcpEventBatcher } from './event-batcher'
-import { AcpHost } from './host'
+import { AcpHost, buildPromptText } from './host'
 import { createSafeNdJsonStream } from './ndjson-stream'
 import { probeAcpAgent, ProbeCache } from './probe'
 import { AcpRegistry } from './registry'
@@ -1631,5 +1631,17 @@ describe(`thinking level switching (variants vs configOption) and config_option_
     finally {
       await session.close()
     }
+  })
+})
+
+describe(`buildPromptText`, () => {
+  it(`prepends doocs/md writing rules only when requested`, () => {
+    const params = { sessionId: `s`, text: `Write an intro`, content: ``, postTitle: `T` }
+    const first = buildPromptText(params, `/w/article.md`, true)
+    expect(first).toContain(`Article file path: /w/article.md`)
+    expect(first).toContain(`[!NOTE]`)
+    expect(first).toContain(`<TipBlock`)
+    expect(first.endsWith(`Write an intro`)).toBe(true)
+    expect(buildPromptText(params, `/w/article.md`, false)).not.toContain(`[Writing rules]`)
   })
 })

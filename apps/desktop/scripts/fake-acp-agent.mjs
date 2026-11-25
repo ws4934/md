@@ -481,7 +481,9 @@ async function handlePrompt(id, params) {
     })
   }
 
-  const needsExecPerm = requirePermission || /permission|mermaid|命令|svg|run/i.test(text)
+  // Only the user's message (last paragraph) drives this, not the host's context/rules header.
+  const userText = text.slice(text.lastIndexOf(`\n\n`) + 2)
+  const needsExecPerm = requirePermission || /permission|mermaid|命令|svg|run/i.test(userText)
   if (needsExecPerm) {
     sendUpdate({
       sessionUpdate: `agent_message_chunk`,
