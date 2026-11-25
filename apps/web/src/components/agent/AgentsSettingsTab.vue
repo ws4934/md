@@ -75,9 +75,10 @@ async function saveAgentConfig(agent: AcpAgentStatus) {
   if (!command)
     return
   const args = parseCliArgs(editArgs.value)
+  const plainEnv = agent.env ? { ...agent.env } : undefined
   await agentStore.updateSettings({
     commandOverrides: {
-      [agent.id]: { command, args, env: agent.env },
+      [agent.id]: { command, args, ...(plainEnv ? { env: plainEnv } : {}) },
     },
   })
   configuringAgentId.value = null

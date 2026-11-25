@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import type { DesktopImageGenConfig } from '@md/shared/types'
-import { Check, Eye, EyeOff, Info, Loader2, Sparkles, Trash2 } from '@lucide/vue'
+import { Info, Loader2, Sparkles } from '@lucide/vue'
 import { imageServiceOptions } from '@md/shared/configs/ai-service-options'
 import { DEFAULT_IMAGE_GEN_QUALITIES, DEFAULT_IMAGE_GEN_SIZES } from '@md/shared/types'
 import PanelSelect from '@/components/shared/panel-dialog/PanelSelect.vue'
 import { Label } from '@/components/ui/label'
+import AiSecretKeyInput from './AiSecretKeyInput.vue'
 
 const { t, locale } = useI18n()
 
@@ -15,7 +16,6 @@ const baseUrl = ref(`https://api.openai.com/v1`)
 const hasSavedKey = ref(false)
 const apiKeyInput = ref(``)
 const clearSavedKey = ref(false)
-const showKey = ref(false)
 const model = ref(`gpt-image-1`)
 const size = ref(`1024x1024`)
 const quality = ref(`auto`)
@@ -89,8 +89,9 @@ function onBaseUrlInput() {
   providerPreset.value = matched ? matched.value : `custom`
 }
 
-function onApiKeyInput() {
-  if (apiKeyInput.value.trim())
+function onApiKeyUpdate(next: string) {
+  apiKeyInput.value = next
+  if (next.trim())
     clearSavedKey.value = false
 }
 
@@ -207,58 +208,15 @@ async function runTestGeneration() {
         >
       </label>
 
-      <div class="flex flex-col gap-1.5">
-        <div class="flex items-center justify-between gap-2">
-          <span class="text-xs font-medium" style="color: var(--dt-ink2)">
-            {{ t('agent.modelApi.apiKeyLabel') }}
-          </span>
-          <div v-if="hasSavedKey && !clearSavedKey" class="flex items-center gap-2">
-            <span
-              data-testid="image-gen-key-saved"
-              class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium"
-              style="background-color: var(--dt-green-soft); color: var(--dt-green)"
-            >
-              <Check class="size-3" />
-              <span>{{ t('agent.modelApi.keySaved') }}</span>
-            </span>
-            <button
-              type="button"
-              class="inline-flex cursor-pointer items-center gap-1 text-[11.5px] transition-opacity hover:opacity-80"
-              style="color: var(--dt-red)"
-              @click="markClearSavedKey"
-            >
-              <Trash2 class="size-3" />
-              <span>{{ t('agent.modelApi.clearKey') }}</span>
-            </button>
-          </div>
-        </div>
-        <div
-          class="flex h-9 w-full items-center rounded-lg px-3"
-          style="background-color: var(--dt-surface); border: 1px solid var(--dt-line)"
-        >
-          <input
-            v-model="apiKeyInput"
-            :type="showKey ? 'text' : 'password'"
-            autocomplete="off"
-            data-testid="image-gen-api-key"
-            :placeholder="hasSavedKey && !clearSavedKey
-              ? t('agent.modelApi.apiKeySavedPlaceholder')
-              : t('agent.modelApi.apiKeyPlaceholder')"
-            class="min-w-0 flex-1 bg-transparent text-[13.5px] outline-none"
-            style="color: var(--dt-ink); font-family: var(--dt-mono)"
-            @input="onApiKeyInput"
-          >
-          <button
-            type="button"
-            class="ml-2 cursor-pointer"
-            style="color: var(--dt-ink3)"
-            @click="showKey = !showKey"
-          >
-            <EyeOff v-if="showKey" class="size-4" />
-            <Eye v-else class="size-4" />
-          </button>
-        </div>
-      </div>
+      <AiSecretKeyInput
+        :model-value="apiKeyInput"
+        :has-saved-key="hasSavedKey"
+        :clear-saved-key="clearSavedKey"
+        input-test-id="image-gen-api-key"
+        saved-badge-test-id="image-gen-key-saved"
+        @update:model-value="onApiKeyUpdate"
+        @clear-key="markClearSavedKey"
+      />
 
       <div class="flex flex-col gap-1.5">
         <span class="text-xs font-medium" style="color: var(--dt-ink2)">

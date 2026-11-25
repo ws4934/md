@@ -38,6 +38,8 @@ vi.mock(`@/composables/useImageUploader`, () => ({
 vi.mock(`@/storage`, () => ({
   store: {
     reactive: <T>(_key: string, initial: T) => ref(initial),
+    get: vi.fn(async () => null),
+    set: vi.fn(async () => undefined),
     getJSON: vi.fn(async () => []),
     setJSON: vi.fn(async () => undefined),
   },
@@ -440,5 +442,152 @@ describe(`useAgentStore workspace image upload`, () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     const errors = agentStore.sessions[0].items.filter(i => i.type === `error`)
     expect(errors).toHaveLength(1)
+  })
+
+  it(`fails fast on uploadDefaultImage in desktop mode instead of sending CORS-blocked md-api requests`, async () => {
+    const fetchSpy = vi.spyOn(globalThis, `fetch`).mockResolvedValue(new Response(`{}`, { status: 200 }))
+    window.mdDesktop = { isDesktop: true } as never
+    try {
+      const { uploadDefaultImage } = await import(`@/services/upload/client`)
+      const file = new File([new Uint8Array([1, 2, 3])], `cover.png`, { type: `image/png` })
+      await expect(uploadDefaultImage(file)).rejects.toThrow(`store.uploader.defaultHostRequiresApi`)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    }
+    finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it(`surfaces imageUploadFailed on empty upload URL, preserves errors across session_closed, and persists sessions`, async () => {
+    setActivePinia(createPinia())
+    const { store: storageMock } = await import(`@/storage`)
+    vi.mocked(storageMock.setJSON).mockClear()
+
+    let emit: ((event: AcpHostEvent) => void) | undefined
+    const readWorkspaceImage = vi.fn(async ({ path }: { path: string }) => ({
+      data: new Uint8Array([1, 2, 3]),
+      mimeType: `image/png`,
+      filename: path.split(`/`).pop()!,
+    }))
+    let rejectSlowUpload!: (err: Error) => void
+    uploadMock.mockImplementation((file: File) => {
+      if (file.name === `empty.png`)
+        return Promise.resolve(``)
+      return new Promise<string>((_resolve, reject) => {
+        rejectSlowUpload = reject
+      })
+    })
+
+    window.mdDesktop = {
+      isDesktop: true,
+      platform: `darwin`,
+      acp: {
+        listAgents: vi.fn(async () => []),
+        getSettings: vi.fn(async () => createDefaultAcpSettings()),
+        onEvent: vi.fn((listener: (event: AcpHostEvent) => void) => {
+          emit = listener
+          return () => {}
+        }),
+        readWorkspaceImage,
+      } as unknown as DesktopAcpApi,
+    } as never
+
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+    await agentStore.init()
+    agentStore.sessions.push({
+      id: `local-race`,
+      acpSessionId: `sess-race`,
+      agentId: `api-model`,
+      modelId: `gpt-5`,
+      postId: `post-1`,
+      title: `Race Test`,
+      items: [],
+      updatedAt: 1,
+    })
+
+    emit!({
+      type: `article_synced`,
+      sessionId: `sess-race`,
+      postId: `post-1`,
+      content: `![e](images/empty.png) ![s](images/slow.png)`,
+    })
+
+    // Empty upload URL must surface an error item and persist.
+    await vi.waitFor(() => {
+      const errs = agentStore.sessions[0].items.filter(i => i.type === `error`)
+      expect(errs).toHaveLength(1)
+    })
+
+    // Close the ACP session BEFORE slow.png upload rejects; error must still attach to local-race and persist.
+    emit!({ type: `session_closed`, sessionId: `sess-race`, reason: `closed` })
+    expect(agentStore.sessions[0].acpSessionId).toBeNull()
+    vi.mocked(storageMock.setJSON).mockClear()
+
+    rejectSlowUpload(new Error(`No host configured`))
+    await vi.waitFor(() => {
+      const errs = agentStore.sessions[0].items.filter(i => i.type === `error`)
+      expect(errs).toHaveLength(2)
+    })
+    expect(storageMock.setJSON).toHaveBeenCalled()
+  })
+
+  it(`updates selectedModelByAgent when force-probing removes a previously selected model`, async () => {
+    setActivePinia(createPinia())
+    const probeAgentMock = vi.fn()
+      .mockResolvedValueOnce({
+        agentId: `api-model`,
+        models: [
+          { id: `gpt-old`, name: `gpt-old`, isDefault: true },
+          { id: `gpt-keep`, name: `gpt-keep` },
+        ],
+        currentModelId: `gpt-old`,
+        modes: [],
+        currentModeId: null,
+        commands: [],
+        probedAt: Date.now(),
+      } satisfies AcpProbeResult)
+      .mockResolvedValueOnce({
+        agentId: `api-model`,
+        models: [
+          { id: `gpt-new`, name: `gpt-new`, isDefault: true },
+        ],
+        currentModelId: `gpt-new`,
+        modes: [],
+        currentModeId: null,
+        commands: [],
+        probedAt: Date.now(),
+      } satisfies AcpProbeResult)
+
+    window.mdDesktop = {
+      isDesktop: true,
+      platform: `darwin`,
+      acp: {
+        listAgents: vi.fn(async () => [{
+          id: `api-model`,
+          name: `API Model`,
+          command: `node`,
+          args: [],
+          installed: true,
+          builtin: true,
+          avatar: { letter: `M`, color: `#0284C7` },
+        }]),
+        getSettings: vi.fn(async () => createDefaultAcpSettings()),
+        probeAgent: probeAgentMock,
+        onEvent: vi.fn(() => () => {}),
+      } as unknown as DesktopAcpApi,
+    } as never
+
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+    await agentStore.init()
+    agentStore.selectedAgentId = `api-model`
+
+    await agentStore.probeAgent(`api-model`, false)
+    expect(agentStore.selectedModel?.id).toBe(`gpt-old`)
+
+    // User removes `gpt-old` in Model API Settings and force-reprobes:
+    await agentStore.probeAgent(`api-model`, true)
+    expect(agentStore.selectedModel?.id).toBe(`gpt-new`)
   })
 })

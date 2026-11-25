@@ -15,6 +15,8 @@ class UploadApiError extends Error {
 }
 
 function isUploadViaApiEnabled(): boolean {
+  if (typeof window !== `undefined` && window.mdDesktop?.isDesktop)
+    return false
   if (!isAccountConfigured())
     return false
   const flag = import.meta.env.VITE_UPLOAD_VIA_API

@@ -369,7 +369,11 @@ export const useAgentStore = defineStore(`agent`, () => {
   const workspaceImageUploads = new Map<string, Promise<string | null>>()
   const reportedImageErrors = new Set<string>()
 
-  function uploadWorkspaceImage(acpSessionId: string, ref: string): Promise<string | null> {
+  function uploadWorkspaceImage(
+    acpSessionId: string,
+    ref: string,
+    targetSession?: AgentConversationSession,
+  ): Promise<string | null> {
     const key = `${acpSessionId}\u0000${ref}`
     const inFlight = workspaceImageUploads.get(key)
     if (inFlight)
@@ -378,19 +382,30 @@ export const useAgentStore = defineStore(`agent`, () => {
       try {
         const image = await window.mdDesktop!.acp.readWorkspaceImage({ sessionId: acpSessionId, path: ref })
         // The uploader caches by content hash, so later syncs of an unchanged file skip the network.
-        return await imageUploader.upload(new File([image.data as BlobPart], image.filename, { type: image.mimeType })) || null
+        const uploadedUrl = await imageUploader.upload(
+          new File([image.data as BlobPart], image.filename, { type: image.mimeType }),
+        )
+        if (!uploadedUrl)
+          throw new Error(t(`store.uploader.uploadFailed`))
+        return uploadedUrl
       }
       catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         const errorKey = `${key}\u0000${message}`
         if (!reportedImageErrors.has(errorKey)) {
           reportedImageErrors.add(errorKey)
-          findSessionByAcpId(acpSessionId)?.items.push({
-            type: `error`,
-            id: uuidv4(),
-            message: t(`agent.imageUploadFailed`, { path: ref, message }),
-            timestamp: Date.now(),
-          })
+          const session = targetSession ?? findSessionByAcpId(acpSessionId)
+          if (session) {
+            session.items.push({
+              type: `error`,
+              id: uuidv4(),
+              message: t(`agent.imageUploadFailed`, { path: ref, message }),
+              timestamp: Date.now(),
+            })
+            trimLiveItems(session)
+            session.updatedAt = Date.now()
+            void persistSessions()
+          }
         }
         return null
       }
@@ -403,13 +418,18 @@ export const useAgentStore = defineStore(`agent`, () => {
   }
 
   /** Uploads images the agent saved in its workspace and swaps their local paths for hosted URLs. */
-  async function uploadSyncedWorkspaceImages(acpSessionId: string, postId: string, content: string): Promise<void> {
+  async function uploadSyncedWorkspaceImages(
+    acpSessionId: string,
+    postId: string,
+    content: string,
+    targetSession?: AgentConversationSession,
+  ): Promise<void> {
     const refs = findLocalImageRefs(content)
     if (refs.length === 0 || !window.mdDesktop?.acp)
       return
     const urls = new Map<string, string>()
     await Promise.all(refs.map(async (ref) => {
-      const url = await uploadWorkspaceImage(acpSessionId, ref)
+      const url = await uploadWorkspaceImage(acpSessionId, ref, targetSession)
       if (url)
         urls.set(ref, url)
     }))
@@ -668,8 +688,9 @@ export const useAgentStore = defineStore(`agent`, () => {
         break
       }
       case `article_synced`: {
+        const targetSession = findSessionByAcpId(event.sessionId)
         applySyncedArticleContent(event.postId, event.content)
-        void uploadSyncedWorkspaceImages(event.sessionId, event.postId, event.content)
+        void uploadSyncedWorkspaceImages(event.sessionId, event.postId, event.content, targetSession)
         break
       }
       case `model_changed`: {
@@ -785,6 +806,14 @@ export const useAgentStore = defineStore(`agent`, () => {
     ensureValidSelectedAgent()
   }
 
+  function invalidateProbe(agentId: string): void {
+    if (!(agentId in probeByAgent.value))
+      return
+    const next = { ...probeByAgent.value }
+    delete next[agentId]
+    probeByAgent.value = next
+  }
+
   async function probeAgent(agentId: string, force = false): Promise<AcpProbeResult | null> {
     if (!window.mdDesktop?.acp)
       return null
@@ -798,9 +827,19 @@ export const useAgentStore = defineStore(`agent`, () => {
       const existingModel = selectedModelByAgent.value[agentId]
       if (existingModel) {
         const parsed = parseVariantModelId(existingModel, result.models)
-        if (parsed.baseModelId && parsed.baseModelId !== existingModel)
+        const baseCandidate = parsed.baseModelId ?? existingModel
+        const stillAvailable = result.models.length === 0 || result.models.some(m => m.id === baseCandidate)
+        if (!stillAvailable) {
+          const fallbackModel = result.currentModelId ?? result.models[0]?.id
+          if (fallbackModel)
+            selectedModelByAgent.value[agentId] = fallbackModel
+          else
+            delete selectedModelByAgent.value[agentId]
+        }
+        else if (parsed.baseModelId && parsed.baseModelId !== existingModel) {
           selectedModelByAgent.value[agentId] = parsed.baseModelId
-        if (parsed.thinkingLevel && !selectedThinkingLevelByAgent.value[agentId])
+        }
+        if (stillAvailable && parsed.thinkingLevel && !selectedThinkingLevelByAgent.value[agentId])
           selectedThinkingLevelByAgent.value[agentId] = parsed.thinkingLevel
       }
       else if (result.currentModelId) {
@@ -1198,11 +1237,12 @@ export const useAgentStore = defineStore(`agent`, () => {
       session.postId = postId
     }
 
+    const plainAttachments = attachments.length > 0 ? [...attachments] : []
     session.items.push({
       type: `user`,
       id: uuidv4(),
       text,
-      attachments: attachments.length > 0 ? attachments : undefined,
+      attachments: plainAttachments.length > 0 ? plainAttachments : undefined,
       timestamp: Date.now(),
     })
     session.updatedAt = Date.now()
@@ -1269,7 +1309,7 @@ export const useAgentStore = defineStore(`agent`, () => {
       await window.mdDesktop.acp.prompt({
         sessionId: session.acpSessionId,
         text,
-        attachments,
+        attachments: plainAttachments,
         content,
         postTitle,
       })
@@ -1419,6 +1459,7 @@ export const useAgentStore = defineStore(`agent`, () => {
     resetLayoutWidth,
     refreshAgentsList,
     detectAgents,
+    invalidateProbe,
     probeAgent,
     selectAgentAndModel,
     setSessionThinkingLevel,

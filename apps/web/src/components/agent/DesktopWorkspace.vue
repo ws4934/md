@@ -17,6 +17,7 @@ import {
   computeMainMinPercent,
   DESKTOP_LAYOUT_LIMITS,
 } from '@/lib/agent/desktop-layout'
+import { dismissInitialLoader } from '@/lib/bootstrap/dismiss-initial-loader'
 import { clampGoToLineValue, jumpToLine } from '@/lib/markdown/headingNavigation'
 import { useAgentStore } from '@/stores/agent'
 import { useThemeStore } from '@/stores/theme'
@@ -416,6 +417,8 @@ const isImgLoading = computed(() => unref(editorPanelCompRef.value?.isImgLoading
 
 onMounted(() => {
   void agentStore.init()
+  // Dismiss the static splash as soon as the desktop workspace mounts so edit-only mode or slow remote diagrams never block UI.
+  dismissInitialLoader()
   if (outerContainerRef.value && typeof ResizeObserver !== `undefined`) {
     outerContainerWidth.value = outerContainerRef.value.getBoundingClientRect().width || outerContainerWidth.value
     outerObserver = new ResizeObserver((entries) => {
