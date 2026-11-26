@@ -7,6 +7,7 @@ describe(`workspace images`, () => {
     `![images/a.png](images/a.png)`,
     `![sp](<images/my chart.png>)`,
     `![web](https://x.com/a.png) ![d](data:image/png;base64,AA) ![e](asset://emoji)`,
+    `![unc](\\\\server\\share\\img.png) ![unc-sp](<\\\\server\\share\\my img.png>)`,
     `<![s1](images/s1.png),![s2](https://x.com/s2.png)>`,
   ].join(`\n\n`)
 

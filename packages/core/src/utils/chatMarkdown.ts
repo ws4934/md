@@ -288,7 +288,7 @@ function createChatMarked(copyLabel: string): Marked {
         const headerCells = token.header
           .map((cell, idx) => {
             const align = token.align[idx]
-            const alignAttr = align && SAFE_TABLE_ALIGNS.has(align) ? ` style="text-align:${align}"` : ``
+            const alignAttr = align && SAFE_TABLE_ALIGNS.has(align) ? ` class="agent-md-align-${align}"` : ``
             return `<th${alignAttr}>${this.parser.parseInline(cell.tokens)}</th>`
           })
           .join(``)
@@ -297,7 +297,7 @@ function createChatMarked(copyLabel: string): Marked {
             const cells = row
               .map((cell, idx) => {
                 const align = token.align[idx]
-                const alignAttr = align && SAFE_TABLE_ALIGNS.has(align) ? ` style="text-align:${align}"` : ``
+                const alignAttr = align && SAFE_TABLE_ALIGNS.has(align) ? ` class="agent-md-align-${align}"` : ``
                 return `<td${alignAttr}>${this.parser.parseInline(cell.tokens)}</td>`
               })
               .join(``)
@@ -382,8 +382,35 @@ const SANITIZE_CONFIG = {
     `data-chip-kind`,
     `checked`,
     `disabled`,
-    `style`,
   ],
+}
+
+function enforceDisabledTaskCheckbox(node: Element): void {
+  if (node.tagName !== `INPUT`)
+    return
+  if (node.getAttribute(`type`)?.toLowerCase() !== `checkbox` || !node.hasAttribute(`disabled`)) {
+    node.remove()
+    return
+  }
+  for (const attr of Array.from(node.attributes)) {
+    const name = attr.name.toLowerCase()
+    if (name !== `type` && name !== `checked` && name !== `disabled`)
+      node.removeAttribute(attr.name)
+  }
+  node.setAttribute(`type`, `checkbox`)
+  node.setAttribute(`disabled`, ``)
+}
+
+export function sanitizeChatHtml(rawHtml: string): string {
+  if (!rawHtml)
+    return ``
+  DOMPurify.addHook(`afterSanitizeAttributes`, enforceDisabledTaskCheckbox)
+  try {
+    return DOMPurify.sanitize(rawHtml, SANITIZE_CONFIG)
+  }
+  finally {
+    DOMPurify.removeHook(`afterSanitizeAttributes`)
+  }
 }
 
 /**
@@ -398,5 +425,5 @@ export function renderChatMarkdown(markdown: string, options: ChatMarkdownOption
   const marked = getMarkedInstance(copyLabel)
   const normalized = normalizeFileLinkSpaces(markdown)
   const rawHtml = marked.parse(normalized, { async: false }) as string
-  return DOMPurify.sanitize(rawHtml, SANITIZE_CONFIG)
+  return sanitizeChatHtml(rawHtml)
 }

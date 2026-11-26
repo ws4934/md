@@ -4,6 +4,7 @@ import {
   hydratePendingPlantUmlDiagrams,
 } from '@md/core/extensions'
 import {
+  highlightPendingBlocks,
   isAsyncDiagramPending,
   MD_DIAGRAM_STATE,
   MD_DIAGRAM_STATE_ATTR,
@@ -44,6 +45,22 @@ function isMathStillLoading(output: HTMLElement): boolean {
   return false
 }
 
+function isCodeStillHighlighting(output: HTMLElement): boolean {
+  for (const el of output.querySelectorAll<HTMLElement>(`code[data-language-pending]`)) {
+    if (el.getAttribute(`data-language-pending`))
+      return true
+  }
+
+  return false
+}
+
+async function hydratePendingCodeBlocks(output: HTMLElement): Promise<void> {
+  if (!isCodeStillHighlighting(output))
+    return
+  const { hljs } = await import(`@md/core/renderer`)
+  highlightPendingBlocks(hljs, output)
+}
+
 /** Wait for async diagrams and math in preview; returns false on timeout. */
 export async function waitForPreviewReady(
   timeoutMs = PREVIEW_READY_TIMEOUT_MS,
@@ -61,20 +78,22 @@ export async function waitForPreviewReady(
   const deadline = Date.now() + timeoutMs
 
   while (Date.now() < deadline) {
+    await hydratePendingCodeBlocks(output)
     hydratePendingMermaidDiagrams(output)
     hydratePendingPlantUmlDiagrams(output)
     hydratePendingInfographicDiagrams(output, infographicOptions)
 
-    if (!isDiagramStillLoading(output) && !isMathStillLoading(output))
+    if (!isDiagramStillLoading(output) && !isMathStillLoading(output) && !isCodeStillHighlighting(output))
       return true
 
     await delay(PREVIEW_POLL_INTERVAL_MS)
   }
 
+  await hydratePendingCodeBlocks(output)
   hydratePendingMermaidDiagrams(output)
   hydratePendingPlantUmlDiagrams(output)
   hydratePendingInfographicDiagrams(output, infographicOptions)
-  return !isDiagramStillLoading(output) && !isMathStillLoading(output)
+  return !isDiagramStillLoading(output) && !isMathStillLoading(output) && !isCodeStillHighlighting(output)
 }
 
 /** Strip unresolved async placeholders so copy/export omit loading text. */

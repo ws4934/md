@@ -48,6 +48,22 @@ describe(`waitForPreviewReady`, () => {
 
     output.remove()
   })
+
+  it(`highlights pending code blocks directly from #output when preview panel has not hydrated`, async () => {
+    const output = document.createElement(`div`)
+    output.id = `output`
+    output.innerHTML = `<pre><code class="hljs language-typescript" data-language-pending="typescript" data-raw-code="const answer: number = 42" data-show-line-number="false">const answer: number = 42</code></pre>`
+    document.body.append(output)
+
+    const ready = await waitForPreviewReady(2_000)
+    expect(ready).toBe(true)
+
+    const code = output.querySelector(`code`)!
+    expect(code.hasAttribute(`data-language-pending`)).toBe(false)
+    expect(code.innerHTML).toContain(`hljs-keyword`)
+
+    output.remove()
+  })
 })
 
 describe(`stripUnresolvedAsyncPlaceholders`, () => {

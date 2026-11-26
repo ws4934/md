@@ -10,13 +10,15 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { groupTimelineItems } from '@/lib/agent/timeline-blocks'
 import { useAgentStore } from '@/stores/agent'
-import { createTimelineBlockStabilizer } from './agent-ui-helpers'
+import { usePostStore } from '@/stores/post'
+import { createTimelineBlockStabilizer, filterSessionsForPost } from './agent-ui-helpers'
 import AgentAvatar from './AgentAvatar.vue'
 import AgentComposer from './AgentComposer.vue'
 import AgentTimelineItem from './AgentTimelineItem.vue'
 
 const { t, locale } = useI18n()
 const agentStore = useAgentStore()
+const postStore = usePostStore()
 
 const {
   activeSession,
@@ -27,6 +29,9 @@ const {
   selectedAgent,
   currentActivityLabel,
 } = storeToRefs(agentStore)
+const { currentPostId } = storeToRefs(postStore)
+
+const articleSessions = computed(() => filterSessionsForPost(sessions.value, currentPostId.value))
 
 const NEAR_BOTTOM_THRESHOLD_PX = 80
 
@@ -217,11 +222,11 @@ function onRespondPermission(requestId: string, decision: AcpPermissionDecision)
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" class="max-h-72 w-64 overflow-y-auto">
-            <DropdownMenuItem v-if="sessions.length === 0" disabled class="text-xs">
+            <DropdownMenuItem v-if="articleSessions.length === 0" disabled class="text-xs">
               {{ t('agent.panel.noHistory') }}
             </DropdownMenuItem>
             <DropdownMenuItem
-              v-for="s in sessions"
+              v-for="s in articleSessions"
               :key="s.id"
               class="flex cursor-pointer items-center justify-between gap-2"
               @click="agentStore.switchSession(s.id)"

@@ -1,6 +1,6 @@
 // `![alt](ref "title")`; `ref` may be wrapped in <> when it contains spaces. Also matches slider items.
 const MD_IMAGE_RE = /!\[[^\]]*\]\(\s*(<[^>\n]*>|[^\s)]+)(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)/g
-const HAS_SCHEME_RE = /^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i
+const HAS_SCHEME_RE = /^(?:[a-z][a-z\d+.-]*:|\/\/|\\\\|#)/i
 
 function unwrap(ref: string): string {
   return ref.startsWith(`<`) ? ref.slice(1, -1) : ref

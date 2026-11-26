@@ -46,4 +46,53 @@ describe(`marketplace client desktop IPC bridge`, () => {
     await client.install(`theme-1`)
     expect(installItem).toHaveBeenCalledWith(`theme-1`)
   })
+
+  it(`normalizes desktop IPC rejections so error codes and localized messages match web ApiError`, async () => {
+    const {
+      getMarketplaceErrorCode,
+      getMarketplaceErrorMessage,
+      MarketplaceApiError,
+      MarketplaceClient,
+    } = await import(`./client`)
+
+    const listThemes = vi.fn(async () => {
+      throw new Error(`Error invoking remote method 'marketplace:list-themes': Error: HTTP 502`)
+    })
+    const getItem = vi.fn(async () => {
+      throw new Error(`Error invoking remote method 'marketplace:get-item': TypeError: Marketplace request timed out`)
+    })
+    const installItem = vi.fn(async () => {
+      throw new Error(`Error invoking remote method 'marketplace:install-item': Error: rate_limited`)
+    })
+
+    window.mdDesktop = {
+      isDesktop: true,
+      marketplace: { listThemes, getItem, installItem },
+    } as never
+
+    const client = new MarketplaceClient(() => null)
+
+    await expect(client.install(`theme-1`)).rejects.toBeInstanceOf(MarketplaceApiError)
+    const installErr = await client.install(`theme-1`).catch((e: unknown) => e)
+    expect(getMarketplaceErrorCode(installErr)).toBe(`rate_limited`)
+    expect(getMarketplaceErrorMessage(installErr, `marketplace.installFailed`)).toBe(`marketplace.validation.rateLimited`)
+
+    const getErr = await client.get(`theme-1`).catch((e: unknown) => e)
+    expect(getMarketplaceErrorCode(getErr)).toBe(`Marketplace request timed out`)
+    expect(getMarketplaceErrorMessage(getErr, `marketplace.loadFailed`)).toBe(`Marketplace request timed out`)
+
+    const listErr = await client.listThemes().catch((e: unknown) => e)
+    expect(getMarketplaceErrorCode(listErr)).toBe(`HTTP 502`)
+    expect(getMarketplaceErrorMessage(listErr, `marketplace.loadFailed`)).toBe(`marketplace.loadFailed`)
+
+    // Raw Electron IPC Error passed directly to helpers also normalizes cleanly.
+    const rawIpcErr = new Error(`Error invoking remote method 'marketplace:install-item': Error: unauthorized`)
+    expect(getMarketplaceErrorCode(rawIpcErr)).toBe(`unauthorized`)
+    expect(getMarketplaceErrorMessage(rawIpcErr)).toBe(`marketplace.validation.unauthorized`)
+
+    // Non-IPC network TypeError on web still falls back to generic key.
+    const webNetworkErr = new TypeError(`Failed to fetch`)
+    expect(getMarketplaceErrorCode(webNetworkErr)).toBeNull()
+    expect(getMarketplaceErrorMessage(webNetworkErr, `marketplace.loadFailed`)).toBe(`marketplace.loadFailed`)
+  })
 })

@@ -321,6 +321,13 @@ export function blurFocusedDescendant(container: HTMLElement | null | undefined)
     active.blur()
 }
 
+export function filterSessionsForPost<T extends { postId: string }>(
+  sessions: readonly T[],
+  currentPostId: string,
+): T[] {
+  return sessions.filter(s => !s.postId || s.postId === currentPostId)
+}
+
 export function shouldApplyUpdateCheckResult(
   current: DesktopUpdateState | null,
   next: DesktopUpdateState,

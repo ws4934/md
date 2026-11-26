@@ -27,14 +27,59 @@ export function isMarketplaceUiEnabled(): boolean {
   return isMarketplaceConfigured()
 }
 
+const IPC_INVOKE_PREFIX_RE = /^Error invoking remote method '[^']+': (?:[\w$]*Error: )?/
+const HTTP_STATUS_FALLBACK_RE = /^HTTP (\d{3})\b/
+
+function inferStatusFromMessage(message: string): number {
+  const httpMatch = HTTP_STATUS_FALLBACK_RE.exec(message)
+  if (httpMatch)
+    return Number(httpMatch[1])
+  switch (message) {
+    case `unauthorized`:
+    case `invalid_token`:
+      return 401
+    case `forbidden`:
+      return 403
+    case `not_found`:
+    case `Not Found`:
+      return 404
+    case `slug_taken`:
+    case `Conflict`:
+      return 409
+    case `payload_too_large`:
+      return 413
+    case `rate_limited`:
+      return 429
+    default:
+      return 500
+  }
+}
+
+function normalizeDesktopBridgeError(error: unknown): ApiError {
+  if (error instanceof ApiError)
+    return error
+  const raw = error instanceof Error ? error.message : String(error ?? ``)
+  const message = raw.replace(IPC_INVOKE_PREFIX_RE, ``).trim()
+  return new ApiError(inferStatusFromMessage(message), message)
+}
+
+function toMarketplaceApiError(error: unknown): ApiError | null {
+  if (error instanceof ApiError)
+    return error
+  if (error instanceof Error && IPC_INVOKE_PREFIX_RE.test(error.message))
+    return normalizeDesktopBridgeError(error)
+  return null
+}
+
 /** Map API error codes to localized user-facing messages. */
 export function getMarketplaceErrorMessage(error: unknown, fallbackKey = `marketplace.publishFailed`): string {
-  if (error instanceof ApiError) {
-    switch (error.message) {
+  const apiError = toMarketplaceApiError(error)
+  if (apiError) {
+    switch (apiError.message) {
       case `slug_taken`:
         return t(`marketplace.validation.slugTaken`)
       case `rate_limited`: {
-        const limit = typeof error.body?.limit === `number` ? error.body.limit : null
+        const limit = typeof apiError.body?.limit === `number` ? apiError.body.limit : null
         return limit != null
           ? t(`marketplace.validation.rateLimitedWithLimit`, { limit })
           : t(`marketplace.validation.rateLimited`)
@@ -68,16 +113,23 @@ export function getMarketplaceErrorMessage(error: unknown, fallbackKey = `market
       case `version_required`:
         return t(`marketplace.validation.versionRequired`)
       default:
-        if (error.message && error.message !== `Conflict` && error.message !== `Bad Request`)
-          return error.message
+        if (
+          apiError.message
+          && apiError.message !== `Conflict`
+          && apiError.message !== `Bad Request`
+          && !/^HTTP \d{3}$/.test(apiError.message)
+        ) {
+          return apiError.message
+        }
     }
   }
   return t(fallbackKey)
 }
 
 export function getMarketplaceErrorCode(error: unknown): string | null {
-  if (error instanceof ApiError && typeof error.message === `string`)
-    return error.message
+  const apiError = toMarketplaceApiError(error)
+  if (apiError && typeof apiError.message === `string` && apiError.message)
+    return apiError.message
   return null
 }
 
@@ -96,9 +148,19 @@ function toQuery(params: MarketplaceListParams = {}): string {
 }
 
 export class MarketplaceClient extends MdApiClient {
+  private async invokeDesktopBridge<T>(call: () => Promise<T>): Promise<T> {
+    try {
+      return await call()
+    }
+    catch (error) {
+      throw normalizeDesktopBridgeError(error)
+    }
+  }
+
   listThemes(params?: MarketplaceListParams): Promise<MarketplaceListResponse> {
-    if (!isAccountConfigured() && window.mdDesktop?.marketplace)
-      return window.mdDesktop.marketplace.listThemes(params)
+    const bridge = window.mdDesktop?.marketplace
+    if (!isAccountConfigured() && bridge)
+      return this.invokeDesktopBridge(() => bridge.listThemes(params))
     return this.request<MarketplaceListResponse>(`GET`, `/marketplace/themes${toQuery(params)}`)
   }
 
@@ -107,14 +169,16 @@ export class MarketplaceClient extends MdApiClient {
   }
 
   get(id: string): Promise<MarketplaceItemDetail> {
-    if (!isAccountConfigured() && window.mdDesktop?.marketplace)
-      return window.mdDesktop.marketplace.getItem(id)
+    const bridge = window.mdDesktop?.marketplace
+    if (!isAccountConfigured() && bridge)
+      return this.invokeDesktopBridge(() => bridge.getItem(id))
     return this.request<MarketplaceItemDetail>(`GET`, `/marketplace/${id}`)
   }
 
   install(id: string): Promise<MarketplaceItemDetail> {
-    if (!isAccountConfigured() && window.mdDesktop?.marketplace)
-      return window.mdDesktop.marketplace.installItem(id)
+    const bridge = window.mdDesktop?.marketplace
+    if (!isAccountConfigured() && bridge)
+      return this.invokeDesktopBridge(() => bridge.installItem(id))
     return this.request<MarketplaceItemDetail>(`POST`, `/marketplace/${id}/install`)
   }
 

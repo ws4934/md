@@ -1,6 +1,6 @@
-import type { Ref } from 'vue'
+import type { EffectScope, Ref } from 'vue'
 import type { StorageEngine } from '@/storage/engine'
-import { customRef, ref, toRaw, watch } from 'vue'
+import { customRef, effectScope, getCurrentScope, onScopeDispose, ref, toRaw, watch } from 'vue'
 import { IndexedDBEngine, LocalStorageEngine, RestfulStorageEngine } from '@/storage/engines/indexed-db'
 import { isCacheKey } from '@/storage/keys'
 import { isStorageQuotaError, warnStorageQuota } from '@/storage/quota'
@@ -9,9 +9,36 @@ import { trimCacheValue } from '@/storage/repositories/cache'
 export { IndexedDBEngine, LocalStorageEngine, RestfulStorageEngine }
 export type { StorageEngine }
 
+interface ReactiveEntry {
+  data: Ref<unknown>
+  scope: EffectScope
+  activeScopes: Set<EffectScope>
+  pinned: boolean
+  cancelTimer: () => void
+  flush: () => void
+}
+
 /** Unified storage manager. */
-class StorageManager {
+export class StorageManager {
   private engine: StorageEngine = new LocalStorageEngine()
+  private readonly rootScope = effectScope(true)
+  private readonly reactiveEntries = new Map<string, ReactiveEntry>()
+  private pagehideRegistered = false
+
+  private readonly handlePagehide = (): void => {
+    // The async engine flush may not finish before the tab is killed, so
+    // also snapshot pending writes synchronously; restored on next launch.
+    for (const entry of this.reactiveEntries.values())
+      entry.flush()
+    this.refreshPagehideBackup()
+  }
+
+  private ensurePagehideListener(): void {
+    if (this.pagehideRegistered || typeof window === `undefined`)
+      return
+    this.pagehideRegistered = true
+    window.addEventListener(`pagehide`, this.handlePagehide)
+  }
 
   setEngine(engine: StorageEngine): void {
     this.engine = engine
@@ -54,6 +81,7 @@ class StorageManager {
 
   async set(key: string, value: string): Promise<void> {
     // External writes win over any debounced reactive snapshot for the same key.
+    this.reactiveEntries.get(key)?.cancelTimer()
     this.pendingWrites.delete(key)
     return this.writeToEngine(key, value)
   }
@@ -143,6 +171,7 @@ class StorageManager {
   }
 
   async remove(key: string): Promise<void> {
+    this.reactiveEntries.get(key)?.cancelTimer()
     this.pendingWrites.delete(key)
     return this.engine.remove(key)
   }
@@ -154,6 +183,8 @@ class StorageManager {
   }
 
   async clear(): Promise<void> {
+    for (const entry of this.reactiveEntries.values())
+      entry.cancelTimer()
     this.pendingWrites.clear()
     return this.engine.clear()
   }
@@ -162,7 +193,34 @@ class StorageManager {
     return this.engine.keys()
   }
 
+  private attachCallerScope(key: string, entry: ReactiveEntry): void {
+    const callerScope = getCurrentScope()
+    if (!callerScope) {
+      entry.pinned = true
+      return
+    }
+    if (entry.activeScopes.has(callerScope))
+      return
+    entry.activeScopes.add(callerScope)
+    onScopeDispose(() => {
+      entry.activeScopes.delete(callerScope)
+      if (!entry.pinned && entry.activeScopes.size === 0 && this.reactiveEntries.get(key) === entry) {
+        entry.flush()
+        entry.scope.stop()
+        this.reactiveEntries.delete(key)
+      }
+    })
+  }
+
   reactive<T>(key: string, defaultValue: T): Ref<T> {
+    this.ensurePagehideListener()
+
+    const existing = this.reactiveEntries.get(key)
+    if (existing) {
+      this.attachCallerScope(key, existing)
+      return existing.data as Ref<T>
+    }
+
     const isStringType = typeof defaultValue === `string`
     let initialValue: T = defaultValue
 
@@ -188,6 +246,7 @@ class StorageManager {
     }
 
     const data = ref<T>(initialValue) as Ref<T>
+    let skipAsyncInitSerialized: string | null = null
 
     if (!this.supportsSyncRead() && !(this.engine instanceof LocalStorageEngine)) {
       const loadAsync = isStringType
@@ -195,42 +254,54 @@ class StorageManager {
         : this.getJSON<T>(key, defaultValue)
 
       loadAsync.then((value) => {
-        if (value !== null)
+        if (value !== null && !this.pendingWrites.has(key)) {
+          try {
+            skipAsyncInitSerialized = isStringType ? (value as string) : JSON.stringify(toRaw(value))
+          }
+          catch {
+            skipAsyncInitSerialized = null
+          }
           data.value = value
+        }
       })
     }
 
-    Promise.resolve().then(() => {
-      // Deep watchers fire on every keystroke-level mutation. Serialize eagerly
-      // into the pendingWrites overlay (so sync reads stay current), but
-      // coalesce the actual engine writes; flush on pagehide so the final state
-      // is never lost.
-      let timer: ReturnType<typeof setTimeout> | null = null
+    // Deep watchers fire on every keystroke-level mutation. Serialize eagerly
+    // into the pendingWrites overlay (so sync reads stay current), coalesce the
+    // actual engine writes, and run inside a managed EffectScope so duplicate or
+    // orphan watchers never accumulate.
+    let timer: ReturnType<typeof setTimeout> | null = null
 
-      const flush = () => {
-        if (timer) {
-          clearTimeout(timer)
-          timer = null
-        }
-        const value = this.pendingWrites.get(key)
-        if (value === undefined)
-          return
-
-        this.writeToEngine(key, value)
-          .then(() => {
-            // Drop the overlay entry only if no newer write arrived meanwhile.
-            if (this.pendingWrites.get(key) === value)
-              this.pendingWrites.delete(key)
-            // Keep any pagehide backup in sync once the engine has the data.
-            this.refreshPagehideBackup()
-          })
-          .catch((error) => {
-            if (isStorageQuotaError(error))
-              warnStorageQuota()
-            console.error(`[Storage] Failed to save reactive data:`, key, error)
-          })
+    const cancelTimer = () => {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
       }
+    }
 
+    const flush = () => {
+      cancelTimer()
+      const value = this.pendingWrites.get(key)
+      if (value === undefined)
+        return
+
+      this.writeToEngine(key, value)
+        .then(() => {
+          // Drop the overlay entry only if no newer write arrived meanwhile.
+          if (this.pendingWrites.get(key) === value)
+            this.pendingWrites.delete(key)
+          // Keep any pagehide backup in sync once the engine has the data.
+          this.refreshPagehideBackup()
+        })
+        .catch((error) => {
+          if (isStorageQuotaError(error))
+            warnStorageQuota()
+          console.error(`[Storage] Failed to save reactive data:`, key, error)
+        })
+    }
+
+    const entryScope = this.rootScope.run(() => effectScope())!
+    entryScope.run(() => {
       watch(
         data,
         () => {
@@ -238,9 +309,13 @@ class StorageManager {
             const serialized = isStringType
               ? data.value as string
               : JSON.stringify(toRaw(data.value))
+            if (skipAsyncInitSerialized !== null && serialized === skipAsyncInitSerialized) {
+              skipAsyncInitSerialized = null
+              return
+            }
+            skipAsyncInitSerialized = null
             this.pendingWrites.set(key, serialized)
-            if (timer)
-              clearTimeout(timer)
+            cancelTimer()
             timer = setTimeout(flush, 300)
           }
           catch (error) {
@@ -249,16 +324,18 @@ class StorageManager {
         },
         { deep: true },
       )
-
-      if (typeof window !== `undefined`) {
-        window.addEventListener(`pagehide`, () => {
-          // The async engine flush may not finish before the tab is killed, so
-          // also snapshot pending writes synchronously; restored on next launch.
-          flush()
-          this.refreshPagehideBackup()
-        })
-      }
     })
+
+    const entry: ReactiveEntry = {
+      data: data as Ref<unknown>,
+      scope: entryScope,
+      activeScopes: new Set(),
+      pinned: false,
+      cancelTimer,
+      flush,
+    }
+    this.reactiveEntries.set(key, entry)
+    this.attachCallerScope(key, entry)
 
     return data
   }

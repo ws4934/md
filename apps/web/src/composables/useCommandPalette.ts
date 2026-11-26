@@ -39,6 +39,7 @@ export function useCommandPalette() {
   }
 
   function buildCommands(): PaletteCommand[] {
+    const isDesktop = typeof window !== `undefined` && Boolean(window.mdDesktop?.isDesktop)
     const commands: PaletteCommand[] = [
       {
         id: `open-preferences`,
@@ -110,27 +111,31 @@ export function useCommandPalette() {
         keywords: [`样式`, `style`, `主题`, `面板`],
         action: () => { uiStore.isOpenRightSlider = !uiStore.isOpenRightSlider },
       },
-      {
-        id: `toggle-post-slider`,
-        label: t(`menu.contentManage`),
-        group: t(`commandPalette.group.panel`),
-        keywords: [`内容`, `文档`, `文章`, `posts`, `管理`],
-        action: () => { uiStore.isOpenPostSlider = !uiStore.isOpenPostSlider },
-      },
-      {
-        id: `toggle-folder-panel`,
-        label: t(`menu.localFolder`),
-        group: t(`commandPalette.group.panel`),
-        keywords: [`文件夹`, `本地`, `folder`, `local`],
-        action: () => { uiStore.isOpenFolderPanel = !uiStore.isOpenFolderPanel },
-      },
-      {
-        id: `open-css-editor`,
-        label: t(`menu.customCss`),
-        group: t(`commandPalette.group.panel`),
-        keywords: [`css`, `样式`, `自定义`],
-        action: () => { uiStore.isShowCssEditor = true },
-      },
+      ...(!isDesktop
+        ? [
+            {
+              id: `toggle-post-slider`,
+              label: t(`menu.contentManage`),
+              group: t(`commandPalette.group.panel`),
+              keywords: [`内容`, `文档`, `文章`, `posts`, `管理`],
+              action: () => { uiStore.isOpenPostSlider = !uiStore.isOpenPostSlider },
+            },
+            {
+              id: `toggle-folder-panel`,
+              label: t(`menu.localFolder`),
+              group: t(`commandPalette.group.panel`),
+              keywords: [`文件夹`, `本地`, `folder`, `local`],
+              action: () => { uiStore.isOpenFolderPanel = !uiStore.isOpenFolderPanel },
+            },
+            {
+              id: `open-css-editor`,
+              label: t(`menu.customCss`),
+              group: t(`commandPalette.group.panel`),
+              keywords: [`css`, `样式`, `自定义`],
+              action: () => { uiStore.isShowCssEditor = true },
+            },
+          ]
+        : []),
       {
         id: `import-markdown`,
         label: t(`menu.importMarkdown`),
@@ -145,19 +150,34 @@ export function useCommandPalette() {
         keywords: [`模板`, `template`],
         action: () => { uiStore.toggleShowTemplateDialog(true) },
       },
-      {
-        id: `editor-state`,
-        label: t(`menu.importExportConfig`),
-        group: t(`commandPalette.group.file`),
-        keywords: [`配置`, `导入`, `导出`, `备份`, `import`, `export`],
-        action: () => { uiStore.toggleShowEditorStateDialog(true) },
-      },
+      ...(!isDesktop
+        ? [
+            {
+              id: `editor-state`,
+              label: t(`menu.importExportConfig`),
+              group: t(`commandPalette.group.file`),
+              keywords: [`配置`, `导入`, `导出`, `备份`, `import`, `export`],
+              action: () => { uiStore.toggleShowEditorStateDialog(true) },
+            },
+          ]
+        : []),
       {
         id: `new-document`,
         label: t(`post.addPost`),
         group: t(`commandPalette.group.file`),
         keywords: [`新建`, `文档`, `内容`, `new`, `document`, `untitled`],
-        action: () => { postStore.addPost(t(`common.unnamed`)) },
+        action: () => {
+          if (isDesktop) {
+            editorStore.flushContentToPostStore()
+            postStore.addPost(t(`agent.newArticle.untitled`), null)
+            if (postStore.currentPost)
+              postStore.updatePostContent(postStore.currentPost.id, ``)
+            agentStore.syncSessionForPost(postStore.currentPostId)
+            agentStore.isNewArticleHero = true
+            return
+          }
+          postStore.addPost(t(`common.unnamed`))
+        },
       },
       {
         id: `export-markdown`,
@@ -244,7 +264,7 @@ export function useCommandPalette() {
       },
     ]
 
-    if (isAccountUiEnabled()) {
+    if (!isDesktop && isAccountUiEnabled()) {
       commands.push({
         id: `open-account`,
         label: t(`common.account`),
@@ -254,7 +274,7 @@ export function useCommandPalette() {
       })
     }
 
-    if (isSyncUiEnabled()) {
+    if (!isDesktop && isSyncUiEnabled()) {
       commands.push({
         id: `open-sync`,
         label: t(`menu.cloudSync`),
@@ -264,7 +284,7 @@ export function useCommandPalette() {
       })
     }
 
-    if (isShareUiEnabled()) {
+    if (!isDesktop && isShareUiEnabled()) {
       commands.push({
         id: `open-share`,
         label: t(`menu.sharePreview`),
@@ -274,7 +294,7 @@ export function useCommandPalette() {
       })
     }
 
-    if (typeof window !== `undefined` && window.mdDesktop?.isDesktop) {
+    if (isDesktop) {
       commands.push(
         {
           id: `toggle-desktop-sidebar`,
@@ -290,7 +310,14 @@ export function useCommandPalette() {
           group: t(`commandPalette.group.panel`),
           keywords: [`agent`, `acp`, `ai`, `面板`, `展开`, `收起`],
           shortcut: [ctrlSign, `J`],
-          action: () => { agentStore.togglePanel() },
+          action: () => {
+            if (agentStore.isNewArticleHero) {
+              agentStore.isNewArticleHero = false
+              agentStore.setPanelOpen(true)
+              return
+            }
+            agentStore.togglePanel()
+          },
         },
       )
     }

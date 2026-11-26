@@ -11,8 +11,15 @@ export function useAgentPanelHotkey() {
       return
     if (event.key.toLowerCase() !== `j`)
       return
+    if (document.querySelector(`[role="dialog"], [role="alertdialog"], [data-testid="desktop-settings-page"]`))
+      return
 
     event.preventDefault()
+    if (agentStore.isNewArticleHero) {
+      agentStore.isNewArticleHero = false
+      agentStore.setPanelOpen(true)
+      return
+    }
     agentStore.togglePanel()
   }
 

@@ -427,6 +427,21 @@
   border-bottom: 1px solid var(--dt-line);
 }
 
+.is-desktop .agent-markdown th.agent-md-align-left,
+.is-desktop .agent-markdown td.agent-md-align-left {
+  text-align: left;
+}
+
+.is-desktop .agent-markdown th.agent-md-align-center,
+.is-desktop .agent-markdown td.agent-md-align-center {
+  text-align: center;
+}
+
+.is-desktop .agent-markdown th.agent-md-align-right,
+.is-desktop .agent-markdown td.agent-md-align-right {
+  text-align: right;
+}
+
 .is-desktop .agent-markdown th {
   font-weight: 600;
   background-color: var(--dt-canvas);

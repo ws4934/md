@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { renderChatMarkdown } from './chatMarkdown'
+import { renderChatMarkdown, sanitizeChatHtml } from './chatMarkdown'
 
 describe(`renderChatMarkdown`, () => {
   it(`renders headings, bold text, lists, and inline code cleanly`, () => {
@@ -92,5 +92,53 @@ describe(`renderChatMarkdown`, () => {
     expect(html).not.toContain(`data:image/svg+xml`)
     expect(html).not.toContain(`onload`)
     expect(html).not.toContain(`href="mailto:`)
+  })
+
+  it(`emits alignment classes instead of inline style on GFM tables and keeps disabled task-list checkboxes`, () => {
+    const html = renderChatMarkdown([
+      `| Left | Center | Right | Plain |`,
+      `| :--- | :---: | ---: | --- |`,
+      `| a | b | c | d |`,
+      ``,
+      `- [ ] pending item`,
+      `- [x] completed item`,
+    ].join(`\n`))
+
+    expect(html).toContain(`<th class="agent-md-align-left">Left</th>`)
+    expect(html).toContain(`<th class="agent-md-align-center">Center</th>`)
+    expect(html).toContain(`<th class="agent-md-align-right">Right</th>`)
+    expect(html).toContain(`<th>Plain</th>`)
+    expect(html).toContain(`<td class="agent-md-align-center">b</td>`)
+    expect(html).not.toContain(`style=`)
+    const checkboxes = html.match(/<input\b[^>]*>/g) ?? []
+    expect(checkboxes).toHaveLength(2)
+    expect(checkboxes[0]).toContain(`type="checkbox"`)
+    expect(checkboxes[0]).toContain(`disabled`)
+    expect(checkboxes[1]).toContain(`type="checkbox"`)
+    expect(checkboxes[1]).toContain(`disabled`)
+    expect(checkboxes[1]).toContain(`checked`)
+  })
+
+  it(`strips style attributes and arbitrary or enabled input elements during sanitization`, () => {
+    const sanitized = sanitizeChatHtml([
+      `<p style="position:fixed;inset:0">styled</p>`,
+      `<table><tr><td style="color:red" class="agent-md-align-right">cell</td></tr></table>`,
+      `<input type="text" value="spoof" />`,
+      `<input type="password" />`,
+      `<input type="checkbox" />`,
+      `<input type="checkbox" disabled checked class="extra" data-copy-code="true" />`,
+    ].join(``))
+
+    expect(sanitized).not.toContain(`style=`)
+    expect(sanitized).toContain(`<td class="agent-md-align-right">cell</td>`)
+    expect(sanitized).not.toContain(`type="text"`)
+    expect(sanitized).not.toContain(`type="password"`)
+    expect(sanitized).not.toContain(`class="extra"`)
+    expect(sanitized).not.toContain(`data-copy-code`)
+    const inputs = sanitized.match(/<input\b[^>]*>/g) ?? []
+    expect(inputs).toHaveLength(1)
+    expect(inputs[0]).toContain(`type="checkbox"`)
+    expect(inputs[0]).toContain(`disabled`)
+    expect(inputs[0]).toContain(`checked`)
   })
 })

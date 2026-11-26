@@ -11,6 +11,8 @@ export function useDesktopSidebarHotkey() {
       return
     if (event.key !== `\\` && event.code !== `Backslash`)
       return
+    if (document.querySelector(`[role="dialog"], [role="alertdialog"], [data-testid="desktop-settings-page"]`))
+      return
 
     event.preventDefault()
     agentStore.toggleSidebar()

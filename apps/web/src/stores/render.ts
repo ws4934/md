@@ -1,8 +1,10 @@
 import type { RenderedBlock } from '@md/core/utils'
 import type { RendererAPI } from '@md/shared/types'
+import { computed, reactive, ref, shallowRef, watch } from 'vue'
 import { t } from '@/i18n/translate'
 import { resolveAssetUrl } from '@/services/emoji/urlResolver'
 import { useCustomComponentStore } from './customComponent'
+import { useEmojiPackStore } from './emojiPack'
 import { useThemeStore } from './theme'
 import { useUIStore } from './ui'
 
@@ -98,9 +100,25 @@ export const useRenderStore = defineStore(`render`, () => {
         return [
           name,
           def.updatedAt ?? 0,
+          def.inline ? `1` : `0`,
           def.template,
           JSON.stringify(def.props ?? []),
         ].join(`\u0002`)
+      })
+      .join(`\u0001`)
+  }
+
+  function buildEmojiFingerprint(
+    emojiPackStore: ReturnType<typeof useEmojiPackStore>,
+  ): string {
+    return [emojiPackStore.defaultPack, emojiPackStore.userPack]
+      .map((pack) => {
+        if (!pack)
+          return ``
+        const files = (pack.files ?? [])
+          .map(file => `${file.id}\u0003${file.name}\u0003${file.url ?? ``}`)
+          .join(`\u0002`)
+        return `${pack.id}\u0002${pack.name}\u0002${pack.updatedAt ?? 0}\u0002${files}`
       })
       .join(`\u0001`)
   }
@@ -110,6 +128,7 @@ export const useRenderStore = defineStore(`render`, () => {
     themeMode: 'light' | 'dark',
     themeStore: ReturnType<typeof useThemeStore>,
     componentStore: ReturnType<typeof useCustomComponentStore>,
+    emojiPackStore: ReturnType<typeof useEmojiPackStore>,
   ): string {
     return [
       themeMode,
@@ -119,6 +138,7 @@ export const useRenderStore = defineStore(`render`, () => {
       themeStore.isMacCodeBlock ? `1` : `0`,
       themeStore.isShowLineNumber ? `1` : `0`,
       buildComponentFingerprint(componentStore),
+      buildEmojiFingerprint(emojiPackStore),
       t(`store.count.summary`, { words: `{words}`, minutes: `{minutes}` }),
       t(`store.render.footnoteTitle`),
       t(`store.render.unknownComponent`),
@@ -132,6 +152,8 @@ export const useRenderStore = defineStore(`render`, () => {
     ].join(`\u0001`)
   }
 
+  const emojiPackStore = useEmojiPackStore()
+
   const render = (content: string, options?: RenderOptions) => {
     if (!renderer || !coreUtils) {
       pendingRender = { content, options }
@@ -142,7 +164,7 @@ export const useRenderStore = defineStore(`render`, () => {
     const uiStore = useUIStore()
     const componentStore = useCustomComponentStore()
     const themeMode = options?.themeMode ?? (uiStore.isDark ? `dark` : `light`)
-    const optionsFingerprint = buildOptionsFingerprint(themeMode, themeStore, componentStore)
+    const optionsFingerprint = buildOptionsFingerprint(themeMode, themeStore, componentStore, emojiPackStore)
     const mathReady = coreUtils.isMathJaxReady()
 
     if (
@@ -191,6 +213,20 @@ export const useRenderStore = defineStore(`render`, () => {
     lastMathReady = mathReady
     isDirty.value = false
   }
+
+  watch(
+    () => buildEmojiFingerprint(emojiPackStore),
+    () => {
+      if (!hasRendered.value)
+        return
+      const uiStore = useUIStore()
+      if (isDirty.value || uiStore.viewMode === `edit`) {
+        markDirty()
+        return
+      }
+      render(lastContent)
+    },
+  )
 
   function flushPendingRender() {
     if (!pendingRender || !renderer)

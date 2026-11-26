@@ -11,6 +11,7 @@ import {
   createPreviewUrl,
   createSlashMenuController,
   createTimelineBlockStabilizer,
+  filterSessionsForPost,
   isAllowedExternalHref,
   matchSlashCommands,
   shouldApplyUpdateCheckResult,
@@ -352,10 +353,31 @@ describe(`shouldApplyUpdateCheckResult`, () => {
   })
 })
 
+describe(`filterSessionsForPost`, () => {
+  it(`keeps only sessions belonging to the current article plus legacy sessions without a postId`, () => {
+    const sessions = [
+      { id: `s1`, postId: `post-1`, title: `Article 1` },
+      { id: `s2`, postId: `post-2`, title: `Article 2` },
+      { id: `s3`, postId: ``, title: `Unscoped` },
+    ]
+    expect(filterSessionsForPost(sessions, `post-1`).map(s => s.id)).toEqual([`s1`, `s3`])
+    expect(filterSessionsForPost(sessions, `post-2`).map(s => s.id)).toEqual([`s2`, `s3`])
+    expect(filterSessionsForPost(sessions, ``).map(s => s.id)).toEqual([`s3`])
+  })
+})
+
 describe(`agent SFC template contracts`, () => {
   it(`passes :avatar to AgentAvatar in AgentPanel rather than unsupported :letter/:color props`, () => {
     const panelSrc = fs.readFileSync(path.resolve(__dirname, `./AgentPanel.vue`), `utf8`)
     expect(panelSrc).toContain(`:avatar="selectedAgent.avatar"`)
     expect(panelSrc).not.toContain(`:letter="selectedAgent.avatar.letter"`)
+  })
+
+  it(`renders filtered articleSessions in AgentPanel history dropdown rather than all sessions`, () => {
+    const panelSrc = fs.readFileSync(path.resolve(__dirname, `./AgentPanel.vue`), `utf8`)
+    expect(panelSrc).toContain(`filterSessionsForPost(sessions.value, currentPostId.value)`)
+    expect(panelSrc).toContain(`v-if="articleSessions.length === 0"`)
+    expect(panelSrc).toContain(`v-for="s in articleSessions"`)
+    expect(panelSrc).not.toContain(`v-for="s in sessions"`)
   })
 })
