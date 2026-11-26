@@ -5,8 +5,15 @@ import { createPinia, defineStore, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computed, onScopeDispose, reactive, ref, shallowRef } from 'vue'
 
-const { postMock, uploadMock } = vi.hoisted(() => ({
+const { postMock, editorMock, uploadMock } = vi.hoisted(() => ({
   postMock: { id: `post-1`, title: `Test Post`, content: `# Test` },
+  editorMock: {
+    editor: null as unknown,
+    activePostId: null as string | null,
+    content: `# Test`,
+    flushContentToPostStore: vi.fn(),
+    applyMinimalContent: vi.fn(),
+  },
   uploadMock: vi.fn(async (file: File) => `https://cdn.test/${file.name}`),
 }))
 
@@ -47,19 +54,30 @@ vi.mock(`@/storage`, () => ({
 
 vi.mock(`@/stores/editor`, () => ({
   useEditorStore: () => ({
-    editor: null,
-    getContent: () => `# Test`,
-    applyMinimalContent: vi.fn(),
+    get editor() {
+      return editorMock.editor
+    },
+    get activePostId() {
+      return editorMock.activePostId
+    },
+    getContent: () => editorMock.content,
+    flushContentToPostStore: editorMock.flushContentToPostStore,
+    applyMinimalContent: editorMock.applyMinimalContent,
   }),
 }))
 
 vi.mock(`@/stores/post`, () => ({
   usePostStore: () => ({
-    currentPostId: `post-1`,
-    currentPost: postMock,
-    getPostById: () => postMock,
-    updatePostContent: (_id: string, content: string) => {
-      postMock.content = content
+    get currentPostId() {
+      return postMock.id
+    },
+    get currentPost() {
+      return postMock
+    },
+    getPostById: (id: string) => (id === postMock.id ? postMock : undefined),
+    updatePostContent: (id: string, content: string) => {
+      if (id === postMock.id)
+        postMock.content = content
     },
   }),
 }))
@@ -208,6 +226,7 @@ describe(`useAgentStore thinking level state`, () => {
       ai: {} as never,
       wechat: {} as never,
       updates: {} as never,
+      marketplace: {} as never,
       pickFiles: vi.fn(async () => []),
       pickImage: vi.fn(async () => null),
       openExternal: vi.fn(async () => undefined),
@@ -842,5 +861,116 @@ describe(`useAgentStore workspace image upload`, () => {
     // User removes `gpt-old` in Model API Settings and force-reprobes:
     await agentStore.probeAgent(`api-model`, true)
     expect(agentStore.selectedModel?.id).toBe(`gpt-new`)
+  })
+})
+
+describe(`useAgentStore post session isolation`, () => {
+  const originalDesktop = window.mdDesktop
+
+  afterEach(() => {
+    window.mdDesktop = originalDesktop
+    postMock.id = `post-1`
+    postMock.title = `Test Post`
+    postMock.content = `# Test`
+    editorMock.editor = null
+    editorMock.activePostId = null
+    editorMock.content = `# Test`
+    editorMock.flushContentToPostStore.mockClear()
+    editorMock.applyMinimalContent.mockClear()
+  })
+
+  it(`syncs active session to the selected post and creates a fresh session instead of reusing another post's session`, async () => {
+    setActivePinia(createPinia())
+    const startSession = vi.fn(async () => ({
+      sessionId: `acp-post-2`,
+      modelId: `sonnet`,
+      models: [],
+      thinkingLevel: null,
+      thinkingOptions: [],
+      modes: [],
+      currentModeId: null,
+      permissionLevel: `ask` as const,
+      commands: [],
+    }))
+    const prompt = vi.fn(async () => ({ stopReason: `end_turn` }))
+    const closeSession = vi.fn(async () => undefined)
+
+    window.mdDesktop = {
+      isDesktop: true,
+      platform: `darwin`,
+      acp: {
+        listAgents: vi.fn(async () => [{
+          id: `claude`,
+          name: `Claude Code`,
+          command: `claude`,
+          args: [],
+          installed: true,
+          builtin: true,
+          avatar: { letter: `C`, color: `#D97757` },
+        }]),
+        getSettings: vi.fn(async () => createDefaultAcpSettings()),
+        probeAgent: vi.fn(async () => ({
+          agentId: `claude`,
+          models: [],
+          currentModelId: null,
+          modes: [],
+          currentModeId: null,
+          commands: [],
+          probedAt: Date.now(),
+        })),
+        startSession,
+        prompt,
+        closeSession,
+        onEvent: vi.fn(() => () => {}),
+      } as unknown as DesktopAcpApi,
+    } as never
+
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+    await agentStore.init()
+
+    agentStore.sessions.push({
+      id: `sess-post-1`,
+      acpSessionId: `acp-post-1`,
+      agentId: `claude`,
+      modelId: `sonnet`,
+      postId: `post-1`,
+      title: `Post 1 Chat`,
+      items: [{ type: `user`, id: `u1`, text: `Write post 1`, timestamp: 1 }],
+      updatedAt: 100,
+    })
+    agentStore.activeSessionId = `sess-post-1`
+
+    // Switching to post-2 (no session yet) clears activeSessionId instead of showing post-1's chat.
+    agentStore.syncSessionForPost(`post-2`)
+    expect(agentStore.activeSessionId).toBeNull()
+
+    // Switching back to post-1 restores post-1's chat.
+    agentStore.syncSessionForPost(`post-1`)
+    expect(agentStore.activeSessionId).toBe(`sess-post-1`)
+
+    // Even if activeSession still points to post-1 when sending a prompt for post-2,
+    // sendPrompt must create a new session for post-2 and ignore a stale editor bound to post-1.
+    postMock.id = `post-2`
+    postMock.title = `Untitled`
+    postMock.content = ``
+    editorMock.editor = { stale: true }
+    editorMock.activePostId = `post-1`
+    editorMock.content = `# Old Post 1 Content`
+
+    await agentStore.sendPrompt(`Draft post 2`)
+
+    expect(closeSession).not.toHaveBeenCalled()
+    expect(startSession).toHaveBeenCalledWith(expect.objectContaining({
+      postId: `post-2`,
+      postTitle: `Untitled`,
+      content: ``,
+    }))
+    expect(prompt).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: `acp-post-2`,
+      content: ``,
+    }))
+    expect(agentStore.activeSession?.postId).toBe(`post-2`)
+    expect(agentStore.activeSession?.id).not.toBe(`sess-post-1`)
   })
 })

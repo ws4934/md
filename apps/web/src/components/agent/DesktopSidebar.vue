@@ -11,11 +11,13 @@ import {
 import { formatRelativeTime } from '@/lib/format/relative-time'
 import { useAgentStore } from '@/stores/agent'
 import { useConfirmStore } from '@/stores/confirm'
+import { useEditorStore } from '@/stores/editor'
 import { usePostStore } from '@/stores/post'
 import { useUIStore } from '@/stores/ui'
 
 const { t, locale } = useI18n()
 const postStore = usePostStore()
+const editorStore = useEditorStore()
 const uiStore = useUIStore()
 const agentStore = useAgentStore()
 const confirmStore = useConfirmStore()
@@ -42,14 +44,18 @@ const renamingId = ref<string | null>(null)
 const renameDraft = ref(``)
 
 function createNewArticle() {
+  editorStore.flushContentToPostStore()
   postStore.addPost(t(`agent.newArticle.untitled`), null)
   if (postStore.currentPost)
     postStore.updatePostContent(postStore.currentPost.id, ``)
+  agentStore.syncSessionForPost(postStore.currentPostId)
   agentStore.isNewArticleHero = true
 }
 
 function selectPost(post: Post) {
+  editorStore.flushContentToPostStore()
   postStore.currentPostId = post.id
+  agentStore.syncSessionForPost(post.id)
   agentStore.isNewArticleHero = false
 }
 
@@ -75,6 +81,8 @@ function deletePost(post: Post) {
       postStore.delPost(post.id)
       if (posts.value.length === 0)
         createNewArticle()
+      else
+        agentStore.syncSessionForPost(postStore.currentPostId)
     },
   })
 }

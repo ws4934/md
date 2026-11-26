@@ -224,6 +224,7 @@ declare global {
   const useDropZone: typeof import('@vueuse/core').useDropZone
   const useEditorDocumentActions: typeof import('./src/composables/useEditorDocumentActions').useEditorDocumentActions
   const useEditorFormat: typeof import('./src/composables/useEditorFormat').useEditorFormat
+  const useEditorPostSync: typeof import('./src/composables/useEditorPostSync').useEditorPostSync
   const useEditorRefresh: typeof import('./src/composables/useEditorRefresh').useEditorRefresh
   const useEditorStore: typeof import('./src/stores/editor').useEditorStore
   const useElementBounding: typeof import('@vueuse/core').useElementBounding
@@ -436,6 +437,9 @@ declare global {
   // @ts-ignore
   export type { PaletteCommand } from './src/composables/useCommandPalette'
   import('./src/composables/useCommandPalette')
+  // @ts-ignore
+  export type { EditorPostSyncOptions } from './src/composables/useEditorPostSync'
+  import('./src/composables/useEditorPostSync')
   // @ts-ignore
   export type { UploadHostValue } from './src/composables/useLocalizedUploadHosts'
   import('./src/composables/useLocalizedUploadHosts')

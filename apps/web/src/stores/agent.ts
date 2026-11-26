@@ -38,7 +38,16 @@ import { usePostStore } from '@/stores/post'
 
 export type AgentTimelineItem
   = | { type: `user`, id: string, text: string, attachments?: string[], timestamp: number }
-    | { type: `assistant`, id: string, text: string, thought?: string, streaming?: boolean, timestamp: number }
+    | {
+      type: `assistant`
+      id: string
+      text: string
+      thought?: string
+      thoughtStartedAt?: number
+      thoughtDurationMs?: number
+      streaming?: boolean
+      timestamp: number
+    }
     | { type: `plan`, id: string, entries: AcpPlanEntry[], timestamp: number }
     | { type: `tool_call`, id: string, tool: AcpToolCallItem, timestamp: number }
     | {
@@ -365,13 +374,43 @@ export const useAgentStore = defineStore(`agent`, () => {
     return sessions.value.find(s => s.acpSessionId === acpSessionId)
   }
 
+  function isEditorBoundToPost(postId: string): boolean {
+    if (!editorStore.editor)
+      return false
+    return !editorStore.activePostId || editorStore.activePostId === postId
+  }
+
+  function findLatestSessionForPost(postId: string): AgentConversationSession | null {
+    if (!postId)
+      return null
+    let best: AgentConversationSession | null = null
+    for (const s of sessions.value) {
+      if (s.postId !== postId)
+        continue
+      if (!best) {
+        best = s
+        continue
+      }
+      const bestLive = Boolean(best.acpSessionId)
+      const curLive = Boolean(s.acpSessionId)
+      if (curLive !== bestLive) {
+        if (curLive)
+          best = s
+        continue
+      }
+      if (s.updatedAt > best.updatedAt)
+        best = s
+    }
+    return best
+  }
+
   /**
    * Dispatches into CodeMirror BEFORE updating postStore so EditorPanel's content
    * watcher sees an already-matching document and does not reset undo history.
    * Uses minimal changed range to preserve selection, scroll, and incremental parse state.
    */
   function applySyncedArticleContent(postId: string, content: string): void {
-    if (postStore.currentPostId === postId && editorStore.editor) {
+    if (postStore.currentPostId === postId && isEditorBoundToPost(postId)) {
       if (editorStore.getContent() !== content)
         editorStore.applyMinimalContent(content)
     }
@@ -452,7 +491,7 @@ export const useAgentStore = defineStore(`agent`, () => {
     if (urls.size === 0)
       return
     // Rewrite whatever the post holds now so edits made during the upload are kept.
-    const current = postStore.currentPostId === postId && editorStore.editor
+    const current = postStore.currentPostId === postId && isEditorBoundToPost(postId)
       ? editorStore.getContent()
       : postStore.getPostById(postId)?.content
     if (current !== undefined)
@@ -471,14 +510,43 @@ export const useAgentStore = defineStore(`agent`, () => {
   const pendingChunks = new Map<string, { text: string, thought: string }>()
   let chunkFlushHandle = 0
 
+  function finalizeAssistantThought(item: AgentTimelineItem | undefined): void {
+    if (item?.type !== `assistant`)
+      return
+    if (item.thoughtStartedAt !== undefined && item.thoughtDurationMs === undefined)
+      item.thoughtDurationMs = Math.max(0, Date.now() - item.thoughtStartedAt)
+  }
+
   function applyChunkDelta(sessionId: string, textDelta: string, thoughtDelta: string): void {
     const session = findSessionByAcpId(sessionId)
     if (!session)
       return
 
+    if (thoughtDelta) {
+      const last = session.items[session.items.length - 1]
+      if (last?.type === `assistant` && last.streaming) {
+        last.thoughtStartedAt ??= Date.now()
+        last.thought = (last.thought ?? ``) + thoughtDelta
+      }
+      else {
+        const now = Date.now()
+        session.items.push({
+          type: `assistant`,
+          id: uuidv4(),
+          text: ``,
+          thought: thoughtDelta,
+          thoughtStartedAt: now,
+          streaming: true,
+          timestamp: now,
+        })
+        trimLiveItems(session)
+      }
+    }
+
     if (textDelta) {
       const last = session.items[session.items.length - 1]
       if (last?.type === `assistant` && last.streaming) {
+        finalizeAssistantThought(last)
         last.text += textDelta
       }
       else {
@@ -486,24 +554,6 @@ export const useAgentStore = defineStore(`agent`, () => {
           type: `assistant`,
           id: uuidv4(),
           text: textDelta,
-          streaming: true,
-          timestamp: Date.now(),
-        })
-        trimLiveItems(session)
-      }
-    }
-
-    if (thoughtDelta) {
-      const last = session.items[session.items.length - 1]
-      if (last?.type === `assistant` && last.streaming) {
-        last.thought = (last.thought ?? ``) + thoughtDelta
-      }
-      else {
-        session.items.push({
-          type: `assistant`,
-          id: uuidv4(),
-          text: ``,
-          thought: thoughtDelta,
           streaming: true,
           timestamp: Date.now(),
         })
@@ -602,8 +652,10 @@ export const useAgentStore = defineStore(`agent`, () => {
         const session = findSessionByAcpId(event.sessionId)
         if (session) {
           const last = session.items[session.items.length - 1]
-          if (last?.type === `assistant`)
+          if (last?.type === `assistant`) {
+            finalizeAssistantThought(last)
             last.streaming = false
+          }
           session.updatedAt = Date.now()
           void persistSessions()
         }
@@ -616,8 +668,10 @@ export const useAgentStore = defineStore(`agent`, () => {
         const session = findSessionByAcpId(event.sessionId)
         if (session) {
           const last = session.items[session.items.length - 1]
-          if (last?.type === `assistant`)
+          if (last?.type === `assistant`) {
+            finalizeAssistantThought(last)
             last.streaming = false
+          }
           session.items.push({
             type: `error`,
             id: uuidv4(),
@@ -644,8 +698,10 @@ export const useAgentStore = defineStore(`agent`, () => {
           }
         }
         const last = session.items[session.items.length - 1]
-        if (last?.type === `assistant`)
+        if (last?.type === `assistant`) {
+          finalizeAssistantThought(last)
           last.streaming = false
+        }
         session.items.push({
           type: `plan`,
           id: uuidv4(),
@@ -682,8 +738,10 @@ export const useAgentStore = defineStore(`agent`, () => {
         if (!session)
           return
         const last = session.items[session.items.length - 1]
-        if (last?.type === `assistant`)
+        if (last?.type === `assistant`) {
+          finalizeAssistantThought(last)
           last.streaming = false
+        }
         session.items.push({
           type: `permission`,
           id: event.request.requestId,
@@ -806,8 +864,11 @@ export const useAgentStore = defineStore(`agent`, () => {
     selectedModelByAgent.value = { ...loadedSettings.lastModelByAgent }
     selectedThinkingLevelByAgent.value = { ...(loadedSettings.lastThinkingLevelByAgent ?? {}) }
     sessions.value = savedSessions
-    if (savedSessions.length > 0)
-      activeSessionId.value = savedSessions[0].id
+    if (savedSessions.length > 0) {
+      const currentId = postStore.currentPostId
+      const matched = currentId ? findLatestSessionForPost(currentId) : savedSessions[0]
+      activeSessionId.value = matched?.id ?? null
+    }
 
     ensureValidSelectedAgent()
 
@@ -1242,6 +1303,20 @@ export const useAgentStore = defineStore(`agent`, () => {
       void probeAgent(agent.id)
   }
 
+  function syncSessionForPost(postId: string): void {
+    if (!postId) {
+      activeSessionId.value = null
+      return
+    }
+    if (activeSession.value?.postId === postId)
+      return
+    const matched = findLatestSessionForPost(postId)
+    if (matched)
+      void switchSession(matched.id)
+    else
+      activeSessionId.value = null
+  }
+
   async function deleteSession(id: string): Promise<void> {
     const target = sessions.value.find(s => s.id === id)
     if (target?.acpSessionId && window.mdDesktop?.acp)
@@ -1267,14 +1342,18 @@ export const useAgentStore = defineStore(`agent`, () => {
     isNewArticleHero.value = false
     isPanelOpen.value = true
 
+    editorStore.flushContentToPostStore?.()
     const post = postStore.currentPost
     const postId = post?.id ?? ``
     const postTitle = post?.title ?? t(`agent.newArticle.untitled`)
-    const content = editorStore.editor ? editorStore.getContent() : (post?.content ?? ``)
+    const content = isEditorBoundToPost(postId) ? editorStore.getContent() : (post?.content ?? ``)
 
     let session = activeSession.value
-    if (!session || (session.acpSessionId && session.agentId !== agent.id)) {
-      if (session?.acpSessionId && session.agentId !== agent.id) {
+    const sessionForOtherPost = Boolean(
+      session && session.items.length > 0 && session.postId && postId && session.postId !== postId,
+    )
+    if (!session || sessionForOtherPost || (session.acpSessionId && session.agentId !== agent.id)) {
+      if (!sessionForOtherPost && session?.acpSessionId && session.agentId !== agent.id) {
         const staleSessionId = session.acpSessionId
         session.acpSessionId = null
         void window.mdDesktop.acp.closeSession(staleSessionId).catch(() => undefined)
@@ -1525,6 +1604,7 @@ export const useAgentStore = defineStore(`agent`, () => {
     setSessionPermissionMode,
     startNewSession,
     switchSession,
+    syncSessionForPost,
     deleteSession,
     sendPrompt,
     stopTurn,

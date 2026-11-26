@@ -4,6 +4,8 @@ import { t } from '@/i18n/translate'
 /** CodeMirror editor instance and basic document operations. */
 export const useEditorStore = defineStore(`editor`, () => {
   const editor = shallowRef<EditorView | null>(null)
+  /** Post ID whose document is currently loaded inside `editor`. */
+  const activePostId = ref<string | null>(null)
 
   let flushPendingContent: (() => void) | null = null
 
@@ -11,8 +13,9 @@ export const useEditorStore = defineStore(`editor`, () => {
     flushPendingContent = fn
   }
 
-  function unregisterContentFlush() {
-    flushPendingContent = null
+  function unregisterContentFlush(fn?: () => void) {
+    if (!fn || flushPendingContent === fn)
+      flushPendingContent = null
   }
 
   /** Sync debounced editor content to post store (call before page refresh). */
@@ -155,6 +158,7 @@ export const useEditorStore = defineStore(`editor`, () => {
 
   return {
     editor,
+    activePostId,
     registerContentFlush,
     unregisterContentFlush,
     flushContentToPostStore,

@@ -5,6 +5,7 @@ import { EditorView, keymap, placeholder } from '@codemirror/view'
 import { history, markdownSetup, replaceDocumentWithoutHistory, resetEditorHistory, theme } from '@md/shared/editor'
 import { toBase64 } from '@md/shared/utils/fileHelpers'
 import { createComponentCompletionExtension } from '@/composables/useComponentCompletion'
+import { useEditorPostSync } from '@/composables/useEditorPostSync'
 import { useEditorRefresh } from '@/composables/useEditorRefresh'
 import { useImageUploader } from '@/composables/useImageUploader'
 import { completeInitialPreviewBoot } from '@/composables/useInitialPreviewBoot'
@@ -65,7 +66,7 @@ function onWrapperContextMenuCapture(e: MouseEvent) {
 
 const { editor } = storeToRefs(editorStore)
 const { isDark, showAIToolbox } = storeToRefs(uiStore)
-const { posts, currentPostIndex, currentPost } = storeToRefs(postStore)
+const { currentPostId, currentPost } = storeToRefs(postStore)
 const {
   isMobile,
   enableImageReupload,
@@ -85,7 +86,6 @@ const historyCompartment = new Compartment()
 function editorPlaceholder() {
   return placeholder(t(`codemirror.contentPlaceholder`))
 }
-const persistTimer = ref<ReturnType<typeof setTimeout>>()
 
 const editorRef = useTemplateRef<HTMLDivElement>(`editorRef`)
 const codeMirrorWrapper = useTemplateRef<HTMLDivElement>(`codeMirrorWrapper`)
@@ -455,10 +455,73 @@ function createPasteHandler() {
   }
 }
 
+// --- Post sync & lifecycle helpers ---
+function handleMathJaxReady() {
+  editorRefresh({ force: uiStore.viewMode !== `edit` })
+}
+
+async function preloadMathJaxIfNeeded(content: string) {
+  if (!contentHasMath(content))
+    return
+
+  try {
+    await loadMathJax()
+  }
+  catch (error) {
+    console.error(error)
+  }
+}
+
+let postSwitchGeneration = 0
+let isUnmounted = false
+
+function syncEditorToPostContent(content: string, options: { isPostSwitch: boolean }) {
+  const view = codeMirrorView.value
+  if (!view)
+    return
+
+  const currentContent = view.state.doc.toString()
+  if (currentContent === content) {
+    if (options.isPostSwitch) {
+      resetEditorHistory(view, historyCompartment)
+      editorRefresh()
+    }
+    return
+  }
+
+  const generation = ++postSwitchGeneration
+  replaceDocumentWithoutHistory(view, content)
+  resetEditorHistory(view, historyCompartment)
+  void preloadMathJaxIfNeeded(content).then(() => {
+    if (isUnmounted || generation !== postSwitchGeneration)
+      return
+    editorRefresh()
+  })
+}
+
+const {
+  isSyncingFromStore,
+  bindLoadedPost,
+  unbindLoadedPost,
+  flushLoadedPostContent,
+  schedulePersist,
+} = useEditorPostSync({
+  currentPostId,
+  currentPost,
+  getPostById: id => postStore.getPostById(id),
+  hasEditor: () => Boolean(codeMirrorView.value),
+  getEditorContent: () => codeMirrorView.value?.state.doc.toString() ?? ``,
+  applyContentToEditor: syncEditorToPostContent,
+  onActivePostChange: (postId) => {
+    if (postId !== null || editor.value === codeMirrorView.value)
+      editorStore.activePostId = postId
+  },
+})
+
 // --- CodeMirror creation ---
-function createFormTextArea(dom: HTMLDivElement) {
+function createFormTextArea(dom: HTMLDivElement, initialDoc: string) {
   const state = EditorState.create({
-    doc: posts.value[currentPostIndex.value].content,
+    doc: initialDoc,
     extensions: [
       markdownSetup({
         onSearch: openSearchWithSelection,
@@ -474,12 +537,9 @@ function createFormTextArea(dom: HTMLDivElement) {
       placeholderCompartment.of(editorPlaceholder()),
       themeCompartment.of(theme(isDark.value)),
       EditorView.updateListener.of((update) => {
-        if (update.docChanged) {
+        if (update.docChanged && !isSyncingFromStore()) {
           scheduleEditorRefresh()
-          clearTimeout(persistTimer.value)
-          persistTimer.value = setTimeout(() => {
-            commitEditorContentToPost()
-          }, 300)
+          schedulePersist()
         }
       }),
       EditorView.domEventHandlers({
@@ -499,44 +559,6 @@ function createFormTextArea(dom: HTMLDivElement) {
   return view
 }
 
-// --- Lifecycle ---
-function handleMathJaxReady() {
-  editorRefresh({ force: uiStore.viewMode !== `edit` })
-}
-
-async function preloadMathJaxIfNeeded(content: string) {
-  if (!contentHasMath(content))
-    return
-
-  try {
-    await loadMathJax()
-  }
-  catch (error) {
-    console.error(error)
-  }
-}
-
-let postSwitchGeneration = 0
-
-function flushEditorContentToPostAtIndex(index: number) {
-  clearTimeout(persistTimer.value)
-  persistTimer.value = undefined
-  if (!codeMirrorView.value || index < 0)
-    return
-
-  const value = codeMirrorView.value.state.doc.toString()
-  const post = posts.value[index]
-  if (!post || value === post.content)
-    return
-
-  post.updateDatetime = new Date()
-  post.content = value
-}
-
-function commitEditorContentToPost() {
-  flushEditorContentToPostAtIndex(currentPostIndex.value)
-}
-
 onMounted(() => {
   const editorDom = editorRef.value
   if (editorDom == null) {
@@ -553,15 +575,24 @@ onMounted(() => {
         isMacCodeBlock: themeStore.isMacCodeBlock,
         isShowLineNumber: themeStore.isShowLineNumber,
       })
+      if (isUnmounted)
+        return
       themeStore.applyCurrentTheme()
       await nextTick()
+      if (isUnmounted)
+        return
 
-      const editorView = createFormTextArea(editorDom)
+      const initialPost = currentPost.value
+      const initialContent = initialPost?.content ?? ``
+      const mountGeneration = ++postSwitchGeneration
+      const editorView = createFormTextArea(editorDom, initialContent)
       editor.value = editorView
-      editorStore.registerContentFlush(commitEditorContentToPost)
+      bindLoadedPost(initialPost?.id ?? null)
+      editorStore.registerContentFlush(flushLoadedPostContent)
 
-      const content = posts.value[currentPostIndex.value]?.content ?? ``
-      await preloadMathJaxIfNeeded(content)
+      await preloadMathJaxIfNeeded(initialContent)
+      if (isUnmounted || mountGeneration !== postSwitchGeneration)
+        return
 
       editorRefresh()
       mdLocalToRemote()
@@ -593,70 +624,42 @@ watch(locale, () => {
   editorRefresh()
 })
 
-function syncEditorToPostContent(content: string) {
-  const view = codeMirrorView.value
-  if (!view)
-    return
-
-  const currentContent = view.state.doc.toString()
-  if (currentContent === content)
-    return
-
-  const generation = ++postSwitchGeneration
-  replaceDocumentWithoutHistory(view, content)
-  resetEditorHistory(view, historyCompartment)
-  void preloadMathJaxIfNeeded(content).then(() => {
-    if (generation !== postSwitchGeneration)
-      return
-    editorRefresh()
-  })
-}
-
-watch(currentPostIndex, (newIndex, oldIndex) => {
-  if (oldIndex !== undefined && oldIndex >= 0)
-    flushEditorContentToPostAtIndex(oldIndex)
-
-  const post = posts.value[newIndex]
-  if (!post)
-    return
-  syncEditorToPostContent(post.content)
-})
-
-/** Refresh editor when posts change externally (e.g. cloud sync) even if index is unchanged */
-watch(
-  () => currentPost.value?.content,
-  (content) => {
-    if (content == null)
-      return
-    syncEditorToPostContent(content)
-  },
-)
-
-const historyTimer = ref<ReturnType<typeof setTimeout>>()
+const historyTimer = ref<ReturnType<typeof setInterval>>()
 onMounted(() => {
   historyTimer.value = setInterval(() => {
-    const currentPost = posts.value[currentPostIndex.value]
+    const post = currentPost.value
+    if (!post)
+      return
 
-    const pre = (currentPost.history || [])[0]?.content
-    if (pre === currentPost.content) {
+    const pre = (post.history || [])[0]?.content
+    if (pre === post.content) {
       return
     }
 
-    currentPost.history ??= []
-    currentPost.history.unshift({
-      content: currentPost.content,
+    post.history ??= []
+    post.history.unshift({
+      content: post.content,
       datetime: toStoredDateTime(),
     })
 
-    currentPost.history.length = Math.min(currentPost.history.length, 10)
+    post.history.length = Math.min(post.history.length, 10)
   }, 30 * 1000)
 })
 
 onUnmounted(() => {
-  editorStore.unregisterContentFlush()
+  isUnmounted = true
+  flushLoadedPostContent()
+  const view = codeMirrorView.value
+  unbindLoadedPost()
+  codeMirrorView.value = null
+  if (editor.value === view) {
+    editor.value = null
+    editorStore.activePostId = null
+  }
+  view?.destroy()
+  editorStore.unregisterContentFlush(flushLoadedPostContent)
   window.removeEventListener(MATHJAX_READY_EVENT, handleMathJaxReady)
-  clearTimeout(historyTimer.value)
-  clearTimeout(persistTimer.value)
+  clearInterval(historyTimer.value)
   document.removeEventListener(`keydown`, handleGlobalKeydown, { capture: false })
 })
 
