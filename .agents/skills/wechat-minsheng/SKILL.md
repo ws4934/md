@@ -1,10 +1,11 @@
 ---
 name: wechat-minsheng
 description: >-
-  Topic ideation and drafting for WeChat 公众号「民生写实」articles about
-  ordinary people's lives (money, marriage, jobs, kids, elder care, family).
-  Use when the user asks for 民生 / 写实 / 爆款选题 / 公众号文章 / 10W+
-  topics, or a draft following the 6-step framework.
+  Topic ideation, drafting, and cover / illustration style for WeChat
+  公众号「民生写实」articles about ordinary people's lives (money, marriage,
+  jobs, kids, elder care, family). Use when the user asks for 民生 / 写实 /
+  爆款选题 / 公众号文章 / 10W+ topics, a draft following the 6-step framework,
+  or 封面 / 配图 / 插图 for such an article.
 ---
 
 # 公众号「民生写实」写作 Skill
@@ -15,6 +16,7 @@ description: >-
 
 - 找民生写实类选题，或把一个大话题拆成多篇
 - 按 6 步框架写公众号文章
+- 给文章配封面图和插图
 
 ## 赛道要点
 
@@ -55,6 +57,39 @@ description: >-
    - 可以让评论区热闹，但内容不能恶意制造矛盾冲突。要让用户觉得"你说得狠，说得还真是那么回事"
    - 抄需求，不抄答案：别看到同行标题爆了就换几个词反复发同一个选题，长期会导致账号模板化、被「低质限流」
 6. **结尾总结 + 留一个问题钩子**：简单收尾，抛一个低门槛、有代入感的问题。例："你身边有没有这样的人？""你觉得一个家庭存多少钱，才算真正有安全感？"
+
+## 配图风格
+
+封面和文中插图统一用手绘扁平插画：一个人物或动物占满画面，用表情和动作把标题里的处境演出来。
+
+- **画风**：手绘卡通，深色描边粗且略带抖动，色块平涂，带一点蜡笔或颗粒纸的质感；造型圆钝简化，像绘本或报刊漫画
+- **配色**：颜色少而饱和，芥末黄、橘色、草绿、砖红为主；背景是一整块纯色，或者干脆留白
+- **主体**：只画一个主角（人、动物或物件），居中，占画面大半
+- **情绪**：无奈、躺平、累、发呆，带点自嘲和幽默，不苦大仇深
+- **不放字**：标题在图下方，画面里不出现文字和数字
+
+先找标题里的情绪，再挑一个日常场景把它演出来：
+
+| 标题                                 | 画面                                                         |
+| ------------------------------------ | ------------------------------------------------------------ |
+| 《亏掉 20 万太容易了》               | 穿橘色毛衣的胖男人托着腮，眼睛半睁，一脸认命，米色背景       |
+| 《家庭存款的十个等级，你到哪一级了》 | 白猫瘫在绿沙发上，肚皮上搁着手机，旁边一包薯片、一杯柠檬水   |
+| 《钱，难挣到什么程度了》             | 白色长脖子的鸭子垂着头，橘色的嘴耷拉着，芥末黄背景           |
+| 《新型返贫三件套，一件都不沾》       | 一辆红色小汽车里挤满了小动物，白底                           |
+
+规格：封面横版 2.35:1（如 900×383），主体放中间，转发时裁成 1:1 缩略图也能看清；文中插图用 4:3 或 1:1，风格与封面一致。
+
+生图提示词模板（`{}` 处换成画面描述）：
+
+```text
+Flat hand-drawn cartoon illustration for a WeChat article cover, wide 2.35:1 composition.
+Subject: {one character and what it is doing, e.g. a chubby man in an orange sweater resting his cheek on his hand, half-closed resigned eyes}.
+Style: thick, slightly wobbly dark outlines, flat color fills with subtle crayon and grainy paper texture, simple rounded shapes, picture-book editorial cartoon, humorous and relatable mood.
+Palette: a few saturated colors such as mustard yellow, orange, grass green and brick red, on a single solid-color background.
+The subject is centered and fills most of the frame, leaving room for a square crop. No text, letters, numbers or watermark.
+```
+
+描述画风特征即可，不点名具体画师，也不照搬参考图里的角色。
 
 ## AI 辅助工作流
 
