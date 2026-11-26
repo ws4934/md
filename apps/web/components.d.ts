@@ -134,6 +134,7 @@ declare module 'vue' {
     ImportMarkdownDialog: typeof import('./src/components/editor/dialogs/ImportMarkdownDialog.vue')['default']
     Input: typeof import('./src/components/ui/input/Input.vue')['default']
     InsertDropdown: typeof import('./src/components/editor/editor-header/InsertDropdown.vue')['default']
+    IpCharacterSettings: typeof import('./src/components/agent/IpCharacterSettings.vue')['default']
     KeyboardShortcutsDialog: typeof import('./src/components/editor/editor-header/KeyboardShortcutsDialog.vue')['default']
     Label: typeof import('./src/components/ui/label/Label.vue')['default']
     LocalImageUploadDialog: typeof import('./src/components/editor/dialogs/LocalImageUploadDialog.vue')['default']

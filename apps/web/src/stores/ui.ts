@@ -3,7 +3,7 @@ import { DEFAULT_PDF_EXPORT_OPTIONS, normalizePdfExportOptions } from '@/service
 import { store } from '@/storage'
 import { addPrefix } from '@/storage/prefix'
 
-export type PreferencesTab = `general` | `editor` | `preview` | `images` | `wechat` | `agents` | `modelApi` | `imageGen` | `about`
+export type PreferencesTab = `general` | `editor` | `preview` | `images` | `wechat` | `agents` | `modelApi` | `imageGen` | `ipCharacters` | `about`
 
 /** Global UI state: dark mode, sidebars, dialogs, view mode, etc. */
 export const useUIStore = defineStore(`ui`, () => {
