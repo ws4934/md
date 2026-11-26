@@ -25,7 +25,6 @@ export const BUILTIN_AGENTS: AcpAgentConfig[] = [
     detectBinaries: [`claude-code-acp`, `claude-agent-acp`, `claude`],
     builtin: true,
     avatar: { letter: `C`, color: `#D97757` },
-    readsWorkspaceInstructions: true,
   },
   {
     id: `codex`,
@@ -36,7 +35,6 @@ export const BUILTIN_AGENTS: AcpAgentConfig[] = [
     detectBinaries: [`codex-acp`, `codex`],
     builtin: true,
     avatar: { letter: `X`, color: `#3A3A38` },
-    readsWorkspaceInstructions: true,
   },
   {
     id: `gemini`,
@@ -77,7 +75,6 @@ export const BUILTIN_AGENTS: AcpAgentConfig[] = [
     detectBinaries: [`agy`],
     builtin: true,
     avatar: { letter: `A`, color: `#0F9D8A` },
-    readsWorkspaceInstructions: true,
   },
 ]
 

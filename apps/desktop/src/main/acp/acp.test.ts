@@ -1646,141 +1646,130 @@ describe(`buildPromptText`, () => {
   })
 })
 
-describe(`bundled skills`, () => {
-  it(`installs bundled skills into session workspaces and the probe cwd`, async () => {
-    const dataDir = await makeTempDir(`md-acp-skills-`)
-    const skillsDir = await makeTempDir(`md-acp-skills-src-`)
-    await fs.mkdir(path.join(skillsDir, `demo-skill`))
-    await fs.writeFile(path.join(skillsDir, `demo-skill`, `SKILL.md`), `---\nname: demo-skill\n---\n`)
-    // A skill left in the probe cwd by an older bundle must not resurface.
-    await fs.mkdir(path.join(dataDir, `acp-probe-workspace`, `.claude/skills/removed-skill`), { recursive: true })
-    const host = new AcpHost({
-      dataDir,
-      skillsDir,
-      extraBuiltinAgents: [{
-        id: `fake-skills`,
-        name: `Fake Skills`,
-        command: process.execPath,
-        args: [FAKE_AGENT_SCRIPT],
-        // Announce after the 600ms quiet window to cover slow first announcements.
-        env: { FAKE_AGENT_EMIT_COMMANDS: `1`, FAKE_AGENT_COMMANDS_DELAY_MS: `900` },
-        detectBinaries: [process.execPath],
-        builtin: true,
-        avatar: { letter: `S`, color: `#5B5BD6` },
-      }],
-    })
-    openHosts.push(host)
-
-    const probe = await host.probeAgent(`fake-skills`)
-    expect(probe.commands.map(c => c.name)).toEqual([`outline`, `polish`, `demo-skill`])
-
-    await host.startSession({ agentId: `fake-skills`, postId: `p`, postTitle: `T`, content: `` })
-    const [workspaceId] = await fs.readdir(path.join(dataDir, `acp-workspaces`))
-    const workspaceDir = path.join(dataDir, `acp-workspaces`, workspaceId)
-    for (const dir of [`.claude/skills`, `.agents/skills`, `.qwen/skills`])
-      expect(await fs.readFile(path.join(workspaceDir, dir, `demo-skill`, `SKILL.md`), `utf8`)).toContain(`name: demo-skill`)
-  })
-
-  it(`probes in its own workspace even when the skills bundle is missing`, async () => {
-    const dataDir = await makeTempDir(`md-acp-skills-missing-`)
-    const host = new AcpHost({
-      dataDir,
-      skillsDir: path.join(dataDir, `missing-skills`),
-      extraBuiltinAgents: [{
-        id: `fake-skills`,
-        name: `Fake Skills`,
-        command: process.execPath,
-        args: [FAKE_AGENT_SCRIPT],
-        env: { FAKE_AGENT_EMIT_COMMANDS: `1` },
-        detectBinaries: [process.execPath],
-        builtin: true,
-        avatar: { letter: `S`, color: `#5B5BD6` },
-      }],
-    })
-    openHosts.push(host)
-
-    // Falling back to the home directory would pick up the user's own `~/.claude/skills`.
-    const probe = await host.probeAgent(`fake-skills`)
-    expect(probe.commands.map(c => c.name)).toEqual([`outline`, `polish`])
-  })
-})
-
-describe(`workspace instructions`, () => {
-  function fakeAgent(id: string, promptsPath: string, readsWorkspaceInstructions?: boolean): AcpAgentConfig {
+describe(`skills in agent workspaces`, () => {
+  function fakeAgent(id: string, env: Record<string, string>): AcpAgentConfig {
     return {
       id,
       name: id,
       command: process.execPath,
       args: [FAKE_AGENT_SCRIPT],
-      env: { FAKE_AGENT_RECORD_PROMPTS: promptsPath, FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0` },
+      env: { FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0`, ...env },
       detectBinaries: [process.execPath],
       builtin: true,
       avatar: { letter: `F`, color: `#5B5BD6` },
-      readsWorkspaceInstructions,
     }
   }
 
-  async function readPrompts(promptsPath: string): Promise<string[]> {
-    return (await fs.readFile(promptsPath, `utf8`)).trim().split(`\n`).map(line => JSON.parse(line) as string)
+  async function readPrompts(promptsPath: string): Promise<string[][]> {
+    return (await fs.readFile(promptsPath, `utf8`)).trim().split(`\n`).map(line => JSON.parse(line) as string[])
   }
 
-  it(`writes context and rules to CLAUDE.md / AGENTS.md and sends prompts verbatim to agents that load them`, async () => {
-    const dataDir = await makeTempDir(`md-acp-instructions-`)
-    const promptsPath = path.join(dataDir, `prompts.jsonl`)
+  async function waitFor(condition: () => boolean, timeoutMs = 3_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (!condition()) {
+      if (Date.now() > deadline)
+        throw new Error(`waitFor timed out`)
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+  }
+
+  async function makeSkillsDir(): Promise<string> {
+    const skillsDir = await makeTempDir(`md-acp-skills-src-`)
+    await fs.mkdir(path.join(skillsDir, `demo-skill`))
+    await fs.writeFile(path.join(skillsDir, `demo-skill`, `SKILL.md`), `---\nname: demo-skill\n---\n`)
+    return skillsDir
+  }
+
+  it(`installs the format skill and bundled skills for sessions and per-probe workspaces`, async () => {
+    const dataDir = await makeTempDir(`md-acp-skills-`)
     const host = new AcpHost({
       dataDir,
+      skillsDir: await makeSkillsDir(),
       isImageGenConfigured: () => true,
-      extraBuiltinAgents: [fakeAgent(`fake-native`, promptsPath, true)],
+      // Announce after the 600ms quiet window to cover slow first announcements.
+      extraBuiltinAgents: [fakeAgent(`fake-skills`, { FAKE_AGENT_EMIT_COMMANDS: `1`, FAKE_AGENT_COMMANDS_DELAY_MS: `900` })],
     })
     openHosts.push(host)
 
-    const { sessionId } = await host.startSession({ agentId: `fake-native`, postId: `p`, postTitle: `My Post`, content: `` })
+    const probe = await host.probeAgent(`fake-skills`)
+    expect(probe.commands.map(c => c.name)).toEqual([`outline`, `polish`, `demo-skill`, `md-article-format`])
+    expect(probe.commandsAnnounced).toBe(true)
+    // The probe workspace is removed once the probe closes.
+    expect(await fs.readdir(path.join(dataDir, `acp-workspaces`))).toEqual([])
+
+    await host.startSession({ agentId: `fake-skills`, postId: `p`, postTitle: `T`, content: `` })
     const [workspaceId] = await fs.readdir(path.join(dataDir, `acp-workspaces`))
     const workspaceDir = path.join(dataDir, `acp-workspaces`, workspaceId)
-    for (const file of [`CLAUDE.md`, `AGENTS.md`]) {
-      const instructions = await fs.readFile(path.join(workspaceDir, file), `utf8`)
-      expect(instructions).toContain(`Article title: My Post`)
-      expect(instructions).toContain(`Article file path: ${path.join(workspaceDir, `article.md`)}`)
-      expect(instructions).toContain(`[Writing rules]`)
-      expect(instructions).toContain(`generate_image`)
+    for (const dir of [`.claude/skills`, `.agents/skills`, `.qwen/skills`]) {
+      expect(await fs.readFile(path.join(workspaceDir, dir, `demo-skill`, `SKILL.md`), `utf8`)).toContain(`name: demo-skill`)
+      const formatSkill = await fs.readFile(path.join(workspaceDir, dir, `md-article-format`, `SKILL.md`), `utf8`)
+      expect(formatSkill).toContain(`name: md-article-format`)
+      expect(formatSkill).toContain(`[Writing rules]`)
+      expect(formatSkill).toContain(`generate_image`)
     }
-
-    await host.prompt({ sessionId, text: `/wechat-minsheng 写一篇存款文章`, content: ``, postTitle: `My Post`, attachments: [`/ref/a.md`] })
-    await host.prompt({ sessionId, text: `Polish it`, content: ``, postTitle: `My Post` })
-    expect(await readPrompts(promptsPath)).toEqual([
-      `/wechat-minsheng 写一篇存款文章\n\nAttached reference files:\n- /ref/a.md`,
-      `Polish it`,
-    ])
+    expect(await fs.readdir(workspaceDir)).not.toContain(`CLAUDE.md`)
   })
 
-  it(`injects context for other agents but sends slash-command turns verbatim and defers the rules`, async () => {
-    const dataDir = await makeTempDir(`md-acp-instructions-inject-`)
-    const promptsPath = path.join(dataDir, `prompts.jsonl`)
-    const host = new AcpHost({ dataDir, extraBuiltinAgents: [fakeAgent(`fake-custom`, promptsPath)] })
+  it(`still installs the format skill and probes off the home directory when the bundle is missing`, async () => {
+    const dataDir = await makeTempDir(`md-acp-skills-missing-`)
+    const host = new AcpHost({
+      dataDir,
+      skillsDir: path.join(dataDir, `missing-skills`),
+      extraBuiltinAgents: [fakeAgent(`fake-skills`, { FAKE_AGENT_EMIT_COMMANDS: `1` })],
+    })
     openHosts.push(host)
 
-    const { sessionId } = await host.startSession({ agentId: `fake-custom`, postId: `p`, postTitle: `T`, content: `` })
-    for (const text of [`/outline`, `Write an intro`, `Shorter`])
+    // Probing in the home directory would pick up the user's own `~/.claude/skills`.
+    const probe = await host.probeAgent(`fake-skills`)
+    expect(probe.commands.map(c => c.name)).toEqual([`outline`, `polish`, `md-article-format`])
+  })
+
+  it(`points skill-aware agents at the format skill and sends command turns as their own first block`, async () => {
+    const dataDir = await makeTempDir(`md-acp-turns-`)
+    const promptsPath = path.join(dataDir, `prompts.jsonl`)
+    const events: AcpHostEvent[] = []
+    const host = new AcpHost({
+      dataDir,
+      extraBuiltinAgents: [fakeAgent(`fake-skilled`, { FAKE_AGENT_EMIT_COMMANDS: `1`, FAKE_AGENT_RECORD_PROMPTS: promptsPath })],
+      onEvent: event => events.push(event),
+    })
+    openHosts.push(host)
+
+    const { sessionId } = await host.startSession({ agentId: `fake-skilled`, postId: `p`, postTitle: `T`, content: `` })
+    await waitFor(() => events.some(e => e.type === `commands_updated`))
+    await host.prompt({ sessionId, text: `/outline 存款`, content: ``, postTitle: `T`, attachments: [`/ref/a.md`] })
+    await host.prompt({ sessionId, text: `Polish it`, content: ``, postTitle: `T` })
+
+    const [commandTurn, normalTurn] = await readPrompts(promptsPath)
+    expect(commandTurn[0]).toBe(`/outline 存款`)
+    expect(commandTurn[1]).toContain(`Attached reference files:\n- /ref/a.md`)
+    expect(commandTurn[1]).toContain(`md-article-format`)
+    expect(normalTurn).toHaveLength(1)
+    expect(normalTurn[0]).toContain(`md-article-format`)
+    expect(normalTurn[0].endsWith(`Polish it`)).toBe(true)
+    for (const blocks of [commandTurn, normalTurn])
+      expect(blocks.join(`\n`)).not.toContain(`[Writing rules]`)
+  })
+
+  it(`injects the full rules once for agents without the skill and never treats paths as commands`, async () => {
+    const dataDir = await makeTempDir(`md-acp-turns-plain-`)
+    const promptsPath = path.join(dataDir, `prompts.jsonl`)
+    const host = new AcpHost({ dataDir, extraBuiltinAgents: [fakeAgent(`fake-plain`, { FAKE_AGENT_RECORD_PROMPTS: promptsPath })] })
+    openHosts.push(host)
+
+    const { sessionId } = await host.startSession({ agentId: `fake-plain`, postId: `p`, postTitle: `T`, content: `` })
+    for (const text of [`/Users/me/notes.md 是什么`, `Shorter`])
       await host.prompt({ sessionId, text, content: ``, postTitle: `T` })
 
-    const [command, first, second] = await readPrompts(promptsPath)
-    expect(command).toBe(`/outline`)
-    expect(first).toContain(`[Context]`)
+    const [[first], [second]] = await readPrompts(promptsPath)
     expect(first).toContain(`[Writing rules]`)
-    expect(first.endsWith(`Write an intro`)).toBe(true)
+    expect(first.endsWith(`/Users/me/notes.md 是什么`)).toBe(true)
     expect(second).toContain(`[Context]`)
     expect(second).not.toContain(`[Writing rules]`)
   })
 })
 
-describe(`probeCache versioning and command updates`, () => {
-  const probeOptions = {
-    agentId: `fake-cache`,
-    command: process.execPath,
-    args: [FAKE_AGENT_SCRIPT],
-    env: { FAKE_AGENT_EMIT_COMMANDS: `1` },
-    commandQuietMs: 50,
-  }
+describe(`probeCache versioning and pending commands`, () => {
   const cached = {
     agentId: `fake-cache`,
     models: [{ id: `m`, name: `m` }],
@@ -1798,22 +1787,31 @@ describe(`probeCache versioning and command updates`, () => {
     writer.seed(cached)
     await writer.flush()
 
-    const options = { ...probeOptions, cwd: dir }
+    const options = {
+      agentId: `fake-cache`,
+      command: process.execPath,
+      args: [FAKE_AGENT_SCRIPT],
+      env: { FAKE_AGENT_EMIT_COMMANDS: `1` },
+      cwd: dir,
+      commandQuietMs: 50,
+    }
     const sameVersion = await new ProbeCache({ cachePath, appVersion: `1.0.0` }).probe(options)
     expect(sameVersion.commands.map(c => c.name)).toEqual([`cached`])
     const upgraded = await new ProbeCache({ cachePath, appVersion: `1.1.0` }).probe(options)
     expect(upgraded.commands.map(c => c.name)).toEqual([`outline`, `polish`])
   })
 
-  it(`updates commands only for agents that already have a cached probe`, () => {
-    const cache = new ProbeCache()
-    cache.updateCommands(`unknown`, [{ name: `x` }])
-    expect(cache.get(`unknown`)).toBeUndefined()
+  it(`marks probes that never saw a command announcement and expires them sooner`, async () => {
+    const dir = await makeTempDir(`md-acp-probe-pending-`)
+    const silent = await probeAcpAgent({ agentId: `fake-silent`, command: process.execPath, args: [FAKE_AGENT_SCRIPT], cwd: dir, commandQuietMs: 20 })
+    expect(silent.commandsAnnounced).toBe(false)
 
-    cache.seed(cached)
-    cache.updateCommands(`fake-cache`, [{ name: `fresh` }])
-    expect(cache.get(`fake-cache`)?.commands).toEqual([{ name: `fresh` }])
-    expect(cache.get(`fake-cache`)?.models).toEqual(cached.models)
+    const cache = new ProbeCache()
+    const tenMinutesAgo = Date.now() - 10 * 60 * 1000
+    cache.seed({ ...cached, agentId: `pending`, commandsAnnounced: false, probedAt: tenMinutesAgo })
+    cache.seed({ ...cached, agentId: `announced`, commandsAnnounced: true, probedAt: tenMinutesAgo })
+    expect(cache.get(`pending`)).toBeUndefined()
+    expect(cache.get(`announced`)).toBeDefined()
   })
 })
 

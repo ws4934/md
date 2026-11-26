@@ -35,3 +35,19 @@ export function buildArticleWritingRules(options?: { imageGenEnabled?: boolean }
     return `${ARTICLE_WRITING_RULES}\n${IMAGE_GEN_WRITING_RULE}`
   return `${ARTICLE_WRITING_RULES.slice(0, idx)}${IMAGE_GEN_WRITING_RULE}\n${ARTICLE_WRITING_RULES.slice(idx)}`
 }
+
+export const ARTICLE_FORMAT_SKILL_NAME = `md-article-format`
+
+/** One-line pointer injected instead of the full rules once the agent has discovered the skill. */
+export const ARTICLE_FORMAT_SKILL_POINTER = `Formatting: load and follow the \`${ARTICLE_FORMAT_SKILL_NAME}\` skill before writing or editing the article.`
+
+/** `SKILL.md` installed into each workspace so agents load the writing rules on demand. */
+export function buildArticleFormatSkill(options?: { imageGenEnabled?: boolean }): string {
+  return `---
+name: ${ARTICLE_FORMAT_SKILL_NAME}
+description: Formatting rules for the doocs/md article (article.md in the working directory) - supported Markdown and extended syntax, images, links and components. Read before writing or editing the article.
+---
+
+${buildArticleWritingRules(options)}
+`
+}

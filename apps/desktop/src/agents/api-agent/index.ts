@@ -157,11 +157,6 @@ function buildSystemPrompt(articlePath: string, modeId: ApiModeId, hasImageGen: 
   return lines.join(`\n`)
 }
 
-/** Article context and writing rules the host writes for agents that read `AGENTS.md`. */
-async function readWorkspaceInstructions(cwd: string): Promise<string> {
-  return fs.readFile(path.join(cwd, `AGENTS.md`), `utf8`).catch(() => ``)
-}
-
 function extractPromptText(blocks: ContentBlock[]): string {
   return blocks
     .map((block) => {
@@ -570,10 +565,7 @@ async function runPromptTurn(params: {
 
     const result = streamText({
       model,
-      system: [
-        buildSystemPrompt(session.articlePath, session.modeId, Boolean(imageBridge)),
-        await readWorkspaceInstructions(session.cwd),
-      ].filter(Boolean).join(`\n\n`),
+      system: buildSystemPrompt(session.articlePath, session.modeId, Boolean(imageBridge)),
       messages: turnMessages,
       tools,
       stopWhen: stepCountIs(MAX_AGENT_STEPS),

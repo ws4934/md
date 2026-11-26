@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { AcpHostEvent, AcpProbeResult, AcpSettings, AcpSlashCommand, DesktopAcpApi } from '@md/shared/types'
+import type { AcpHostEvent, AcpProbeResult, AcpSettings, AcpSlashCommand, AcpStartSessionResult, DesktopAcpApi } from '@md/shared/types'
 import { createDefaultAcpSettings } from '@md/shared/utils/acp-permissions'
 import { createPinia, defineStore, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -337,6 +337,114 @@ describe(`useAgentStore thinking level state`, () => {
     })
     await agentStore.sendPrompt(`Next`)
     expect(agentStore.availableCommands.map(c => c.name)).toEqual([`only-cmd`])
+  })
+
+  it(`lists the selected agent's probe commands after switching away from the live session's agent`, async () => {
+    const [agy] = await acpMock.listAgents()
+    vi.mocked(acpMock.listAgents).mockResolvedValueOnce([agy, { ...agy, id: `codex`, name: `Codex`, isDefault: false }])
+    vi.mocked(acpMock.probeAgent).mockImplementation(async agentId => ({
+      ...createAgyProbe(),
+      agentId,
+      commands: [{ name: `${agentId}-probe` }],
+    }))
+
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+    await agentStore.init()
+    await agentStore.probeAgent(`antigravity`)
+    await agentStore.probeAgent(`codex`)
+    await agentStore.sendPrompt(`Write outline`)
+    eventListener?.({ type: `commands_updated`, sessionId: `sess-1`, commands: [{ name: `agy-session` }] })
+    expect(agentStore.availableCommands.map(c => c.name)).toEqual([`agy-session`])
+
+    // The Antigravity session is only closed on the next send, but `/` must already offer Codex commands.
+    await agentStore.selectAgentAndModel(`codex`)
+    expect(agentStore.availableCommands.map(c => c.name)).toEqual([`codex-probe`])
+
+    await agentStore.selectAgentAndModel(`antigravity`)
+    expect(agentStore.availableCommands.map(c => c.name)).toEqual([`agy-session`])
+  })
+
+  it(`refreshes a slash list read while the first session start is pending`, async () => {
+    vi.mocked(acpMock.probeAgent).mockImplementation(async () => ({ ...createAgyProbe(), commands: [{ name: `probe-skill` }] }))
+    let resolveStart!: (result: AcpStartSessionResult) => void
+    vi.mocked(acpMock.startSession).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveStart = resolve
+    }))
+
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+    await agentStore.init()
+    await agentStore.probeAgent(`antigravity`)
+
+    const sending = agentStore.sendPrompt(`Write outline`)
+    expect(agentStore.availableCommands.map(c => c.name)).toEqual([`probe-skill`])
+
+    resolveStart({
+      sessionId: `sess-new`,
+      modelId: null,
+      models: [],
+      thinkingLevel: null,
+      thinkingOptions: [],
+      modes: [],
+      currentModeId: null,
+      permissionLevel: `ask`,
+      commands: [{ name: `start-cmd` }],
+    })
+    await sending
+    expect(agentStore.availableCommands.map(c => c.name)).toEqual([`start-cmd`])
+
+    eventListener?.({ type: `commands_updated`, sessionId: `sess-new`, commands: [{ name: `announced` }] })
+    expect(agentStore.availableCommands.map(c => c.name)).toEqual([`announced`])
+  })
+
+  it(`keeps probe-sourced draft commands when a start reply carries session commands`, async () => {
+    vi.mocked(acpMock.probeAgent).mockImplementation(async () => ({ ...createAgyProbe(), commands: [{ name: `probe-skill` }] }))
+    vi.mocked(acpMock.startSession).mockResolvedValueOnce({
+      sessionId: `sess-1`,
+      modelId: `gemini-4-neon`,
+      models: createAgyProbe().models,
+      thinkingLevel: `high`,
+      thinkingOptions: [],
+      modes: createAgyProbe().modes,
+      currentModeId: `default`,
+      permissionLevel: `ask`,
+      commands: [{ name: `session-only` }],
+    })
+
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+    await agentStore.init()
+    await agentStore.probeAgent(`antigravity`)
+
+    await agentStore.sendPrompt(`Write outline`)
+    expect(agentStore.availableCommands.map(c => c.name)).toEqual([`session-only`])
+    expect(agentStore.probeByAgent.antigravity.commands.map(c => c.name)).toEqual([`probe-skill`])
+
+    await agentStore.startNewSession()
+    expect(agentStore.availableCommands.map(c => c.name)).toEqual([`probe-skill`])
+  })
+
+  it(`re-requests a cached probe only while its commands were not announced`, async () => {
+    vi.mocked(acpMock.probeAgent)
+      .mockResolvedValueOnce({ ...createAgyProbe(), commandsAnnounced: false })
+      .mockResolvedValueOnce({ ...createAgyProbe(), commands: [{ name: `late-skill` }], commandsAnnounced: true })
+
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+    await agentStore.init()
+    await vi.waitFor(() => expect(agentStore.probeByAgent.antigravity?.commandsAnnounced).toBe(false))
+
+    await agentStore.probeAgent(`antigravity`)
+    expect(acpMock.probeAgent).toHaveBeenCalledTimes(2)
+    expect(acpMock.probeAgent).toHaveBeenLastCalledWith(`antigravity`, { force: false })
+    expect(agentStore.availableCommands.map(c => c.name)).toEqual([`late-skill`])
+
+    // Announced (`true`) and legacy entries without the flag are served from memory.
+    await agentStore.probeAgent(`antigravity`)
+    agentStore.probeByAgent.antigravity = createAgyProbe()
+    await agentStore.probeAgent(`antigravity`)
+    expect(acpMock.probeAgent).toHaveBeenCalledTimes(2)
   })
 
   it(`probes the agent of a historical session when switching to it`, async () => {

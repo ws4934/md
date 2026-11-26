@@ -16,11 +16,6 @@ export interface AcpAgentConfig {
   detectBinaries?: string[]
   builtin: boolean
   avatar: AcpAgentAvatar
-  /**
-   * The agent natively loads `CLAUDE.md` / `AGENTS.md` from its cwd, so the host writes article
-   * context and writing rules there and sends user prompts verbatim (keeps `/commands` working).
-   */
-  readsWorkspaceInstructions?: boolean
 }
 
 export interface AcpInstallProgress {
@@ -85,6 +80,8 @@ export interface AcpProbeResult {
   modes: AcpModeInfo[]
   currentModeId: string | null
   commands: AcpSlashCommand[]
+  /** `false` when the probe gave up waiting for `available_commands_update`; such results are retried sooner. */
+  commandsAnnounced?: boolean
   probedAt: number
   error?: string
 }

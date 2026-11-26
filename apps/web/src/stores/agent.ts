@@ -302,12 +302,14 @@ export const useAgentStore = defineStore(`agent`, () => {
   const customExtraModes = computed<AcpModeInfo[]>(() => getCustomExtraModes(availableModes.value))
 
   const availableCommands = computed<AcpSlashCommand[]>(() => {
-    const acpId = activeSession.value?.acpSessionId
-    if (acpId && acpId in announcedCommandsBySession.value)
-      return announcedCommandsBySession.value[acpId]
     const agent = selectedAgent.value
     if (!agent)
       return []
+    // After an agent switch the old live session is only closed on the next send; its commands belong to the old agent.
+    const active = activeSession.value
+    const acpId = active?.agentId === agent.id ? active.acpSessionId : null
+    if (acpId && acpId in announcedCommandsBySession.value)
+      return announcedCommandsBySession.value[acpId]
     return probeByAgent.value[agent.id]?.commands ?? []
   })
 
@@ -838,8 +840,10 @@ export const useAgentStore = defineStore(`agent`, () => {
   async function probeAgent(agentId: string, force = false): Promise<AcpProbeResult | null> {
     if (!window.mdDesktop?.acp)
       return null
-    if (!force && probeByAgent.value[agentId] && !probeByAgent.value[agentId].error)
-      return probeByAgent.value[agentId]
+    const cached = probeByAgent.value[agentId]
+    // `commandsAnnounced: false` is a timed-out probe; ask again and let the main-process TTL decide whether to re-probe.
+    if (!force && cached && !cached.error && cached.commandsAnnounced !== false)
+      return cached
 
     probingAgents.value = { ...probingAgents.value, [agentId]: true }
     try {
@@ -1184,7 +1188,8 @@ export const useAgentStore = defineStore(`agent`, () => {
     }
     sessions.value.unshift(session)
     activeSessionId.value = session.id
-    return session
+    // Return the reactive proxy: callers mutate the record later (e.g. `acpSessionId`), which the raw object would not track.
+    return sessions.value[0]
   }
 
   async function startNewSession(): Promise<void> {
@@ -1310,7 +1315,10 @@ export const useAgentStore = defineStore(`agent`, () => {
               currentThinkingLevel: started.thinkingLevel ?? prevProbe?.currentThinkingLevel ?? null,
               modes: started.modes.length > 0 ? started.modes : (prevProbe?.modes ?? []),
               currentModeId: started.currentModeId ?? prevProbe?.currentModeId ?? null,
-              commands: started.commands.length > 0 ? started.commands : (prevProbe?.commands ?? []),
+              // Session announcements stay per session; draft commands come from probes only.
+              commands: prevProbe?.commands ?? [],
+              // Without a prior probe the empty list is not authoritative, so `probeAgent` must still ask.
+              commandsAnnounced: prevProbe ? prevProbe.commandsAnnounced : false,
               probedAt: Date.now(),
             },
           }

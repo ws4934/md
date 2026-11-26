@@ -77,13 +77,19 @@ const commandIndex = ref(0)
 const commandMenuDismissed = ref(false)
 
 // Slash menu only while the input is exactly `/query` (no whitespace yet); prefix matches sort first.
+// Codex lists skills as `$name` (typed as-is); other agents list bare names typed with `/`.
+function commandToken(command: AcpSlashCommand): string {
+  return command.name.startsWith(`$`) ? command.name : `/${command.name}`
+}
+
 const matchedCommands = computed(() => {
   const query = /^\/(\S*)$/.exec(text.value)?.[1].toLowerCase()
   if (query === undefined || props.disabled)
     return []
+  const key = (c: AcpSlashCommand) => c.name.replace(/^\$/, ``).toLowerCase()
   return agentStore.availableCommands
-    .filter(c => c.name.toLowerCase().includes(query))
-    .sort((a, b) => Number(!a.name.toLowerCase().startsWith(query)) - Number(!b.name.toLowerCase().startsWith(query)))
+    .filter(c => key(c).includes(query))
+    .sort((a, b) => Number(!key(a).startsWith(query)) - Number(!key(b).startsWith(query)))
 })
 
 const isCommandMenuOpen = computed(() => !commandMenuDismissed.value && matchedCommands.value.length > 0)
@@ -96,7 +102,7 @@ watch(matchedCommands, () => {
 watch(commandIndex, () => nextTick(() => scrollActiveOptionIntoView(commandMenuRef.value)))
 
 function insertCommand(command: AcpSlashCommand) {
-  text.value = `/${command.name} `
+  text.value = `${commandToken(command)} `
   nextTick(() => {
     const el = textareaRef.value
     if (!el)
@@ -205,7 +211,7 @@ defineExpose({ focus })
         :style="{ backgroundColor: index === commandIndex ? 'var(--dt-subtle)' : 'transparent' }"
         @click="insertCommand(command)"
       >
-        <span class="max-w-[60%] shrink-0 truncate font-medium" style="color: var(--dt-ink)">/{{ command.name }}</span>
+        <span class="max-w-[60%] shrink-0 truncate font-medium" style="color: var(--dt-ink)">{{ commandToken(command) }}</span>
         <span v-if="command.description" class="min-w-0 truncate text-[11.5px]" style="color: var(--dt-ink3)">
           {{ command.description }}
         </span>

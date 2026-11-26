@@ -346,8 +346,10 @@ async function handlePrompt(id, params) {
     .filter(b => b.type === `text`)
     .map(b => b.text)
     .join(`\n`)
-  if (recordPromptsPath)
-    await fs.appendFile(recordPromptsPath, `${JSON.stringify(text)}\n`)
+  if (recordPromptsPath) {
+    const blocks = (params.prompt || []).filter(b => b.type === `text`).map(b => b.text)
+    await fs.appendFile(recordPromptsPath, `${JSON.stringify(blocks)}\n`)
+  }
 
   if (emitAllToolKinds) {
     const kinds = [

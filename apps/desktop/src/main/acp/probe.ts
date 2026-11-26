@@ -1,4 +1,4 @@
-import type { AcpProbeResult, AcpSlashCommand } from '@md/shared/types'
+import type { AcpProbeResult } from '@md/shared/types'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -12,6 +12,8 @@ const MAX_COMMAND_WAIT_MS = 1_500
 // Agents may announce commands well after `session/new`; wait this many quiet windows for the first batch.
 const FIRST_COMMANDS_WAIT_FACTOR = 5
 const DEFAULT_PROBE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+// A probe that never saw `available_commands_update` may have just been too early; retry it sooner.
+const COMMANDS_PENDING_TTL_MS = 5 * 60 * 1000
 // Bump when cached probe metadata changes shape so stale ungrouped entries refresh automatically.
 const PROBE_CACHE_SCHEMA_VERSION = 2
 
@@ -27,6 +29,11 @@ export interface ProbeAgentOptions {
   args: string[]
   env?: Record<string, string>
   cwd?: string
+  /** Per-probe workspace, created before spawning and disposed after the probe closes (overrides `cwd`). */
+  workspace?: {
+    create: () => Promise<string>
+    dispose: (dir: string) => Promise<void>
+  }
   pathOverride?: string
   commandQuietMs?: number
   initializeTimeoutMs?: number
@@ -62,11 +69,12 @@ async function waitForAvailableCommands(
  */
 export async function probeAcpAgent(options: ProbeAgentOptions): Promise<AcpProbeResult> {
   const quietMs = options.commandQuietMs ?? COMMAND_QUIET_WINDOW_MS
+  const workspaceDir = options.workspace ? await options.workspace.create() : null
   const session = new AcpSession({
     agentId: options.agentId,
     command: options.command,
     args: options.args,
-    cwd: options.cwd ?? os.homedir(),
+    cwd: workspaceDir ?? options.cwd ?? os.homedir(),
     env: {
       // Prevent agents like Gemini CLI from launching an interactive browser auth flow during probe.
       NO_BROWSER: `true`,
@@ -93,11 +101,14 @@ export async function probeAcpAgent(options: ProbeAgentOptions): Promise<AcpProb
       modes: session.modes,
       currentModeId: session.currentModeId,
       commands: session.commands,
+      commandsAnnounced: session.commandsUpdatedAt !== null,
       probedAt: Date.now(),
     }
   }
   finally {
     await session.close()
+    if (workspaceDir)
+      await options.workspace!.dispose(workspaceDir)
   }
 }
 
@@ -127,7 +138,8 @@ export class ProbeCache {
   private isFresh(entry: AcpProbeResult | undefined): entry is AcpProbeResult {
     if (!entry || entry.error)
       return false
-    return Date.now() - entry.probedAt < this.ttlMs
+    const ttlMs = entry.commandsAnnounced === false ? Math.min(this.ttlMs, COMMANDS_PENDING_TTL_MS) : this.ttlMs
+    return Date.now() - entry.probedAt < ttlMs
   }
 
   private async ensureLoaded(): Promise<void> {
@@ -213,18 +225,10 @@ export class ProbeCache {
       modes: result.modes.length > 0 ? result.modes : (prev?.modes ?? []),
       currentModeId: result.currentModeId ?? prev?.currentModeId ?? null,
       commands: result.commands.length > 0 ? result.commands : (prev?.commands ?? []),
+      commandsAnnounced: result.commands.length > 0 ? result.commandsAnnounced : prev?.commandsAnnounced,
       probedAt: result.probedAt || Date.now(),
     }
     this.cache.set(result.agentId, merged)
-    this.schedulePersist()
-  }
-
-  /** Refreshes the commands of an existing entry from a live session's announcement. */
-  updateCommands(agentId: string, commands: AcpSlashCommand[]): void {
-    const existing = this.cache.get(agentId)
-    if (!existing || existing.error)
-      return
-    this.cache.set(agentId, { ...existing, commands })
     this.schedulePersist()
   }
 

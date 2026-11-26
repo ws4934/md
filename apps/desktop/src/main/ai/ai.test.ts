@@ -831,7 +831,6 @@ describe(`api model ACP agent end-to-end through AcpHost`, () => {
           detectBinaries: [process.execPath],
           builtin: true,
           avatar: { letter: `M`, color: `#0284C7` },
-          readsWorkspaceInstructions: true,
         },
         {
           id: `fake-cli`,
@@ -945,11 +944,10 @@ describe(`api model ACP agent end-to-end through AcpHost`, () => {
       .join(``)
     expect(turn1Text).toContain(`Hello from mock-gpt-pro (turns=1, effort=none)`)
     expect(turn1Thought).toContain(`Thinking step for mock-gpt-pro`)
-    // Article context and writing rules come from the workspace AGENTS.md; the user turn stays verbatim.
-    const [systemMessage, userMessage] = fakeServer.chatRequests[0].messages ?? []
-    expect(String(systemMessage.content)).toContain(`Article title: Test Article`)
-    expect(String(systemMessage.content)).toContain(`[Writing rules]`)
-    expect(userMessage.content).toBe(`Say hello`)
+    // The API agent cannot load skills, so its first turn carries the full writing rules.
+    const firstUserMessage = String(fakeServer.chatRequests[0].messages?.find(m => m.role === `user`)?.content)
+    expect(firstUserMessage).toContain(`[Writing rules]`)
+    expect(firstUserMessage.endsWith(`Say hello`)).toBe(true)
 
     // Switch model & thinking level, then run turn 2 and verify conversation history + params.
     await host.setModel({ sessionId: started.sessionId, modelId: `mock-gpt-mini` })

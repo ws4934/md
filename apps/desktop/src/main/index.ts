@@ -112,8 +112,6 @@ function buildExtraBuiltinAgents(): AcpAgentConfig[] {
       detectBinaries: [process.execPath],
       builtin: true,
       avatar: { letter: `M`, color: `#0284C7` },
-      // The API agent appends the workspace `AGENTS.md` to its system prompt.
-      readsWorkspaceInstructions: true,
     })
   }
 
