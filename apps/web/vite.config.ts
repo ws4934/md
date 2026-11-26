@@ -104,7 +104,7 @@ function manualChunks(id: string): string | undefined {
     return `vendor_vueuse`
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, process.cwd())
 
   return {
@@ -120,7 +120,7 @@ export default defineConfig(({ mode }) => {
       }),
       isCfWorkers && cloudflarePlugin,
       tailwindcss(),
-      mode === `development` && env.VITE_VUE_DEVTOOLS === `true` && vueDevTools({
+      (mode === `development` || command === `serve`) && env.VITE_VUE_DEVTOOLS === `true` && vueDevTools({
         launchEditor: env.VITE_LAUNCH_EDITOR ?? `code`,
       }),
       !isUTools && !isDesktop && VitePluginRadar({

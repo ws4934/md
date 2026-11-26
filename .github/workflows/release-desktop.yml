@@ -29,7 +29,12 @@ jobs:
 
       - name: Check tag matches package version
         run: |
-          expected="desktop-v$(jq -r .version apps/desktop/package.json)"
+          version="$(jq -r '.version // empty' apps/desktop/package.json)"
+          if [ -z "$version" ]; then
+            echo "::error::apps/desktop/package.json is missing a version field"
+            exit 1
+          fi
+          expected="desktop-v$version"
           if [ "$GITHUB_REF_NAME" != "$expected" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match apps/desktop/package.json (expected $expected)"
             exit 1
@@ -86,6 +91,10 @@ jobs:
         run: |
           args=(--${{ matrix.platform }} --${{ matrix.arch }} --publish never "-c.publish.url=$FEED_URL")
           if [ -n "$CSC_LINK" ]; then
+            # Drop any unset optional signing/notarization vars so empty strings are never treated as set.
+            for var in CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+              [ -n "${!var}" ] || unset "$var"
+            done
             # Signed (and notarized when APPLE_* are set): Squirrel.Mac can install updates itself.
             args+=(-c.extraMetadata.mdAutoInstallUpdates=true)
           else
@@ -192,6 +201,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view desktop-latest > /dev/null 2>&1; then
+            current_feed="$(mktemp)"
+            trap 'rm -f "$current_feed"' EXIT
+            gh release download desktop-latest -p latest.yml -O "$current_feed" 2>/dev/null || : > "$current_feed"
+            if [ "$(pnpm exec tsx scripts/release-feed.ts --should-update-latest "$current_feed" release/latest.yml)" != "true" ]; then
+              echo "::notice::Skipping desktop-latest feed update because desktop-latest already tracks a newer version than $TAG"
+              exit 0
+            fi
             gh release upload desktop-latest release/latest*.yml --clobber
           else
             gh release create desktop-latest release/latest*.yml --prerelease --latest=false --target "$GITHUB_SHA" \
