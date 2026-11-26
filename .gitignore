@@ -60,7 +60,6 @@ web-ext.config.ts
 !.claude/skills/git-commit
 !.claude/skills/wechat-svg
 !.claude/skills/wechat-minsheng
-!.claude/skills/wechat-deai
 
 # vite-plugin-pwa dev output
 dev-dist

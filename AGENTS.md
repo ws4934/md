@@ -184,6 +184,5 @@ Reusable workflows live in [`.agents/skills/`](./.agents/skills/) (canonical). C
 | `create-pr`       | Create a GitHub pull request (`/create-pr` or "open a PR")                            |
 | `wechat-svg`      | WeChat SVG whitelist, bubbling-group interaction, paste compatibility (`/wechat-svg`) |
 | `wechat-minsheng` | 公众号「民生写实」选题、6 步框架写稿、封面配图 (`/wechat-minsheng`)                   |
-| `wechat-deai`     | 公众号稿件去 AI 味、降朱雀等检测的 AI 率 (`/wechat-deai`)                             |
 
 Invoke manually: `/skill-name` in Cursor or Claude Code; OpenCode uses the `skill` tool.
