@@ -19,15 +19,60 @@ export interface ImageGenBridgeOptions {
     prompt: string
     size?: string
     quality?: string
+    referenceImages?: Uint8Array[]
     abortSignal?: AbortSignal
   }) => Promise<GeneratedDesktopImage>
 }
 
-const MAX_BODY_BYTES = 256 * 1024
+const MAX_REFERENCE_IMAGES = 4
+const MAX_REFERENCE_IMAGE_BYTES = 8 * 1024 * 1024
+const MAX_REFERENCE_BASE64_CHARS = Math.ceil(MAX_REFERENCE_IMAGE_BYTES / 3) * 4
+// Sized for up to 4 max-size base64 reference images plus prompt and JSON framing.
+const MAX_BODY_BYTES = MAX_REFERENCE_IMAGES * MAX_REFERENCE_BASE64_CHARS + 256 * 1024
 const BODY_READ_TIMEOUT_MS = 15_000
 const MAX_PROMPT_CHARS = 8_000
 const MAX_PARAM_CHARS = 64
 const MAX_CONCURRENT_REQUESTS = 4
+const ALLOWED_REFERENCE_MEDIA_TYPES = new Set([`image/png`, `image/jpeg`, `image/webp`])
+const BASE64_RE = /^[A-Z0-9+/]+={0,2}$/i
+
+function parseReferenceImages(raw: unknown): Uint8Array[] | undefined {
+  if (raw === undefined)
+    return undefined
+  if (!Array.isArray(raw))
+    throw new TypeError(`referenceImages must be an array`)
+  if (raw.length === 0)
+    return undefined
+  if (raw.length > MAX_REFERENCE_IMAGES)
+    throw new Error(`At most ${MAX_REFERENCE_IMAGES} reference images are allowed`)
+
+  const decoded: Uint8Array[] = []
+  for (let i = 0; i < raw.length; i++) {
+    const item = raw[i]
+    if (typeof item !== `object` || item === null || Array.isArray(item))
+      throw new Error(`referenceImages[${i}] must be an object`)
+
+    const { base64, mediaType } = item as Record<string, unknown>
+    if (typeof mediaType !== `string` || !ALLOWED_REFERENCE_MEDIA_TYPES.has(mediaType))
+      throw new Error(`referenceImages[${i}].mediaType must be one of image/png, image/jpeg, image/webp`)
+
+    if (typeof base64 !== `string` || base64.length === 0)
+      throw new Error(`referenceImages[${i}].base64 must be a non-empty base64 string`)
+    if (base64.length > MAX_REFERENCE_BASE64_CHARS)
+      throw new Error(`referenceImages[${i}] exceeds maximum size of 8 MB`)
+    if (base64.length % 4 !== 0 || !BASE64_RE.test(base64))
+      throw new Error(`referenceImages[${i}].base64 is not valid base64`)
+
+    const buf = Buffer.from(base64, `base64`)
+    if (buf.byteLength === 0)
+      throw new Error(`referenceImages[${i}] is empty`)
+    if (buf.byteLength > MAX_REFERENCE_IMAGE_BYTES)
+      throw new Error(`referenceImages[${i}] exceeds maximum size of 8 MB`)
+
+    decoded.push(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength))
+  }
+  return decoded
+}
 
 function sendJson(res: ServerResponse, statusCode: number, body: Record<string, unknown>): void {
   const payload = JSON.stringify(body)
@@ -116,7 +161,7 @@ export class ImageGenBridge {
 
   constructor(options: ImageGenBridgeOptions) {
     this.getConfig = options.getConfig
-    this.generateImpl = options.generate ?? (({ config, prompt, size, quality, abortSignal }) =>
+    this.generateImpl = options.generate ?? (({ config, prompt, size, quality, referenceImages, abortSignal }) =>
       generateDesktopImage({
         baseUrl: config.baseUrl,
         apiKey: config.apiKey,
@@ -124,6 +169,7 @@ export class ImageGenBridge {
         prompt,
         size: size ?? config.size,
         quality: quality ?? config.quality,
+        referenceImages,
         abortSignal,
       }))
     this.token = randomBytes(32).toString(`hex`)
@@ -202,6 +248,15 @@ export class ImageGenBridge {
       return
     }
 
+    let referenceImages: Uint8Array[] | undefined
+    try {
+      referenceImages = parseReferenceImages(body.referenceImages)
+    }
+    catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+      return
+    }
+
     if (this.activeRequests >= MAX_CONCURRENT_REQUESTS) {
       sendJson(res, 429, { error: `Too many concurrent image generation requests` })
       return
@@ -231,6 +286,7 @@ export class ImageGenBridge {
         prompt,
         size,
         quality,
+        ...(referenceImages ? { referenceImages } : {}),
         abortSignal: abortController.signal,
       })
       if (!res.writableEnded) {

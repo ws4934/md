@@ -9,6 +9,7 @@ export interface GenerateDesktopImageParams {
   prompt: string
   size?: string
   quality?: string
+  referenceImages?: Uint8Array[]
   abortSignal?: AbortSignal
   timeoutMs?: number
 }
@@ -57,10 +58,15 @@ export async function generateDesktopImage(
     ? AbortSignal.any([timeoutSignal, params.abortSignal])
     : timeoutSignal
 
+  const referenceImages = params.referenceImages?.length ? params.referenceImages : undefined
+  const imagePrompt = referenceImages
+    ? { text: prompt, images: referenceImages }
+    : prompt
+
   try {
     const result = await generateImage({
       model: provider.imageModel(modelId),
-      prompt,
+      prompt: imagePrompt,
       size,
       providerOptions,
       abortSignal,

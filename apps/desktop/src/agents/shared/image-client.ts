@@ -9,7 +9,27 @@ export interface WorkspaceImageResult {
   mimeType: string
 }
 
+export type ReferenceImageMediaType = `image/png` | `image/jpeg` | `image/webp`
+
+export interface ReferenceImagePayload {
+  base64: string
+  mediaType: ReferenceImageMediaType
+}
+
+export interface GenerateAndSaveWorkspaceImageParams {
+  bridgeUrl: string
+  bridgeToken: string
+  workspaceDir: string
+  prompt: string
+  filename?: string
+  size?: string
+  referenceImages?: string[]
+  abortSignal?: AbortSignal
+}
+
 export const MAX_WORKSPACE_IMAGE_BYTES = 10 * 1024 * 1024
+export const MAX_REFERENCE_IMAGES = 4
+export const MAX_REFERENCE_IMAGE_BYTES = 8 * 1024 * 1024
 
 const MIME_TO_EXT: Record<string, string> = {
   'image/png': `.png`,
@@ -17,6 +37,13 @@ const MIME_TO_EXT: Record<string, string> = {
   'image/jpg': `.jpg`,
   'image/webp': `.webp`,
   'image/gif': `.gif`,
+}
+
+const REFERENCE_EXT_TO_MIME: Record<string, ReferenceImageMediaType> = {
+  '.png': `image/png`,
+  '.jpg': `image/jpeg`,
+  '.jpeg': `image/jpeg`,
+  '.webp': `image/webp`,
 }
 
 export function extensionForImageMime(mimeType: string): string {
@@ -80,18 +107,95 @@ async function writeUniqueImageFile(
   throw new Error(`Failed to allocate unique image filename under images/`)
 }
 
-export async function generateAndSaveWorkspaceImage(params: {
-  bridgeUrl: string
-  bridgeToken: string
-  workspaceDir: string
-  prompt: string
-  filename?: string
-  size?: string
-  abortSignal?: AbortSignal
-}): Promise<WorkspaceImageResult> {
+function isWithinDirectory(parentReal: string, targetReal: string): boolean {
+  const prefix = parentReal.endsWith(path.sep) ? parentReal : `${parentReal}${path.sep}`
+  return targetReal !== parentReal && targetReal.startsWith(prefix)
+}
+
+async function loadReferenceImages(
+  workspaceDir: string,
+  referenceImages: string[],
+): Promise<ReferenceImagePayload[]> {
+  if (referenceImages.length > MAX_REFERENCE_IMAGES)
+    throw new Error(`At most ${MAX_REFERENCE_IMAGES} reference images are allowed`)
+
+  const workspaceReal = await fs.realpath(workspaceDir)
+  const payloads: ReferenceImagePayload[] = []
+
+  for (const rawRef of referenceImages) {
+    if (typeof rawRef !== `string` || !rawRef.trim())
+      throw new Error(`Reference image path must be a non-empty string`)
+    const refPath = rawRef.trim()
+    if (refPath.includes(`\0`))
+      throw new Error(`Invalid reference image path: ${refPath}`)
+    if (path.isAbsolute(refPath) || path.win32.isAbsolute(refPath))
+      throw new Error(`Reference image path must be workspace-relative: ${refPath}`)
+    if (refPath.split(/[\\/]/).includes(`..`))
+      throw new Error(`Reference image path must not contain "..": ${refPath}`)
+
+    const requestedExt = path.extname(refPath).toLowerCase()
+    if (!REFERENCE_EXT_TO_MIME[requestedExt])
+      throw new Error(`Unsupported reference image extension for "${refPath}" (allowed: png, jpg, jpeg, webp)`)
+
+    const candidatePath = path.resolve(workspaceReal, refPath)
+    if (!isWithinDirectory(workspaceReal, candidatePath))
+      throw new Error(`Reference image "${refPath}" resolves outside workspace`)
+
+    let targetReal: string
+    try {
+      targetReal = await fs.realpath(candidatePath)
+    }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === `ENOENT`)
+        throw new Error(`Reference image not found: ${refPath}`)
+      throw new Error(`Failed to resolve reference image "${refPath}": ${error instanceof Error ? error.message : String(error)}`)
+    }
+
+    if (!isWithinDirectory(workspaceReal, targetReal))
+      throw new Error(`Reference image "${refPath}" resolves outside workspace`)
+
+    // Re-check extension after realpath so an in-workspace symlink cannot target a non-image file.
+    const realExt = path.extname(targetReal).toLowerCase()
+    const mediaType = REFERENCE_EXT_TO_MIME[realExt]
+    if (!mediaType)
+      throw new Error(`Reference image "${refPath}" resolves to an unsupported file type (allowed: png, jpg, jpeg, webp)`)
+
+    const stat = await fs.stat(targetReal)
+    if (!stat.isFile())
+      throw new Error(`Reference image "${refPath}" is not a regular file`)
+    if (stat.size === 0)
+      throw new Error(`Reference image "${refPath}" is empty`)
+    if (stat.size > MAX_REFERENCE_IMAGE_BYTES)
+      throw new Error(`Reference image "${refPath}" exceeds maximum size of 8 MB`)
+
+    const bytes = await fs.readFile(targetReal)
+    if (bytes.byteLength === 0)
+      throw new Error(`Reference image "${refPath}" is empty`)
+    if (bytes.byteLength > MAX_REFERENCE_IMAGE_BYTES)
+      throw new Error(`Reference image "${refPath}" exceeds maximum size of 8 MB`)
+
+    payloads.push({
+      base64: bytes.toString(`base64`),
+      mediaType,
+    })
+  }
+
+  return payloads
+}
+
+export async function generateAndSaveWorkspaceImage(
+  params: GenerateAndSaveWorkspaceImageParams,
+): Promise<WorkspaceImageResult> {
   const prompt = params.prompt.trim()
   if (!prompt)
     throw new Error(`prompt is required`)
+
+  if (params.referenceImages !== undefined && !Array.isArray(params.referenceImages))
+    throw new Error(`referenceImages must be an array of workspace-relative image paths`)
+
+  const referencePayloads = params.referenceImages?.length
+    ? await loadReferenceImages(params.workspaceDir, params.referenceImages)
+    : []
 
   // Verify workspace confinement upfront so a tampered workspace fails before spending API quota.
   const imagesDir = await ensureConfinedImagesDir(params.workspaceDir)
@@ -105,6 +209,7 @@ export async function generateAndSaveWorkspaceImage(params: {
     body: JSON.stringify({
       prompt,
       ...(params.size?.trim() ? { size: params.size.trim() } : {}),
+      ...(referencePayloads.length > 0 ? { referenceImages: referencePayloads } : {}),
     }),
     signal: params.abortSignal,
   })

@@ -24,6 +24,15 @@ const GENERATE_IMAGE_TOOL = {
         type: `string`,
         description: `Optional image size such as "1024x1024", "1536x1024", or "1024x1536"`,
       },
+      reference_images: {
+        type: `array`,
+        items: {
+          type: `string`,
+          minLength: 1,
+        },
+        maxItems: 4,
+        description: `Optional workspace-relative paths of existing png/jpg/jpeg/webp images (max 4): reference images that the generated image should stay consistent with, e.g. the recurring character's reference image or the approved cover`,
+      },
     },
     required: [`prompt`],
     additionalProperties: false,
@@ -122,6 +131,17 @@ async function main(): Promise<void> {
       }
       const filename = typeof rawArgs.filename === `string` ? rawArgs.filename : undefined
       const size = typeof rawArgs.size === `string` ? rawArgs.size : undefined
+      let referenceImages: string[] | undefined
+      if (rawArgs.reference_images !== undefined) {
+        if (!Array.isArray(rawArgs.reference_images) || !rawArgs.reference_images.every(item => typeof item === `string`)) {
+          writeResult(id, {
+            isError: true,
+            content: [{ type: `text`, text: `Failed to generate image: reference_images must be an array of workspace-relative image paths` }],
+          })
+          return
+        }
+        referenceImages = rawArgs.reference_images
+      }
 
       const controller = new AbortController()
       const key = String(id)
@@ -134,6 +154,7 @@ async function main(): Promise<void> {
           prompt,
           filename,
           size,
+          referenceImages,
           abortSignal: controller.signal,
         })
         writeResult(id, {
