@@ -3,7 +3,16 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createUpdatePromptGate, readMacAutoInstallFlag, releasePageUrl, resolveUpdateMode, UPDATE_COPY } from './auto-update'
+import {
+  areUpdateStatesEqual,
+  createInitialUpdateState,
+  createUpdatePromptGate,
+  readMacAutoInstallFlag,
+  reduceUpdateState,
+  releasePageUrl,
+  resolveUpdateMode,
+  UPDATE_COPY,
+} from './auto-update'
 import { resolveQuitLocale } from './quit-guard'
 
 const tempDirs: string[] = []
@@ -109,5 +118,142 @@ describe(`update dialog copy`, () => {
     }
     if (locale !== `en-US`)
       expect(copy.menuLabel).not.toBe(UPDATE_COPY[`en-US`].menuLabel)
+  })
+})
+
+describe(`reduceUpdateState`, () => {
+  it(`stays idle and ignores all events when updates are unsupported`, () => {
+    const initial = createInitialUpdateState(`2.1.0`, null)
+    expect(initial).toEqual({
+      supported: false,
+      mode: null,
+      currentVersion: `2.1.0`,
+      status: `idle`,
+    })
+
+    expect(reduceUpdateState(initial, { type: `checking` })).toBe(initial)
+    expect(reduceUpdateState(initial, { type: `available`, version: `2.2.0` })).toBe(initial)
+    expect(reduceUpdateState(initial, { type: `not-available` })).toBe(initial)
+    expect(reduceUpdateState(initial, { type: `download-progress`, percent: 50 })).toBe(initial)
+    expect(reduceUpdateState(initial, { type: `downloaded`, version: `2.2.0` })).toBe(initial)
+    expect(reduceUpdateState(initial, { type: `error`, message: `offline` })).toBe(initial)
+  })
+
+  it(`transitions checking → not-available`, () => {
+    const initial = createInitialUpdateState(`2.1.0`, `install`)
+    const checking = reduceUpdateState(initial, { type: `checking` })
+    expect(checking).toEqual({
+      supported: true,
+      mode: `install`,
+      currentVersion: `2.1.0`,
+      status: `checking`,
+    })
+
+    const upToDate = reduceUpdateState(checking, { type: `not-available` })
+    expect(upToDate).toEqual({
+      supported: true,
+      mode: `install`,
+      currentVersion: `2.1.0`,
+      status: `not-available`,
+    })
+  })
+
+  it(`exposes releaseUrl for available updates in notify mode and omits unsafe URLs`, () => {
+    const checking = reduceUpdateState(createInitialUpdateState(`2.1.0`, `notify`), { type: `checking` })
+
+    const available = reduceUpdateState(checking, {
+      type: `available`,
+      version: `2.2.0`,
+      fileUrl: `https://github.com/doocs/md/releases/download/desktop-v2.2.0/md-2.2.0-mac-arm64.zip`,
+    })
+    expect(available).toEqual({
+      supported: true,
+      mode: `notify`,
+      currentVersion: `2.1.0`,
+      status: `available`,
+      version: `2.2.0`,
+      releaseUrl: `https://github.com/doocs/md/releases/tag/desktop-v2.2.0`,
+    })
+
+    const withoutSafeUrl = reduceUpdateState(checking, {
+      type: `available`,
+      version: `2.2.0`,
+      fileUrl: `javascript:/releases/download/x/y.zip`,
+    })
+    expect(withoutSafeUrl).toEqual({
+      supported: true,
+      mode: `notify`,
+      currentVersion: `2.1.0`,
+      status: `available`,
+      version: `2.2.0`,
+    })
+  })
+
+  it(`tracks download progress and downloaded state in install mode`, () => {
+    const checking = reduceUpdateState(createInitialUpdateState(`2.1.0`, `install`), { type: `checking` })
+    const available = reduceUpdateState(checking, {
+      type: `available`,
+      version: `2.2.0`,
+      fileUrl: `https://github.com/doocs/md/releases/download/desktop-v2.2.0/md-2.2.0.exe`,
+    })
+    expect(available).toEqual({
+      supported: true,
+      mode: `install`,
+      currentVersion: `2.1.0`,
+      status: `downloading`,
+      version: `2.2.0`,
+    })
+
+    const progress1 = reduceUpdateState(available, { type: `download-progress`, percent: 42.6 })
+    expect(progress1).toEqual({
+      supported: true,
+      mode: `install`,
+      currentVersion: `2.1.0`,
+      status: `downloading`,
+      version: `2.2.0`,
+      percent: 43,
+    })
+
+    const clamped = reduceUpdateState(progress1, { type: `download-progress`, percent: 150 })
+    expect(clamped.percent).toBe(100)
+
+    const nonFinite = reduceUpdateState(progress1, { type: `download-progress`, percent: Number.NaN })
+    expect(nonFinite.percent).toBe(43)
+
+    const downloaded = reduceUpdateState(progress1, { type: `downloaded`, version: `2.2.0` })
+    expect(downloaded).toEqual({
+      supported: true,
+      mode: `install`,
+      currentVersion: `2.1.0`,
+      status: `downloaded`,
+      version: `2.2.0`,
+    })
+  })
+
+  it(`records errors and clears stale fields on retry`, () => {
+    const downloading = reduceUpdateState(
+      reduceUpdateState(createInitialUpdateState(`2.1.0`, `install`), { type: `available`, version: `2.2.0` }),
+      { type: `download-progress`, percent: 30 },
+    )
+
+    const errored = reduceUpdateState(downloading, { type: `error`, message: `  net::ERR_INTERNET_DISCONNECTED  ` })
+    expect(errored).toEqual({
+      supported: true,
+      mode: `install`,
+      currentVersion: `2.1.0`,
+      status: `error`,
+      error: `net::ERR_INTERNET_DISCONNECTED`,
+    })
+
+    const retrying = reduceUpdateState(errored, { type: `checking` })
+    expect(retrying).toEqual({
+      supported: true,
+      mode: `install`,
+      currentVersion: `2.1.0`,
+      status: `checking`,
+    })
+
+    expect(areUpdateStatesEqual(retrying, { ...retrying })).toBe(true)
+    expect(areUpdateStatesEqual(retrying, errored)).toBe(false)
   })
 })

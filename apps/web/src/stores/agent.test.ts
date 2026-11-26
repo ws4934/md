@@ -207,6 +207,7 @@ describe(`useAgentStore thinking level state`, () => {
       acp: acpMock,
       ai: {} as never,
       wechat: {} as never,
+      updates: {} as never,
       pickFiles: vi.fn(async () => []),
       pickImage: vi.fn(async () => null),
       openExternal: vi.fn(async () => undefined),

@@ -1,28 +1,33 @@
 <script setup lang="ts">
 import type { PreferencesTab } from '@/stores/ui'
-import { ArrowLeft, Bot, Cpu, Eye, Image, ImagePlus, MessageCircle, PenLine, SlidersHorizontal } from '@lucide/vue'
+import { ArrowLeft, Bot, Cpu, Eye, Image, ImagePlus, Info, MessageCircle, PenLine, SlidersHorizontal } from '@lucide/vue'
 import PreferencesSection from '@/components/editor/dialogs/PreferencesSection.vue'
 import ImageHostSettings from '@/components/editor/dialogs/upload-providers/ImageHostSettings.vue'
 import { useUIStore } from '@/stores/ui'
+import AboutSettings from './AboutSettings.vue'
 import AgentsSettingsTab from './AgentsSettingsTab.vue'
 import ImageGenSettings from './ImageGenSettings.vue'
 import ModelApiSettings from './ModelApiSettings.vue'
 import WeChatAccountSettings from './WeChatAccountSettings.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const uiStore = useUIStore()
 const { preferencesInitialTab: activeSection } = storeToRefs(uiStore)
 
-const sections = computed(() => [
-  { id: `general`, icon: SlidersHorizontal, label: t(`preferences.tab.general`), description: t(`preferences.sectionHint.general`) },
-  { id: `editor`, icon: PenLine, label: t(`preferences.tab.editor`), description: t(`preferences.sectionHint.editor`) },
-  { id: `preview`, icon: Eye, label: t(`preferences.tab.preview`), description: t(`preferences.sectionHint.preview`) },
-  { id: `images`, icon: Image, label: t(`preferences.tab.images`), description: t(`preferences.sectionHint.images`) },
-  { id: `wechat`, icon: MessageCircle, label: t(`preferences.tab.wechat`), description: t(`preferences.sectionHint.wechat`) },
-  { id: `agents`, icon: Bot, label: t(`preferences.tab.agents`), description: `` },
-  { id: `modelApi`, icon: Cpu, label: t(`preferences.tab.modelApi`), description: t(`preferences.sectionHint.modelApi`) },
-  { id: `imageGen`, icon: ImagePlus, label: t(`preferences.tab.imageGen`), description: t(`preferences.sectionHint.imageGen`) },
-] satisfies { id: PreferencesTab, icon: unknown, label: string, description: string }[])
+const sections = computed(() => {
+  void locale.value
+  return [
+    { id: `general`, icon: SlidersHorizontal, label: t(`preferences.tab.general`), description: t(`preferences.sectionHint.general`) },
+    { id: `editor`, icon: PenLine, label: t(`preferences.tab.editor`), description: t(`preferences.sectionHint.editor`) },
+    { id: `preview`, icon: Eye, label: t(`preferences.tab.preview`), description: t(`preferences.sectionHint.preview`) },
+    { id: `images`, icon: Image, label: t(`preferences.tab.images`), description: t(`preferences.sectionHint.images`) },
+    { id: `wechat`, icon: MessageCircle, label: t(`preferences.tab.wechat`), description: t(`preferences.sectionHint.wechat`) },
+    { id: `agents`, icon: Bot, label: t(`preferences.tab.agents`), description: `` },
+    { id: `modelApi`, icon: Cpu, label: t(`preferences.tab.modelApi`), description: t(`preferences.sectionHint.modelApi`) },
+    { id: `imageGen`, icon: ImagePlus, label: t(`preferences.tab.imageGen`), description: t(`preferences.sectionHint.imageGen`) },
+    { id: `about`, icon: Info, label: t(`preferences.tab.about`), description: t(`preferences.sectionHint.about`) },
+  ] satisfies { id: PreferencesTab, icon: unknown, label: string, description: string }[]
+})
 
 const current = computed(() => sections.value.find(s => s.id === activeSection.value) ?? sections.value[0])
 
@@ -99,6 +104,7 @@ onUnmounted(() => window.removeEventListener(`keydown`, onKeydown))
           <WeChatAccountSettings v-else-if="current.id === 'wechat'" />
           <ModelApiSettings v-else-if="current.id === 'modelApi'" />
           <ImageGenSettings v-else-if="current.id === 'imageGen'" />
+          <AboutSettings v-else-if="current.id === 'about'" />
           <AgentsSettingsTab v-else @open-model-api="activeSection = 'modelApi'" />
         </div>
       </div>

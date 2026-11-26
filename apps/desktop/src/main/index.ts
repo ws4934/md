@@ -6,11 +6,13 @@ import type {
   DesktopListRemoteModelsParams,
   DesktopModelApiConfigUpdate,
   DesktopTestImageGenParams,
+  DesktopUpdateState,
   WeChatPublishProgressEvent,
   WeChatPublishRequest,
   WeChatUploadImageRequest,
 } from '@md/shared/types'
-import type { UpdateMode } from './auto-update'
+import type { UpdateInfo } from 'electron-updater'
+import type { UpdateMode, UpdaterStateEvent } from './auto-update'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -29,7 +31,16 @@ import { resolveUnpackedAgentScript, resolveUnpackedSkillsDir } from './ai/paths
 import { fetchRemoteModels } from './ai/remote-models'
 import { redactSecret } from './ai/sanitize'
 import { APP_HOST, APP_SCHEME, isSafeExternalUrl, resolveAppProtocolTarget } from './app-protocol'
-import { createUpdatePromptGate, readMacAutoInstallFlag, releasePageUrl, resolveUpdateMode, UPDATE_COPY } from './auto-update'
+import {
+  areUpdateStatesEqual,
+  createInitialUpdateState,
+  createUpdatePromptGate,
+  readMacAutoInstallFlag,
+  reduceUpdateState,
+  releasePageUrl,
+  resolveUpdateMode,
+  UPDATE_COPY,
+} from './auto-update'
 import { QuitGuard } from './quit-guard'
 import { mimeForExtension, WeChatPublisher } from './wechat/publisher'
 
@@ -73,6 +84,17 @@ function registerAppProtocol(): void {
   })
 }
 
+type UpdateCheckOrigin = `background` | `menu` | `settings`
+
+type UpdateCheckOutcome
+  = | { ok: true, info: UpdateInfo | null }
+    | { ok: false, error: string }
+
+interface InFlightUpdateCheck {
+  promise: Promise<UpdateCheckOutcome>
+  origins: Set<UpdateCheckOrigin>
+}
+
 let mainWindow: BrowserWindow | null = null
 let acpHost: AcpHost | null = null
 let acpEventBatcher: AcpEventBatcher | null = null
@@ -81,8 +103,12 @@ let imageGenBridge: ImageGenBridge | null = null
 let wechatPublisher: WeChatPublisher | null = null
 let quitGuard: QuitGuard | null = null
 let updateMode: UpdateMode | null = null
+let updateState: DesktopUpdateState = createInitialUpdateState(app.getVersion(), null)
 let downloadedUpdateVersion: string | null = null
 let installingUpdate = false
+let inFlightUpdateCheck: InFlightUpdateCheck | null = null
+let promptOnNextDownload = false
+let restartPromptActive = false
 const shouldPromptUpdate = createUpdatePromptGate()
 
 const testQuitResponses: Array<`cancel` | `confirm`> = (process.env.MD_DESKTOP_TEST_QUIT_RESPONSES ?? ``)
@@ -105,6 +131,21 @@ function broadcastAcpEvent(event: AcpHostEvent): void {
 function broadcastWeChatProgress(event: WeChatPublishProgressEvent): void {
   if (mainWindow && !mainWindow.isDestroyed())
     mainWindow.webContents.send(IPC_CHANNELS.WECHAT_PUBLISH_PROGRESS, event)
+}
+
+function broadcastUpdateState(state: DesktopUpdateState): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed())
+      win.webContents.send(IPC_CHANNELS.UPDATES_STATE, state)
+  }
+}
+
+function dispatchUpdateEvent(event: UpdaterStateEvent): void {
+  const next = reduceUpdateState(updateState, event)
+  if (areUpdateStatesEqual(updateState, next))
+    return
+  updateState = next
+  broadcastUpdateState(next)
 }
 
 function buildExtraBuiltinAgents(): AcpAgentConfig[] {
@@ -319,6 +360,14 @@ function registerIpc(host: AcpHost, publisher: WeChatPublisher, configStore: AiC
   ipcMain.handle(IPC_CHANNELS.ACP_RESPOND_PERMISSION, (_event, params) => host.respondPermission(params))
   ipcMain.handle(IPC_CHANNELS.ACP_CLOSE_SESSION, (_event, sessionId) => host.closeSession(sessionId))
   ipcMain.handle(IPC_CHANNELS.ACP_READ_WORKSPACE_IMAGE, (_event, params) => host.readWorkspaceImage(params))
+
+  ipcMain.handle(IPC_CHANNELS.UPDATES_GET_STATE, () => updateState)
+  ipcMain.handle(IPC_CHANNELS.UPDATES_CHECK, () => checkForUpdates(`settings`))
+  ipcMain.handle(IPC_CHANNELS.UPDATES_INSTALL, () => {
+    if (updateMode !== `install` || updateState.status !== `downloaded`)
+      return
+    quitAndInstallThroughGuard()
+  })
 }
 
 function updateCopy() {
@@ -343,16 +392,28 @@ async function showUpdateMessage(type: `info` | `error`, message: string, detail
   return response
 }
 
-async function promptRestartToUpdate(version: string): Promise<void> {
-  const copy = updateCopy()
-  const response = await showUpdateMessage(`info`, copy.downloaded(version), copy.downloadedDetail, [copy.restartNow, copy.later])
-  if (response !== 0)
-    return
+function quitAndInstallThroughGuard(): void {
   // Same confirm/dispose path as a normal quit; installing only starts once agents are shut down.
   quitGuard?.requestQuit(() => {
     installingUpdate = true
     autoUpdater.quitAndInstall()
   })
+}
+
+async function promptRestartToUpdate(version: string): Promise<void> {
+  if (restartPromptActive)
+    return
+  restartPromptActive = true
+  try {
+    const copy = updateCopy()
+    const response = await showUpdateMessage(`info`, copy.downloaded(version), copy.downloadedDetail, [copy.restartNow, copy.later])
+    if (response !== 0)
+      return
+    quitAndInstallThroughGuard()
+  }
+  finally {
+    restartPromptActive = false
+  }
 }
 
 async function promptDownloadUpdate(version: string, fileUrl: string | undefined): Promise<void> {
@@ -367,35 +428,98 @@ async function promptDownloadUpdate(version: string, fileUrl: string | undefined
     await shell.openExternal(page)
 }
 
-async function checkForUpdates(manual: boolean): Promise<void> {
+async function checkForUpdates(origin: UpdateCheckOrigin): Promise<DesktopUpdateState> {
+  if (!updateMode)
+    return updateState
+
+  // Do not let periodic background checks overwrite active download progress or a ready-to-install update.
+  if (origin === `background` && (updateState.status === `downloading` || updateState.status === `downloaded`))
+    return updateState
+
+  // Avoid queuing duplicate native dialogs if the menu item is clicked again while a menu check is in flight.
+  if (origin === `menu` && inFlightUpdateCheck?.origins.has(`menu`)) {
+    await inFlightUpdateCheck.promise
+    return updateState
+  }
+
+  let active = inFlightUpdateCheck
+  if (!active) {
+    const origins = new Set<UpdateCheckOrigin>([origin])
+    const promise = (async (): Promise<UpdateCheckOutcome> => {
+      try {
+        const result = await autoUpdater.checkForUpdates()
+        // Download failures are already reported through the `error` event.
+        void result?.downloadPromise?.catch(() => undefined)
+        const info = result?.isUpdateAvailable ? result.updateInfo : null
+        return { ok: true, info }
+      }
+      catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        dispatchUpdateEvent({ type: `error`, message })
+        return { ok: false, error: message }
+      }
+      finally {
+        if (inFlightUpdateCheck?.origins === origins)
+          inFlightUpdateCheck = null
+      }
+    })()
+    active = { promise, origins }
+    inFlightUpdateCheck = active
+  }
+  else {
+    active.origins.add(origin)
+  }
+
+  const outcome = await active.promise
   const copy = updateCopy()
-  try {
-    const result = await autoUpdater.checkForUpdates()
-    // Download failures are already reported through the `error` event.
-    void result?.downloadPromise?.catch(() => undefined)
-    const info = result?.isUpdateAvailable ? result.updateInfo : null
-    if (!info) {
-      if (manual)
-        await showUpdateMessage(`info`, copy.upToDate, copy.upToDateDetail(app.getVersion()), [copy.ok])
+
+  if (!outcome.ok) {
+    if (origin === `menu`)
+      await showUpdateMessage(`error`, copy.checkFailed, outcome.error, [copy.ok])
+    else if (origin === `background`)
+      console.warn(`[md-desktop:update] background check failed: ${outcome.error}`)
+    return updateState
+  }
+
+  const info = outcome.info
+  if (!info) {
+    if (origin === `menu`)
+      await showUpdateMessage(`info`, copy.upToDate, copy.upToDateDetail(app.getVersion()), [copy.ok])
+    return updateState
+  }
+
+  if (updateMode === `notify`) {
+    if (origin === `settings`) {
+      if (!active.origins.has(`menu`))
+        shouldPromptUpdate(info.version, false)
     }
-    else if (updateMode === `notify`) {
-      if (shouldPromptUpdate(info.version, manual))
+    else if (origin === `menu`) {
+      if (shouldPromptUpdate(info.version, true))
         await promptDownloadUpdate(info.version, info.files[0]?.url)
     }
-    else if (manual) {
-      if (downloadedUpdateVersion === info.version)
-        await promptRestartToUpdate(info.version)
-      else
-        await showUpdateMessage(`info`, copy.downloading(info.version), copy.downloadingDetail, [copy.ok])
+    else if (!active.origins.has(`menu`) && !active.origins.has(`settings`)) {
+      if (shouldPromptUpdate(info.version, false))
+        await promptDownloadUpdate(info.version, info.files[0]?.url)
+    }
+    return updateState
+  }
+
+  if (origin === `settings`) {
+    if (!active.origins.has(`menu`))
+      shouldPromptUpdate(info.version, false)
+  }
+  else if (origin === `menu`) {
+    if (downloadedUpdateVersion === info.version) {
+      shouldPromptUpdate(info.version, true)
+      await promptRestartToUpdate(info.version)
+    }
+    else {
+      promptOnNextDownload = true
+      await showUpdateMessage(`info`, copy.downloading(info.version), copy.downloadingDetail, [copy.ok])
     }
   }
-  catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    if (manual)
-      await showUpdateMessage(`error`, copy.checkFailed, message, [copy.ok])
-    else
-      console.warn(`[md-desktop:update] background check failed: ${message}`)
-  }
+
+  return updateState
 }
 
 /** Electron's default menu plus "Check for Updates…" in the app menu (macOS) or Help menu. */
@@ -403,7 +527,7 @@ function setAppMenu(): void {
   const isMac = process.platform === `darwin`
   const checkItem: Electron.MenuItemConstructorOptions = {
     label: updateCopy().menuLabel,
-    click: () => void checkForUpdates(true),
+    click: () => void checkForUpdates(`menu`),
   }
   const template: Electron.MenuItemConstructorOptions[] = [
     { role: `fileMenu` },
@@ -434,20 +558,52 @@ function setAppMenu(): void {
 
 function startAutoUpdate(mode: UpdateMode): void {
   updateMode = mode
+  updateState = createInitialUpdateState(app.getVersion(), mode)
   autoUpdater.autoDownload = mode === `install`
+  autoUpdater.on(`checking-for-update`, () => {
+    dispatchUpdateEvent({ type: `checking` })
+  })
+  autoUpdater.on(`update-available`, (info) => {
+    dispatchUpdateEvent({
+      type: `available`,
+      version: info.version,
+      fileUrl: info.files[0]?.url,
+    })
+    // Mark as surfaced before the download completes so settings-triggered checks stay inline.
+    if (inFlightUpdateCheck?.origins.has(`settings`) && !inFlightUpdateCheck.origins.has(`menu`))
+      shouldPromptUpdate(info.version, false)
+  })
+  autoUpdater.on(`update-not-available`, () => {
+    promptOnNextDownload = false
+    dispatchUpdateEvent({ type: `not-available` })
+  })
+  autoUpdater.on(`download-progress`, (progress) => {
+    dispatchUpdateEvent({ type: `download-progress`, percent: progress.percent })
+  })
   autoUpdater.on(`update-downloaded`, (info) => {
     downloadedUpdateVersion = info.version
-    if (shouldPromptUpdate(info.version, false))
+    dispatchUpdateEvent({ type: `downloaded`, version: info.version })
+    // If a menu check is still awaiting the same run, it will show the restart dialog directly.
+    if (inFlightUpdateCheck?.origins.has(`menu`))
+      return
+    const forcePrompt = promptOnNextDownload
+    promptOnNextDownload = false
+    if (shouldPromptUpdate(info.version, forcePrompt))
       void promptRestartToUpdate(info.version)
   })
-  autoUpdater.on(`error`, () => {
+  autoUpdater.on(`error`, (error) => {
+    promptOnNextDownload = false
+    dispatchUpdateEvent({
+      type: `error`,
+      message: error instanceof Error ? error.message : String(error),
+    })
     // The quit guard already disposed the agents, so quit rather than linger half shut down.
     if (installingUpdate)
       app.quit()
   })
   setAppMenu()
-  setTimeout(() => void checkForUpdates(false), UPDATE_FIRST_CHECK_DELAY_MS)
-  setInterval(() => void checkForUpdates(false), UPDATE_CHECK_INTERVAL_MS)
+  setTimeout(() => void checkForUpdates(`background`), UPDATE_FIRST_CHECK_DELAY_MS)
+  setInterval(() => void checkForUpdates(`background`), UPDATE_CHECK_INTERVAL_MS)
 }
 
 app.whenReady().then(() => {
@@ -599,6 +755,17 @@ app.whenReady().then(() => {
     isSmokeRun: () => Number(process.env.MD_DESKTOP_SMOKE_EXIT_MS ?? 0) > 0,
     disposeTimeoutMs: QUIT_DISPOSE_TIMEOUT_MS,
   })
+  const smokeExitMs = Number(process.env.MD_DESKTOP_SMOKE_EXIT_MS ?? 0)
+  const mode = resolveUpdateMode({
+    isPackaged: app.isPackaged,
+    isSmokeRun: smokeExitMs > 0,
+    platform: process.platform,
+    isAppImage: Boolean(process.env.APPIMAGE),
+    macAutoInstall: readMacAutoInstallFlag(app.getAppPath()),
+  })
+  updateMode = mode
+  updateState = createInitialUpdateState(app.getVersion(), mode)
+
   registerIpc(acpHost, wechatPublisher, aiConfigStore)
   mainWindow = createMainWindow()
 
@@ -614,7 +781,6 @@ app.whenReady().then(() => {
     })
   }
 
-  const smokeExitMs = Number(process.env.MD_DESKTOP_SMOKE_EXIT_MS ?? 0)
   if (smokeExitMs > 0) {
     mainWindow.webContents.once(`did-finish-load`, () => {
       console.log(`[md-desktop] window finished loading`)
@@ -622,13 +788,6 @@ app.whenReady().then(() => {
     })
   }
 
-  const mode = resolveUpdateMode({
-    isPackaged: app.isPackaged,
-    isSmokeRun: smokeExitMs > 0,
-    platform: process.platform,
-    isAppImage: Boolean(process.env.APPIMAGE),
-    macAutoInstall: readMacAutoInstallFlag(app.getAppPath()),
-  })
   if (mode)
     startAutoUpdate(mode)
 

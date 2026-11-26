@@ -12,6 +12,7 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AboutDialog: typeof import('./src/components/editor/editor-header/AboutDialog.vue')['default']
+    AboutSettings: typeof import('./src/components/agent/AboutSettings.vue')['default']
     AccountDialog: typeof import('./src/components/editor/editor-header/AccountDialog.vue')['default']
     AgentAvatar: typeof import('./src/components/agent/AgentAvatar.vue')['default']
     AgentComposer: typeof import('./src/components/agent/AgentComposer.vue')['default']

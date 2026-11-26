@@ -1,3 +1,4 @@
+import type { DesktopUpdateMode, DesktopUpdateState } from '@md/shared/types'
 import type { QuitLocale } from './quit-guard'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -7,7 +8,7 @@ import { isSafeExternalUrl } from './app-protocol'
  * `install`: download in the background and restart into the update.
  * `notify`: only point at the release page, because Squirrel.Mac refuses to install into an unsigned app.
  */
-export type UpdateMode = `install` | `notify`
+export type UpdateMode = DesktopUpdateMode
 
 export interface UpdateEnvironment {
   isPackaged: boolean
@@ -54,6 +55,106 @@ export function createUpdatePromptGate(): (version: string, manual: boolean) => 
     prompted.add(version)
     return true
   }
+}
+
+export type UpdaterStateEvent
+  = | { type: `checking` }
+    | { type: `available`, version: string, fileUrl?: string }
+    | { type: `not-available` }
+    | { type: `download-progress`, percent: number }
+    | { type: `downloaded`, version: string }
+    | { type: `error`, message: string }
+
+export function createInitialUpdateState(currentVersion: string, mode: UpdateMode | null): DesktopUpdateState {
+  return {
+    supported: mode !== null,
+    mode,
+    currentVersion,
+    status: `idle`,
+  }
+}
+
+function normalizePercent(percent: number): number | undefined {
+  if (!Number.isFinite(percent))
+    return undefined
+  return Math.min(100, Math.max(0, Math.round(percent)))
+}
+
+export function reduceUpdateState(state: DesktopUpdateState, event: UpdaterStateEvent): DesktopUpdateState {
+  if (!state.supported || state.mode === null)
+    return state
+
+  const base = {
+    supported: true as const,
+    mode: state.mode,
+    currentVersion: state.currentVersion,
+  }
+
+  switch (event.type) {
+    case `checking`:
+      return {
+        ...base,
+        status: `checking`,
+      }
+    case `not-available`:
+      return {
+        ...base,
+        status: `not-available`,
+      }
+    case `available`: {
+      if (state.mode === `notify`) {
+        const releaseUrl = releasePageUrl(event.fileUrl) ?? undefined
+        return {
+          ...base,
+          status: `available`,
+          version: event.version,
+          ...(releaseUrl ? { releaseUrl } : {}),
+        }
+      }
+      // `install` mode enables `autoDownload`, so downloading begins right after `update-available`.
+      return {
+        ...base,
+        status: `downloading`,
+        version: event.version,
+      }
+    }
+    case `download-progress`: {
+      const percent = normalizePercent(event.percent) ?? state.percent
+      return {
+        ...base,
+        status: `downloading`,
+        ...(state.version ? { version: state.version } : {}),
+        ...(percent !== undefined ? { percent } : {}),
+      }
+    }
+    case `downloaded`:
+      return {
+        ...base,
+        status: `downloaded`,
+        version: event.version,
+      }
+    case `error`: {
+      const error = event.message.trim()
+      return {
+        ...base,
+        status: `error`,
+        ...(error ? { error } : {}),
+      }
+    }
+  }
+}
+
+export function areUpdateStatesEqual(a: DesktopUpdateState, b: DesktopUpdateState): boolean {
+  return (
+    a.supported === b.supported
+    && a.mode === b.mode
+    && a.currentVersion === b.currentVersion
+    && a.status === b.status
+    && a.version === b.version
+    && a.percent === b.percent
+    && a.releaseUrl === b.releaseUrl
+    && a.error === b.error
+  )
 }
 
 export interface UpdateCopy {

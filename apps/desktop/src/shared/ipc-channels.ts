@@ -30,4 +30,8 @@ export const IPC_CHANNELS = {
   ACP_CLOSE_SESSION: `md:acp:close-session`,
   ACP_READ_WORKSPACE_IMAGE: `md:acp:read-workspace-image`,
   ACP_EVENT: `md:acp:event`,
+  UPDATES_GET_STATE: `md:updates:get-state`,
+  UPDATES_CHECK: `md:updates:check`,
+  UPDATES_INSTALL: `md:updates:install`,
+  UPDATES_STATE: `md:updates:state`,
 } as const

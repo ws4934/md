@@ -9,6 +9,7 @@ import type {
   DesktopListRemoteModelsParams,
   DesktopModelApiConfigUpdate,
   DesktopTestImageGenParams,
+  DesktopUpdateState,
   WeChatPublishProgressEvent,
   WeChatPublishRequest,
   WeChatUploadImageRequest,
@@ -86,6 +87,20 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.on(IPC_CHANNELS.ACP_EVENT, handler)
       return () => {
         ipcRenderer.removeListener(IPC_CHANNELS.ACP_EVENT, handler)
+      }
+    },
+  },
+  updates: {
+    getState: () => ipcRenderer.invoke(IPC_CHANNELS.UPDATES_GET_STATE),
+    check: () => ipcRenderer.invoke(IPC_CHANNELS.UPDATES_CHECK),
+    install: () => ipcRenderer.invoke(IPC_CHANNELS.UPDATES_INSTALL),
+    onState: (listener: (state: DesktopUpdateState) => void) => {
+      const handler = (_ipcEvent: Electron.IpcRendererEvent, payload: DesktopUpdateState) => {
+        listener(payload)
+      }
+      ipcRenderer.on(IPC_CHANNELS.UPDATES_STATE, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.UPDATES_STATE, handler)
       }
     },
   },

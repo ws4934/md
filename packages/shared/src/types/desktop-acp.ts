@@ -263,12 +263,42 @@ export interface DesktopPickedFile {
   name: string
 }
 
+export type DesktopUpdateMode = `install` | `notify`
+
+export type DesktopUpdateStatus
+  = | `idle`
+    | `checking`
+    | `not-available`
+    | `available`
+    | `downloading`
+    | `downloaded`
+    | `error`
+
+export interface DesktopUpdateState {
+  supported: boolean
+  mode: DesktopUpdateMode | null
+  currentVersion: string
+  status: DesktopUpdateStatus
+  version?: string
+  percent?: number
+  releaseUrl?: string
+  error?: string
+}
+
+export interface DesktopUpdatesApi {
+  getState: () => Promise<DesktopUpdateState>
+  check: () => Promise<DesktopUpdateState>
+  install: () => Promise<void>
+  onState: (listener: (state: DesktopUpdateState) => void) => () => void
+}
+
 export interface DesktopBridge {
   isDesktop: true
   platform: string
   acp: DesktopAcpApi
   ai: DesktopAiApi
   wechat: DesktopWeChatApi
+  updates: DesktopUpdatesApi
   pickFiles: () => Promise<DesktopPickedFile[]>
   pickImage: () => Promise<DesktopPickedImage | null>
   openExternal: (url: string) => Promise<void>
