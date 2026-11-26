@@ -1,13 +1,13 @@
 import type { AcpModeInfo, AcpPermissionLevel, AcpSettings, AcpToolKind } from '../types/desktop-acp'
 
-export const DEFAULT_ACP_SETTINGS: Readonly<AcpSettings> = {
+export const DEFAULT_ACP_SETTINGS: Readonly<AcpSettings> = Object.freeze({
   defaultAgentId: `claude`,
   defaultPermissionLevel: `ask`,
-  lastModelByAgent: {},
-  lastThinkingLevelByAgent: {},
-  customAgents: [],
-  commandOverrides: {},
-}
+  lastModelByAgent: Object.freeze({}) as Record<string, string>,
+  lastThinkingLevelByAgent: Object.freeze({}) as Record<string, string>,
+  customAgents: Object.freeze([]) as unknown as AcpSettings[`customAgents`],
+  commandOverrides: Object.freeze({}) as AcpSettings[`commandOverrides`],
+})
 
 export function createDefaultAcpSettings(): AcpSettings {
   return {
@@ -57,9 +57,9 @@ export function clampAgentModePermissionLevel(
 
 const MODE_ID_ALIASES: Record<AcpPermissionLevel, readonly string[]> = {
   ask: [`default`, `ask`, `prompt`, `normal`, `standard`, `suggest`, `code`, `write`, `build`],
-  auto_edits: [`acceptedits`, `accept_edits`, `accept-edits`, `autoedits`, `auto_edits`, `auto-edits`, `autoedit`, `auto_edit`, `auto-edit`, `edit`],
-  plan: [`plan`, `planmode`, `plan_mode`, `plan-mode`, `architect`, `readonly`, `read_only`, `read-only`],
-  bypass: [`bypasspermissions`, `bypass_permissions`, `bypass-permissions`, `bypass`, `dontask`, `dont_ask`, `dont-ask`, `yolo`, `fullauto`, `full_auto`, `full-auto`, `fullaccess`, `full_access`, `full-access`, `agentfullaccess`, `agent_full_access`, `agent-full-access`],
+  auto_edits: [`acceptedits`, `autoedits`, `autoedit`, `edit`],
+  plan: [`plan`, `planmode`, `architect`, `readonly`],
+  bypass: [`bypasspermissions`, `bypass`, `dontask`, `yolo`, `fullauto`, `fullaccess`, `agentfullaccess`],
 }
 
 export function isAcpPermissionLevel(value: unknown): value is AcpPermissionLevel {
@@ -71,7 +71,7 @@ export function isEditToolKind(kind: AcpToolKind): boolean {
 }
 
 function normalizeModeKey(modeId: string): string {
-  return modeId.trim().toLowerCase()
+  return modeId.trim().toLowerCase().replace(/[\s_-]+/g, ``)
 }
 
 export function mapAcpModeIdToPermissionLevel(modeId: string | null | undefined): AcpPermissionLevel | null {
@@ -130,11 +130,16 @@ export function resolveNativeModeIdForLevel(
   const currentMapped = mapAcpModeIdToPermissionLevel(currentModeId)
   const mustLeaveBypass = level !== `bypass` && currentMapped === `bypass`
   const mustLeavePlan = level !== `plan` && currentMapped === `plan`
+  const mustLeaveAutoEdits = level === `ask` && currentMapped === `auto_edits`
 
-  if (mustLeaveBypass || mustLeavePlan || (level === `bypass` && !currentModeId)) {
+  if (mustLeaveBypass || mustLeavePlan || mustLeaveAutoEdits || (level === `bypass` && !currentModeId)) {
     const neutral = modes.find((mode) => {
       const mapped = mapAcpModeIdToPermissionLevel(mode.id)
-      return mapped !== `bypass` && mapped !== `plan`
+      if (mapped === `bypass` || mapped === `plan`)
+        return false
+      if (level === `ask` && mapped === `auto_edits`)
+        return false
+      return true
     })
     if (neutral)
       return neutral.id
@@ -193,7 +198,10 @@ export function migrateLegacyPermissionSettings(raw: {
   defaultPermissionLevel?: unknown
   reviewEditsBeforeWriting?: unknown
   askBeforeRunningCommands?: unknown
-}): { level: AcpPermissionLevel, migrated: boolean } {
+} | null | undefined): { level: AcpPermissionLevel, migrated: boolean } {
+  if (!raw || typeof raw !== `object`)
+    return { level: `ask`, migrated: false }
+
   const hasLegacyKeys
     = typeof raw.reviewEditsBeforeWriting === `boolean`
       || typeof raw.askBeforeRunningCommands === `boolean`

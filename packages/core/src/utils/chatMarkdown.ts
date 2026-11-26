@@ -2,7 +2,9 @@ import type { Tokens } from 'marked'
 import hljs from 'highlight.js/lib/core'
 import DOMPurify from 'isomorphic-dompurify'
 import { Marked } from 'marked'
+import { escapeHtml } from './basicHelpers'
 import { COMMON_LANGUAGES } from './languages'
+import { fenceRunLength } from './scan'
 
 let languagesRegistered = false
 
@@ -23,10 +25,13 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   cjs: `javascript`,
   ts: `typescript`,
   tsx: `typescript`,
+  jsonc: `json`,
+  jsonl: `json`,
   sh: `bash`,
   zsh: `bash`,
   yml: `plaintext`,
   yaml: `plaintext`,
+  htm: `xml`,
   html: `xml`,
   vue: `xml`,
   svg: `xml`,
@@ -36,59 +41,156 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   txt: `plaintext`,
 }
 
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, `&amp;`)
-    .replace(/</g, `&lt;`)
-    .replace(/>/g, `&gt;`)
-    .replace(/"/g, `&quot;`)
-    .replace(/'/g, `&#39;`)
-}
+const SAFE_LANG_CLASS_RE = /^[\w+-]+$/
+const SAFE_TABLE_ALIGNS = new Set([`left`, `center`, `right`])
 
 function decodeFileUrl(href: string): string {
-  const withoutScheme = href.replace(/^file:\/\//i, ``)
+  let withoutScheme = href.replace(/^file:\/\//i, ``)
+  if (/^localhost\//i.test(withoutScheme))
+    withoutScheme = withoutScheme.slice(`localhost`.length)
+  // Strip optional URI query/line-anchor (e.g. `#L10-L20`) so chip paths and extensions resolve cleanly.
+  withoutScheme = withoutScheme.replace(/[?#].*$/, ``)
+  let decoded = withoutScheme
   try {
-    return decodeURIComponent(withoutScheme)
+    decoded = decodeURIComponent(withoutScheme)
   }
   catch {
-    return withoutScheme
+    decoded = withoutScheme
   }
+  // RFC 8089 Windows file URIs (`file:///C:/...`) carry a leading slash before the drive letter.
+  return decoded.replace(/^\/([a-z]:\/)/i, `$1`)
 }
 
 function compactFileLabel(label: string, decodedPath: string): string {
-  const trimmed = label.trim()
-  if (trimmed && !/^file:\/\//i.test(trimmed) && !trimmed.includes(`/acp-workspaces/`))
-    return trimmed
+  const unquoted = label.trim().replace(/^`([^`]+)`$/, `$1`).trim()
+  if (unquoted && !/^file:\/\//i.test(unquoted) && !unquoted.includes(`/acp-workspaces/`))
+    return unquoted
   const parts = decodedPath.replace(/\\/g, `/`).split(`/`).filter(Boolean)
-  return parts[parts.length - 1] || trimmed || decodedPath
+  return parts[parts.length - 1] || unquoted || decodedPath
 }
 
 const IMAGE_FILE_EXT_RE = /\.(?:png|jpe?g|gif|webp|avif|svg)$/i
+const FILE_SCHEME_RE = /file:\/\//i
+const FILE_LINK_RE = /(\[[^\]\r\n]*\]\()(file:\/\/(?:[^()\r\n]|\([^()\r\n]*\))+)(\))/gi
+const FILE_LINK_TRAILING_TITLE_RE = /[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*')$/
 
 function detectFileChipKind(pathOrLabel: string): `image` | `file` {
   return IMAGE_FILE_EXT_RE.test(pathOrLabel.trim()) ? `image` : `file`
 }
 
+function opensFenceOnLine(line: string): { char: string, length: number } | null {
+  const fence = fenceRunLength(line, 0, line.length)
+  if (!fence)
+    return null
+  if (fence.char === `\``) {
+    let i = 0
+    while (i < line.length && line[i] === ` `)
+      i++
+    if (line.includes(`\``, i + fence.length))
+      return null
+  }
+  return fence
+}
+
+function closesFenceOnLine(line: string, fenceChar: string, fenceLength: number): boolean {
+  const fence = fenceRunLength(line, 0, line.length)
+  if (!fence || fence.char !== fenceChar || fence.length < fenceLength)
+    return false
+  let i = 0
+  while (i < line.length && line[i] === ` `)
+    i++
+  i += fence.length
+  while (i < line.length) {
+    const ch = line[i]
+    if (ch !== ` ` && ch !== `\t` && ch !== `\r`)
+      return false
+    i++
+  }
+  return true
+}
+
+function collectInlineCodeRanges(line: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = []
+  let i = 0
+  while (i < line.length) {
+    if (line[i] !== `\``) {
+      i++
+      continue
+    }
+    let ticks = 0
+    while (i + ticks < line.length && line[i + ticks] === `\``)
+      ticks++
+    const closeIdx = line.indexOf(`\``.repeat(ticks), i + ticks)
+    if (closeIdx === -1) {
+      i += ticks
+      continue
+    }
+    ranges.push([i, closeIdx + ticks])
+    i = closeIdx + ticks
+  }
+  return ranges
+}
+
+function encodeFileLinksOutsideInlineCode(line: string): string {
+  const codeRanges = line.includes(`\``) ? collectInlineCodeRanges(line) : []
+  return line.replace(
+    FILE_LINK_RE,
+    (match, open: string, rawInner: string, close: string, offset: number) => {
+      // Skip `[...](file://...)` written literally inside an inline code span, while allowing `` [`a.md`](file://...) ``.
+      if (codeRanges.some(([start, end]) => offset >= start && offset < end))
+        return match
+      const titleMatch = FILE_LINK_TRAILING_TITLE_RE.exec(rawInner)
+      const rawUrl = titleMatch ? rawInner.slice(0, titleMatch.index) : rawInner
+      const titleSuffix = titleMatch ? titleMatch[0] : ``
+      const encodedUrl = rawUrl
+        .replace(/ /g, `%20`)
+        .replace(/\(/g, `%28`)
+        .replace(/\)/g, `%29`)
+      return `${open}${encodedUrl}${titleSuffix}${close}`
+    },
+  )
+}
+
 /**
- * Percent-encodes unescaped spaces inside `[label](file://...)` link destinations
- * outside fenced/inline code blocks. CommonMark rejects unescaped spaces inside `(...)`,
- * which otherwise causes macOS paths like `Application Support` to render as raw text.
+ * Percent-encodes unescaped spaces/parentheses inside `[label](file://...)` and `![alt](file://...)`
+ * link destinations outside fenced (backtick/tilde, any length, including unclosed streaming fences)
+ * and inline code spans. CommonMark rejects unescaped spaces inside `(...)`, which otherwise causes
+ * macOS paths like `Application Support` to render as raw text.
  */
 function normalizeFileLinkSpaces(markdown: string): string {
-  const segments = markdown.split(/(```[\s\S]*?```|`[^`\n]+`)/g)
-  for (let i = 0; i < segments.length; i += 2) {
-    segments[i] = segments[i].replace(
-      /(\[[^\]\r\n]+\]\()(file:\/\/[^)\r\n]+)(\))/gi,
-      (_match, open: string, url: string, close: string) => `${open}${url.replace(/ /g, `%20`)}${close}`,
-    )
+  if (!FILE_SCHEME_RE.test(markdown))
+    return markdown
+
+  const lines = markdown.split(`\n`)
+  let fenceChar = ``
+  let fenceLength = 0
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (fenceChar) {
+      if (closesFenceOnLine(line, fenceChar, fenceLength)) {
+        fenceChar = ``
+        fenceLength = 0
+      }
+      continue
+    }
+    const opened = opensFenceOnLine(line)
+    if (opened) {
+      fenceChar = opened.char
+      fenceLength = opened.length
+      continue
+    }
+    if (FILE_SCHEME_RE.test(line))
+      lines[i] = encodeFileLinksOutsideInlineCode(line)
   }
-  return segments.join(``)
+
+  return lines.join(`\n`)
 }
 
 function isSafeExternalUrl(href: string): boolean {
   try {
     const parsed = new URL(href)
-    return parsed.protocol === `http:` || parsed.protocol === `https:` || parsed.protocol === `mailto:`
+    return (parsed.protocol === `http:` || parsed.protocol === `https:`) && Boolean(parsed.hostname)
   }
   catch {
     return false
@@ -128,7 +230,9 @@ function createChatMarked(copyLabel: string): Marked {
           : escapeHtml(text)
         const displayLang = escapeHtml(rawLang || `text`)
         const safeCopy = escapeHtml(copyLabel)
-        const langClass = resolvedLang ? ` language-${escapeHtml(resolvedLang)}` : ``
+        const langClass = resolvedLang && SAFE_LANG_CLASS_RE.test(resolvedLang)
+          ? ` language-${escapeHtml(resolvedLang)}`
+          : ``
 
         return [
           `<div class="agent-code-block">`,
@@ -167,7 +271,16 @@ function createChatMarked(copyLabel: string): Marked {
           const titleAttr = token.title ? ` title="${escapeHtml(token.title)}"` : ``
           return `<img class="agent-md-img" src="${escapeHtml(href)}" alt="${escapeHtml(alt)}" loading="lazy"${titleAttr} />`
         }
-        const label = alt || compactFileLabel(href, decodeFileUrl(href))
+        if (/^file:\/\//i.test(href)) {
+          const decodedPath = decodeFileUrl(href)
+          const label = alt || compactFileLabel(``, decodedPath)
+          return `<span class="agent-file-chip" data-chip-kind="image" data-file-path="${escapeHtml(decodedPath)}" title="${escapeHtml(decodedPath)}">${escapeHtml(label)}</span>`
+        }
+        if (/^(?:data|javascript|vbscript):/i.test(href)) {
+          const label = alt || `image`
+          return `<span class="agent-file-chip" data-chip-kind="image">${escapeHtml(label)}</span>`
+        }
+        const label = alt || compactFileLabel(``, href) || `image`
         return `<span class="agent-file-chip" data-chip-kind="image" title="${escapeHtml(href)}">${escapeHtml(label)}</span>`
       },
 
@@ -175,7 +288,7 @@ function createChatMarked(copyLabel: string): Marked {
         const headerCells = token.header
           .map((cell, idx) => {
             const align = token.align[idx]
-            const alignAttr = align ? ` style="text-align:${align}"` : ``
+            const alignAttr = align && SAFE_TABLE_ALIGNS.has(align) ? ` style="text-align:${align}"` : ``
             return `<th${alignAttr}>${this.parser.parseInline(cell.tokens)}</th>`
           })
           .join(``)
@@ -184,7 +297,7 @@ function createChatMarked(copyLabel: string): Marked {
             const cells = row
               .map((cell, idx) => {
                 const align = token.align[idx]
-                const alignAttr = align ? ` style="text-align:${align}"` : ``
+                const alignAttr = align && SAFE_TABLE_ALIGNS.has(align) ? ` style="text-align:${align}"` : ``
                 return `<td${alignAttr}>${this.parser.parseInline(cell.tokens)}</td>`
               })
               .join(``)

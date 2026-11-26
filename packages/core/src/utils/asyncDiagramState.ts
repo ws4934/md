@@ -29,7 +29,7 @@ export function resolveDiagramMessages(messages?: DiagramMessages): DiagramMessa
 }
 
 export function formatDiagramMessage(template: string, detail: string): string {
-  return template.replace(`{detail}`, detail)
+  return template.split(`{detail}`).join(detail)
 }
 
 export function isSvgMarkup(content: string): boolean {

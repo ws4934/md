@@ -10,7 +10,7 @@ import {
   MD_DIAGRAM_STATE_ATTR,
   resolveDiagramMessages,
 } from '../utils/asyncDiagramState'
-import { simpleHash } from '../utils/basicHelpers'
+import { escapeHtml, simpleHash } from '../utils/basicHelpers'
 import { blockScanLimit, findAtLineStart } from '../utils/scan'
 import { createSVGCache } from '../utils/svgCache'
 import { diagramCacheThemeSuffix, getMermaidThemeConfig } from './diagram-theme'
@@ -72,7 +72,7 @@ let renderQueue: Promise<unknown> = Promise.resolve()
 
 function buildMermaidErrorHtml(detail: string, messages?: DiagramMessages): string {
   const resolved = messages ? resolveDiagramMessages(messages) : getDiagramMessages()
-  return `<div style="color: red; padding: 10px; border: 1px solid red;">${formatDiagramMessage(resolved.mermaidError, detail)}</div>`
+  return `<div style="color: red; padding: 10px; border: 1px solid red;">${escapeHtml(formatDiagramMessage(resolved.mermaidError, detail))}</div>`
 }
 
 async function renderMermaidSvg(code: string, themeMode?: DiagramThemeMode): Promise<string> {

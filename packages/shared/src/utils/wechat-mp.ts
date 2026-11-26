@@ -6,6 +6,15 @@ export function resolveWeChatApiOrigin(proxyOrigin?: string): string {
     return DEFAULT_WECHAT_API_ORIGIN
   if (!/^https?:\/\//i.test(trimmed))
     throw new Error(`Invalid proxy origin: must start with http:// or https://`)
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  }
+  catch {
+    throw new Error(`Invalid proxy origin URL`)
+  }
+  if ((parsed.protocol !== `http:` && parsed.protocol !== `https:`) || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash)
+    throw new Error(`Invalid proxy origin URL`)
   return trimmed
 }
 

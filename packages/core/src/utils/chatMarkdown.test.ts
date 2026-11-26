@@ -48,7 +48,49 @@ describe(`renderChatMarkdown`, () => {
     expect(html).not.toContain(`javascript:`)
     expect(html).not.toContain(`<script`)
     expect(html).toContain(`href="https://md.doocs.org"`)
+    expect(html).toContain(`target="_blank"`)
     expect(html).toContain(`rel="noopener noreferrer"`)
     expect(html).toContain(`&lt;TipBlock title="x" /&gt;`)
+  })
+
+  it(`preserves file:// literals inside 4-backtick, tilde, unclosed streaming fences, and multi-backtick code spans`, () => {
+    const nestedFence = renderChatMarkdown(
+      `\`\`\`\`md\n\`\`\`ts\nconst raw = "[x](file:///a b)"\n\`\`\`\n\`\`\`\``,
+    )
+    expect(nestedFence).toContain(`file:///a b`)
+    expect(nestedFence).not.toContain(`file:///a%20b`)
+
+    const tildeAndStreaming = renderChatMarkdown([
+      `~~~sh`,
+      `echo "[x](file:///c d)"`,
+      `~~~`,
+      `Inline \`\`[x](file:///e f)\`\` span`,
+      `\`\`\`ts`,
+      `const unclosed = "[x](file:///g h)"`,
+    ].join(`\n`))
+    expect(tildeAndStreaming).toContain(`file:///c d`)
+    expect(tildeAndStreaming).toContain(`file:///e f`)
+    expect(tildeAndStreaming).toContain(`file:///g h`)
+    expect(tildeAndStreaming).not.toContain(`%20`)
+  })
+
+  it(`handles file:// line anchors, Windows drive URIs, empty-alt images, and unsafe data/svg images safely`, () => {
+    const html = renderChatMarkdown([
+      `See [\`cover.png\`](file:///Users/ws/Library/Application Support/md/cover (1).png#L10-L20 "Cover")`,
+      `Win [note.md](file:///C:/Users/ws/My Docs/note.md)`,
+      `Empty alt ![](file:///Users/ws/Library/Application Support/md/pic.png)`,
+      `Blocked svg ![](data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+PC9zdmc+)`,
+      `Email user@example.com stays plain text`,
+    ].join(`\n\n`))
+
+    expect(html).toContain(`data-file-path="/Users/ws/Library/Application Support/md/cover (1).png"`)
+    expect(html).toContain(`data-chip-kind="image"`)
+    expect(html).toContain(`>cover.png</span>`)
+    expect(html).toContain(`data-file-path="C:/Users/ws/My Docs/note.md"`)
+    expect(html).toContain(`data-file-path="/Users/ws/Library/Application Support/md/pic.png"`)
+    expect(html).toContain(`>pic.png</span>`)
+    expect(html).not.toContain(`data:image/svg+xml`)
+    expect(html).not.toContain(`onload`)
+    expect(html).not.toContain(`href="mailto:`)
   })
 })

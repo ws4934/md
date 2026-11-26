@@ -585,4 +585,52 @@ describe(`renderMarkdownIncremental`, () => {
     expect(res.blocks).toHaveLength(15_000)
     expect(elapsedMs).toBeLessThan(100)
   })
+
+  it(`keeps multiline component open tags and inner fenced closing tags byte-identical to full render`, () => {
+    const customComponents = {
+      CodeCard: {
+        id: `custom-code-card`,
+        name: `CodeCard`,
+        description: `Card with children`,
+        props: [{ name: `title`, description: `Title` }],
+        template: `<section class="code-card"><h4>{{title}}</h4><div>{{children}}</div></section>`,
+        example: ``,
+      },
+      InlineBadge: {
+        id: `custom-inline-badge`,
+        name: `InlineBadge`,
+        description: `Inline badge`,
+        inline: true,
+        props: [{ name: `label`, description: `Label` }],
+        template: `<span>{{label}}</span>`,
+        example: ``,
+      },
+    }
+    const opts: IOpts = { citeStatus: false, countStatus: false, components: customComponents }
+    const renderer = initRenderer(opts)
+    const fp = `${fingerprintForOpts(opts)}:${`x`.repeat(8_000)}`
+
+    const md = [
+      `<CodeCard`,
+      `  title="Multiline Open Tag"`,
+      `>`,
+      `First paragraph`,
+      ``,
+      `\`\`\`html`,
+      `</CodeCard>`,
+      `\`\`\``,
+      ``,
+      `Second paragraph`,
+      `</CodeCard>`,
+      ``,
+      `<InlineBadge label="hi" />`,
+      ``,
+      `Trailing paragraph.`,
+    ].join(`\n`)
+
+    const inc = renderMarkdownIncremental(md, renderer, fp)
+    const ref = renderFullReference(md, opts)
+    expect(inc.usedIncremental).toBe(true)
+    expect(assembleRenderedBlocksHtml(inc.blocks)).toBe(ref.html)
+  })
 })

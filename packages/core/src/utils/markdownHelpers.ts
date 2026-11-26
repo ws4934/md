@@ -56,25 +56,27 @@ export function renderMarkdown(raw: string, renderer: RendererAPI) {
   return { html, readingTime }
 }
 
-export function postProcessHtml(baseHtml: string, reading: ReadTimeResults, renderer: RendererAPI): string {
-  let html = baseHtml
-  html = renderer.buildReadingTime(reading) + html
-  html += renderer.buildFootnotes()
-  html += renderer.buildAddition()
-  html += `
+export function buildTrailingStylesHtml(renderer: RendererAPI): string {
+  return `${renderer.buildAddition()}
     <style>
       .hljs.code__pre > .mac-sign {
         display: ${renderer.getOpts().isMacCodeBlock ? `flex` : `none`};
       }
     </style>
-  `
-  html += `
+  
     <style>
       h2 strong {
         color: inherit !important;
       }
     </style>
   `
+}
+
+export function postProcessHtml(baseHtml: string, reading: ReadTimeResults, renderer: RendererAPI): string {
+  let html = baseHtml
+  html = renderer.buildReadingTime(reading) + html
+  html += renderer.buildFootnotes()
+  html += buildTrailingStylesHtml(renderer)
   return renderer.createContainer(html)
 }
 

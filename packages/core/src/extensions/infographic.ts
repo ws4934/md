@@ -10,7 +10,7 @@ import {
   MD_DIAGRAM_STATE_ATTR,
   resolveDiagramMessages,
 } from '../utils/asyncDiagramState'
-import { simpleHash } from '../utils/basicHelpers'
+import { escapeHtml, simpleHash } from '../utils/basicHelpers'
 import { blockScanLimit, findAtLineStart } from '../utils/scan'
 import { createSVGCache } from '../utils/svgCache'
 import { DIAGRAM_DARK_COLORS, DIAGRAM_LIGHT_COLORS, resolveDiagramThemeMode } from './diagram-theme'
@@ -104,7 +104,7 @@ function svgElementToHtml(svg: SVGElement | Node): string {
 
 function buildInfographicErrorHtml(detail: string, messages?: DiagramMessages): string {
   const resolved = resolveDiagramMessages(messages)
-  return `<div style="color: red; padding: 10px; border: 1px solid red;">${formatDiagramMessage(resolved.infographicError, detail)}</div>`
+  return `<div style="color: red; padding: 10px; border: 1px solid red;">${escapeHtml(formatDiagramMessage(resolved.infographicError, detail))}</div>`
 }
 
 function findInfographicElements(cacheKey: string): HTMLElement[] {

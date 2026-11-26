@@ -3,6 +3,7 @@ import type { MarkedExtension, Token } from 'marked'
 import type { PlantUMLToken } from '../types/marked-tokens'
 import type { DiagramThemeMode } from './diagram-theme'
 import { deflateSync } from 'fflate'
+import DOMPurify from 'isomorphic-dompurify'
 import { asDiagramToken, asTextTokenRenderer, isCodeToken } from '../types/marked-tokens'
 import {
   diagramStateAttr,
@@ -11,7 +12,7 @@ import {
   MD_DIAGRAM_STATE_ATTR,
   resolveDiagramMessages,
 } from '../utils/asyncDiagramState'
-import { simpleHash } from '../utils/basicHelpers'
+import { escapeHtml, simpleHash } from '../utils/basicHelpers'
 import { blockScanLimit, findAtLineStart } from '../utils/scan'
 import { createSVGCache } from '../utils/svgCache'
 import { diagramCacheThemeSuffix, injectPlantUmlTheme } from './diagram-theme'
@@ -33,7 +34,7 @@ export function clearPlantUmlCache(): void {
 
 function buildPlantUmlErrorInnerHtml(messages?: DiagramMessages): string {
   const resolved = resolveDiagramMessages(messages ?? activeGetDiagramMessages?.())
-  return `<div style="color: #666; font-style: italic;">${resolved.plantumlError}</div>`
+  return `<div style="color: #666; font-style: italic;">${escapeHtml(resolved.plantumlError)}</div>`
 }
 
 function hasPlantUmlCachedError(cacheKey: string): boolean {
@@ -300,14 +301,15 @@ async function fetchSvgContent(svgUrl: string): Promise<string | null> {
       throw new Error(`HTTP ${response.status}`)
     }
     const svgContent = await response.text()
-    // Drop fixed SVG dimensions for responsive layout
-    return svgContent
+    // Drop fixed SVG dimensions for responsive layout, then sanitize external SVG before DOM injection
+    const responsiveSvg = svgContent
       .replace(/(<svg[^>]*)\swidth="[^"]*"/g, `$1`)
       .replace(/(<svg[^>]*)\sheight="[^"]*"/g, `$1`)
       .replace(/(<svg[^>]*style="[^"]*?)width:[^;]*;?/g, `$1`)
       .replace(/(<svg[^>]*style="[^"]*?)height:[^;]*;?/g, `$1`)
       // "none" squashes diagrams when only one axis is constrained in preview / WeChat
       .replace(/preserveAspectRatio="none"/g, `preserveAspectRatio="xMidYMid meet"`)
+    return DOMPurify.sanitize(responsiveSvg, { USE_PROFILES: { svg: true, svgFilters: true } })
   }
   catch (error) {
     console.warn(`Failed to fetch SVG content from ${svgUrl}:`, error)

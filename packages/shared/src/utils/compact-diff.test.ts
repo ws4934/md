@@ -46,4 +46,37 @@ describe(`computeCompactDiff`, () => {
     expect(formatShortFilePath(`/tmp/acp-workspaces/550e8400-e29b-41d4-a716-446655440000/article.md`)).toBe(`article.md`)
     expect(formatShortFilePath(`/Users/demo/docs/guide.md`)).toBe(`docs/guide.md`)
   })
+
+  it(`preserves removed Markdown frontmatter/hr lines (---) and added ++ markup while skipping real diff headers`, () => {
+    const oldText = `---\ntitle: Old\n---\n\nBody\n-- sql comment`
+    const newText = `++highlighted++\n\nBody`
+    const diff = computeCompactDiff({ oldText, newText })
+    const parsed = parseUnifiedDiffLines(diff.unifiedDiff)
+    expect(parsed.stats).toEqual({ added: 1, removed: 4, hasChanges: true })
+    expect(parsed.lines.filter(l => l.kind === `remove` && l.text === `---`)).toHaveLength(2)
+    expect(parsed.lines.some(l => l.kind === `remove` && l.text === `-- sql comment`)).toBe(true)
+    expect(parsed.lines.some(l => l.kind === `add` && l.text === `++highlighted++`)).toBe(true)
+
+    // External git unified diff with file headers, trailing newline, and no-newline marker
+    const gitUnified = [
+      `diff --git a/article.md b/article.md`,
+      `index 1234567..89abcdef 100644`,
+      `--- a/article.md`,
+      `+++ b/article.md`,
+      `@@ -1,2 +1,2 @@`,
+      `-old`,
+      `+new`,
+      ` context`,
+      `\\ No newline at end of file`,
+      ``,
+    ].join(`\n`)
+    const parsedGit = parseUnifiedDiffLines(gitUnified)
+    expect(parsedGit.stats).toEqual({ added: 1, removed: 1, hasChanges: true })
+    expect(parsedGit.lines.map(l => [l.kind, l.text])).toEqual([
+      [`ellipsis`, `@@ -1,2 +1,2 @@`],
+      [`remove`, `old`],
+      [`add`, `new`],
+      [`context`, `context`],
+    ])
+  })
 })

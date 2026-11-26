@@ -3,11 +3,11 @@ const IMG_SRC_ATTR_REGEX = /(^|[\s/])(src\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s"'=
 
 export function decodeHtmlEntities(value: string): string {
   return value
-    .replace(/&amp;/gi, `&`)
     .replace(/&quot;/gi, `"`)
     .replace(/&#39;|&apos;/gi, `'`)
     .replace(/&lt;/gi, `<`)
     .replace(/&gt;/gi, `>`)
+    .replace(/&amp;/gi, `&`)
 }
 
 function escapeHtmlAttr(value: string): string {

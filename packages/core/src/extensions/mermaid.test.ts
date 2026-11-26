@@ -121,4 +121,32 @@ describe(`mermaid extension`, () => {
     expect(placeholder.getAttribute(MD_DIAGRAM_STATE_ATTR)).toBe(MD_DIAGRAM_STATE.ready)
     expect(placeholder.querySelector(`svg`)).not.toBeNull()
   })
+
+  it(`escapes HTML payloads and preserves $ sequences in Mermaid error messages`, async () => {
+    const errSpy = vi.spyOn(console, `error`).mockImplementation(() => {})
+    mermaid.render.mockImplementationOnce(async () => {
+      throw new Error(`BROKEN <img src=x onerror=alert(1)> $' $$`)
+    })
+    try {
+      const broken = `\`\`\`mermaid\nBROKEN_XSS\n\`\`\``
+      const host = document.createElement(`div`)
+      document.body.append(host)
+
+      host.innerHTML = render(broken)
+      await vi.waitFor(() => {
+        expect(host.querySelector(`.mermaid-diagram`)?.getAttribute(MD_DIAGRAM_STATE_ATTR)).toBe(MD_DIAGRAM_STATE.error)
+      })
+
+      expect(host.querySelector(`img`)).toBeNull()
+      expect(host.textContent).toContain(`<img src=x onerror=alert(1)> $' $$`)
+
+      // Cached error path also escapes even though <!--mermaid-start--> bypasses DOMPurify.
+      const cachedHtml = render(broken)
+      expect(cachedHtml).not.toContain(`<img src=x`)
+      expect(cachedHtml).toContain(`&lt;img src=x onerror=alert(1)&gt; $&#39; $$`)
+    }
+    finally {
+      errSpy.mockRestore()
+    }
+  })
 })

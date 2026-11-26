@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { getCustomExtraModes, mapAcpModeIdToPermissionLevel, mapPermissionLevelToAcpModeId, resolveNativeModeIdForLevel } from './acp-permissions'
+import {
+  DEFAULT_ACP_SETTINGS,
+  getCustomExtraModes,
+  mapAcpModeIdToPermissionLevel,
+  mapPermissionLevelToAcpModeId,
+  migrateLegacyPermissionSettings,
+  resolveNativeModeIdForLevel,
+} from './acp-permissions'
 
 describe(`acp permission mode mapping`, () => {
   it(`does not treat agent "auto" modes as bypass`, () => {
@@ -39,5 +46,21 @@ describe(`acp permission mode mapping`, () => {
     expect(resolveNativeModeIdForLevel(`ask`, openCodeModes)).toBe(`build`)
     expect(resolveNativeModeIdForLevel(`auto_edits`, openCodeModes)).toBe(`build`)
     expect(resolveNativeModeIdForLevel(`bypass`, openCodeModes)).toBe(`build`)
+  })
+
+  it(`exits auto_edits when tightening to ask and never picks auto_edits as neutral ask fallback`, () => {
+    const modes = [`read-only`, `accept-edits`, `agent`, `agent-full-access`].map(id => ({ id, name: id }))
+    // Leaving bypass for ask must skip accept-edits and pick neutral `agent`.
+    expect(resolveNativeModeIdForLevel(`ask`, modes, `agent-full-access`)).toBe(`agent`)
+    // Tightening from accept-edits down to ask must also exit accept-edits.
+    expect(resolveNativeModeIdForLevel(`ask`, modes, `accept-edits`)).toBe(`agent`)
+
+    // Space-separated mode IDs normalize identically to camelCase/kebab/snake variants.
+    expect(mapAcpModeIdToPermissionLevel(`Accept Edits`)).toBe(`auto_edits`)
+    expect(mapAcpModeIdToPermissionLevel(`Read Only`)).toBe(`plan`)
+    expect(mapAcpModeIdToPermissionLevel(`Bypass Permissions`)).toBe(`bypass`)
+
+    expect(Object.isFrozen(DEFAULT_ACP_SETTINGS)).toBe(true)
+    expect(migrateLegacyPermissionSettings(null)).toEqual({ level: `ask`, migrated: false })
   })
 })

@@ -6,7 +6,7 @@ import type {
   TocHeadingEntry,
 } from '@md/shared/types'
 import type { ReadTimeResults } from '@md/shared/utils/readingTime'
-import { postProcessHtml, renderMarkdown, sanitizeHtml } from './markdownHelpers'
+import { buildTrailingStylesHtml, postProcessHtml, renderMarkdown, sanitizeHtml } from './markdownHelpers'
 import { stripBreakBeforeInlineKatex } from './mathDetection'
 import { isMathJaxReady } from './mathjax'
 import { fenceRunLength } from './scan'
@@ -117,6 +117,18 @@ function getRendererCache(renderer: RendererAPI): BlockRenderCache {
     rendererCaches.set(renderer, cache)
   }
   return cache
+}
+
+let lastFingerprintRaw = ``
+let lastFingerprintHash = ``
+
+function hashOptionsFingerprint(fingerprint: string): string {
+  if (fingerprint === lastFingerprintRaw)
+    return lastFingerprintHash
+  const hashed = hashBlockText(fingerprint)
+  lastFingerprintRaw = fingerprint
+  lastFingerprintHash = hashed
+  return hashed
 }
 
 /** Clear cached rendered blocks for a renderer (or tests). */
@@ -274,23 +286,25 @@ function updateHtmlTagDepth(line: string, currentDepth: number): number | null {
   return depth
 }
 
+type ComponentScanState
+  = | { phase: `openTag`, name: string, quote: string }
+    | { phase: `body`, name: string, fenceChar: string, fenceLength: number }
+
 /**
- * Check if a line opens a multiline PascalCase custom component (`<Comp ...>`
- * without `/>` or `</Comp>` on the same line, excluding inline `<Emoji>`).
+ * Advance open-tag scanning across one line (starting at `startCol`), matching
+ * `markedComponent`'s `parseTag` quote/self-close/same-line-close rules.
  */
-function detectMultilineComponentOpen(line: string): string | null {
-  const match = COMPONENT_OPEN_RE.exec(line)
-  if (!match)
-    return null
-  const name = match[1]
-  if (name === `Emoji`)
-    return null
+function advanceComponentOpenTag(
+  line: string,
+  startCol: number,
+  name: string,
+  initialQuote: string,
+  normalized: string,
+  lineEndOffset: number,
+): ComponentScanState | null {
   const closeTag = `</${name}>`
-  if (line.includes(closeTag))
-    return null
-  // Scan quotes to find end of opening tag on this line.
-  let inQuote = ``
-  for (let i = 1 + name.length; i < line.length; i++) {
+  let inQuote = initialQuote
+  for (let i = startCol; i < line.length; i++) {
     const ch = line[i]
     if (inQuote) {
       if (ch === inQuote)
@@ -303,10 +317,42 @@ function detectMultilineComponentOpen(line: string): string | null {
       return null
     }
     else if (ch === `>`) {
-      return line.slice(i + 1).trim() === `` ? name : null
+      const rest = line.slice(i + 1)
+      const inlineClose = rest.indexOf(closeTag)
+      if (inlineClose >= 0)
+        return null
+      if (rest.trim() !== ``)
+        return null
+      return normalized.includes(closeTag, lineEndOffset)
+        ? { phase: `body`, name, fenceChar: ``, fenceLength: 0 }
+        : null
     }
   }
-  return null
+  return normalized.includes(`>`, lineEndOffset)
+    ? { phase: `openTag`, name, quote: inQuote }
+    : null
+}
+
+function startMultilineComponent(
+  line: string,
+  normalized: string,
+  lineStartOffset: number,
+  inlineComponentNames?: ReadonlySet<string>,
+): ComponentScanState | null {
+  const match = COMPONENT_OPEN_RE.exec(line)
+  if (!match)
+    return null
+  const name = match[1]
+  if (name === `Emoji` || inlineComponentNames?.has(name))
+    return null
+  return advanceComponentOpenTag(
+    line,
+    1 + name.length,
+    name,
+    ``,
+    normalized,
+    lineStartOffset + line.length,
+  )
 }
 
 /**
@@ -319,7 +365,10 @@ function detectMultilineComponentOpen(line: string): string | null {
  * Markdown footnotes, raw `<style>`/`<script>`/`<pre>` blocks, or unbalanced
  * multi-block raw HTML).
  */
-export function splitMarkdownBlocks(markdown: string): SplitBlocksResult {
+export function splitMarkdownBlocks(
+  markdown: string,
+  inlineComponentNames?: ReadonlySet<string>,
+): SplitBlocksResult {
   const normalized = markdown.includes(`\r`) ? markdown.replace(/\r\n|\r/g, `\n`) : markdown
   if (!normalized)
     return { blocks: [] }
@@ -342,7 +391,7 @@ export function splitMarkdownBlocks(markdown: string): SplitBlocksResult {
   let mathFence = ``
   let inLatexBlock = false
   let alertOpen = false
-  let componentTag = ``
+  let componentState: ComponentScanState | null = null
   let htmlTagDepth = 0
 
   for (let i = 0; i < lines.length; i++) {
@@ -353,6 +402,15 @@ export function splitMarkdownBlocks(markdown: string): SplitBlocksResult {
       if (isClosingCodeFence(line, fenceChar, fenceLength)) {
         fenceChar = ``
         fenceLength = 0
+      }
+      continue
+    }
+
+    if (componentState?.phase === `body` && componentState.fenceChar) {
+      const fence = fenceRunLength(line, 0, line.length)
+      if (fence && fence.char === componentState.fenceChar && fence.length >= componentState.fenceLength) {
+        componentState.fenceChar = ``
+        componentState.fenceLength = 0
       }
       continue
     }
@@ -389,9 +447,27 @@ export function splitMarkdownBlocks(markdown: string): SplitBlocksResult {
       continue
     }
 
-    if (componentTag) {
-      if (line.trim() === `</${componentTag}>`)
-        componentTag = ``
+    if (componentState) {
+      if (componentState.phase === `openTag`) {
+        componentState = advanceComponentOpenTag(
+          line,
+          0,
+          componentState.name,
+          componentState.quote,
+          normalized,
+          lineStarts[i] + line.length,
+        )
+      }
+      else {
+        const innerFence = fenceRunLength(line, 0, line.length)
+        if (innerFence) {
+          componentState.fenceChar = innerFence.char
+          componentState.fenceLength = innerFence.length
+        }
+        else if (line.trim() === `</${componentState.name}>`) {
+          componentState = null
+        }
+      }
       continue
     }
 
@@ -471,9 +547,9 @@ export function splitMarkdownBlocks(markdown: string): SplitBlocksResult {
       continue
     }
 
-    const openedComp = detectMultilineComponentOpen(line)
+    const openedComp = startMultilineComponent(line, normalized, lineStarts[i], inlineComponentNames)
     if (openedComp) {
-      componentTag = openedComp
+      componentState = openedComp
       continue
     }
 
@@ -540,24 +616,6 @@ function blockContainsToc(block: string): boolean {
   return false
 }
 
-function buildTrailingStylesHtml(renderer: RendererAPI): string {
-  return `${renderer.buildAddition()
-  }
-    <style>
-      .hljs.code__pre > .mac-sign {
-        display: ${renderer.getOpts().isMacCodeBlock ? `flex` : `none`};
-      }
-    </style>
-  `
-        + `
-    <style>
-      h2 strong {
-        color: inherit !important;
-      }
-    </style>
-  `
-}
-
 function applyHeadingIdsToString(html: string, startId: number): { html: string, nextId: number } {
   if (!html.includes(`data-heading="true"`))
     return { html, nextId: startId }
@@ -614,14 +672,25 @@ export function renderMarkdownIncremental(
   if (!renderer.renderBlock || !renderer.setCollectedState)
     return renderFullFallback(raw, renderer, `unsupported-renderer`)
 
+  const opts = renderer.getOpts()
+  let inlineComponentNames: Set<string> | undefined
+  if (opts.components) {
+    for (const [name, def] of Object.entries(opts.components)) {
+      if (def?.inline) {
+        inlineComponentNames ??= new Set()
+        inlineComponentNames.add(name)
+      }
+    }
+  }
+
   const { markdownContent, readingTime } = renderer.parseFrontMatterAndContent(raw)
-  const split = splitMarkdownBlocks(markdownContent)
+  const split = splitMarkdownBlocks(markdownContent, inlineComponentNames)
   if (split.fallbackReason)
     return renderFullFallback(raw, renderer, split.fallbackReason)
 
-  const opts = renderer.getOpts()
   const citeStatus = Boolean(opts.citeStatus)
   const cache = getRendererCache(renderer)
+  const fpKey = hashOptionsFingerprint(optionsFingerprint)
 
   const rawBlocks = split.blocks
   const rawHashes: string[] = []
@@ -638,7 +707,7 @@ export function renderMarkdownIncremental(
 
     const rawHash = hashBlockText(chunk)
     rawHashes.push(rawHash)
-    const cacheKey = `${optionsFingerprint}\u0000${rawHash}`
+    const cacheKey = `${fpKey}\u0000${rawHash}`
     let entry = cache.get(cacheKey, chunk)
     if (entry?.hasPendingMath && mathReady)
       entry = undefined
@@ -836,7 +905,7 @@ export function renderMarkdownIncremental(
   else {
     const firstLink = globalFootnotes[0][2]
     const lastLink = globalFootnotes[globalFootnotes.length - 1][2]
-    const footnotesKey = `${optionsFingerprint}\u0000${globalFootnotes.length}:${(footnotesH1 >>> 0).toString(36)}_${(footnotesH2 >>> 0).toString(36)}:${firstLink}:${lastLink}`
+    const footnotesKey = `${fpKey}\u0000${globalFootnotes.length}:${(footnotesH1 >>> 0).toString(36)}_${(footnotesH2 >>> 0).toString(36)}:${firstLink}:${lastLink}`
     const memo = cache.footnotesMemo
     if (memo && memo.key === footnotesKey) {
       for (let i = 0; i < memo.extraHeadings.length; i++)

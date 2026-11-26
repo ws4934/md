@@ -47,7 +47,7 @@ export function parseCliArgs(input: string): string[] {
       continue
     }
 
-    if (ch === `\\` && i + 1 < input.length) {
+    if (ch === `\\` && i + 1 < input.length && /[\s"'\\]/.test(input[i + 1])) {
       current += input[++i]
       inToken = true
       continue

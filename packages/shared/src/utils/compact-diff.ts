@@ -15,7 +15,7 @@ const DEFAULT_MAX_OUTPUT_LINES = 400
 const MAX_LCS_CELLS = 400_000
 
 function normalizeNewlines(value: string): string {
-  return value.replace(/\r\n/g, `\n`)
+  return value.replace(/\r\n|\r/g, `\n`)
 }
 
 function splitLines(text: string): string[] {
@@ -43,20 +43,35 @@ export function parseUnifiedDiffLines(unifiedDiff: string): {
   }
 
   const rawLines = normalizeNewlines(unifiedDiff).split(`\n`)
+  if (rawLines.length > 0 && rawLines[rawLines.length - 1] === ``)
+    rawLines.pop()
+
   const lines: UnifiedDiffLine[] = []
   let added = 0
   let removed = 0
   let truncated = false
+  let seenHunkOrBody = false
 
-  for (const line of rawLines) {
-    if (line.startsWith(`+++`) || line.startsWith(`---`))
+  for (let idx = 0; idx < rawLines.length; idx++) {
+    const line = rawLines[idx]
+    if (!seenHunkOrBody) {
+      if (line.startsWith(`diff --git `) || /^index [0-9a-f]+\.\.[0-9a-f]+/i.test(line))
+        continue
+      if (/^---[ \t]/.test(line) && /^\+\+\+[ \t]/.test(rawLines[idx + 1] ?? ``)) {
+        idx++
+        continue
+      }
+    }
+    if (line.startsWith(`\\ No newline at end of file`))
       continue
     if (line.startsWith(`@@`) || line === `…`) {
+      seenHunkOrBody = true
       if (line.includes(`truncated`))
         truncated = true
       lines.push({ kind: `ellipsis`, text: line })
       continue
     }
+    seenHunkOrBody = true
     if (line.startsWith(`+`)) {
       added++
       lines.push({ kind: `add`, text: line.slice(1) })

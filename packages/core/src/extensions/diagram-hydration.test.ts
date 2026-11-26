@@ -194,4 +194,49 @@ describe(`diagram hydration, duplicate placeholders, and error caching`, () => {
     expect(code.hasAttribute(`data-language-pending`)).toBe(false)
     expect(code.innerHTML).toContain(`hljs`)
   })
+
+  it(`escapes Infographic error details and sanitizes fetched PlantUML SVG markup before DOM injection`, async () => {
+    const errSpy = vi.spyOn(console, `error`).mockImplementation(() => {})
+    const fetchSpy = vi.spyOn(globalThis, `fetch`).mockResolvedValue(
+      new Response(`<svg viewBox="0 0 10 10" onload="alert(1)"><script>alert(2)</script><rect width="10" height="10"/></svg>`, { status: 200 }),
+    )
+
+    try {
+      // PlantUML async DOM injection strips event handlers and <script>
+      const pumlHost = document.createElement(`div`)
+      pumlHost.innerHTML = renderMarkdown(`\`\`\`plantuml\n@startuml\nA -> B\n@enduml\n\`\`\``, initRenderer({ themeMode: `light` })).html
+      document.body.append(pumlHost)
+
+      await vi.waitFor(() => {
+        expect(pumlHost.querySelector(`.plantuml-diagram svg`)).not.toBeNull()
+      })
+      const pumlSvg = pumlHost.querySelector(`.plantuml-diagram svg`)!
+      expect(pumlSvg.hasAttribute(`onload`)).toBe(false)
+      expect(pumlHost.querySelector(`script`)).toBeNull()
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+
+      // Infographic error path escapes raw HTML payloads even inside protected comments
+      infographicMock.renderCalls.mockImplementationOnce(() => {
+        throw new Error(`<img src=x onerror=alert(1)>`)
+      })
+      const infoMd = `\`\`\`infographic\ninfographic xss-case\n\`\`\``
+      const infoHost = document.createElement(`div`)
+      infoHost.innerHTML = renderMarkdown(infoMd, initRenderer({ themeMode: `light` })).html
+      document.body.append(infoHost)
+
+      await vi.waitFor(() => {
+        expect(infoHost.querySelector(`.infographic-diagram`)?.getAttribute(MD_DIAGRAM_STATE_ATTR)).toBe(MD_DIAGRAM_STATE.error)
+      })
+      expect(infoHost.querySelector(`img`)).toBeNull()
+      expect(infoHost.textContent).toContain(`<img src=x onerror=alert(1)>`)
+
+      const cachedInfoHtml = renderMarkdown(infoMd, initRenderer({ themeMode: `light` })).html
+      expect(cachedInfoHtml).not.toContain(`<img src=x`)
+      expect(cachedInfoHtml).toContain(`&lt;img src=x onerror=alert(1)&gt;`)
+    }
+    finally {
+      fetchSpy.mockRestore()
+      errSpy.mockRestore()
+    }
+  })
 })
