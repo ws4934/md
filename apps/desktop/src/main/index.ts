@@ -23,6 +23,7 @@ import { API_MODEL_AGENT_ID } from '@md/shared/types'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, powerMonitor, protocol, safeStorage, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { API_AGENT_MODES, API_THOUGHT_LEVEL_OPTIONS } from '../agents/api-agent/provider'
+import { readSkills } from '../agents/shared/skills'
 import { IPC_CHANNELS } from '../shared/ipc-channels'
 import { AcpEventBatcher } from './acp/event-batcher'
 import { AcpHost } from './acp/host'
@@ -646,6 +647,7 @@ app.whenReady().then(() => {
 
   const userDataDir = app.getPath(`userData`)
   const imageMcpScript = resolveUnpackedAgentScript(__dirname, `image-mcp.js`)
+  const skillsDir = resolveUnpackedSkillsDir(__dirname)
 
   aiConfigStore = new AiConfigStore({
     configPath: path.join(userDataDir, `ai-config.json`),
@@ -676,7 +678,7 @@ app.whenReady().then(() => {
   acpHost = new AcpHost({
     dataDir: userDataDir,
     appVersion: app.getVersion(),
-    skillsDir: resolveUnpackedSkillsDir(__dirname),
+    skillsDir,
     ipCharacters: ipCharacterStore,
     extraBuiltinAgents: buildExtraBuiltinAgents(),
     resolveAgentAvailability: async (agentId) => {
@@ -693,6 +695,7 @@ app.whenReady().then(() => {
       const currentModelId = modelApi.defaultModel && modelApi.enabledModels.includes(modelApi.defaultModel)
         ? modelApi.defaultModel
         : modelApi.enabledModels[0]
+      const skills = await readSkills([skillsDir])
       return {
         agentId: API_MODEL_AGENT_ID,
         models: modelApi.enabledModels.map(id => ({
@@ -708,17 +711,18 @@ app.whenReady().then(() => {
         currentThinkingLevel: `default`,
         modes: API_AGENT_MODES.map(m => ({ ...m })),
         currentModeId: `default`,
-        commands: [],
+        commands: skills.map(s => ({ name: s.name, description: s.description })),
+        commandsAnnounced: true,
         probedAt: Date.now(),
       }
     },
-    resolveAgentRuntimeEnv: async (agentId, context) => {
+    resolveAgentRuntimeEnv: async (agentId) => {
       if (agentId !== API_MODEL_AGENT_ID)
         return undefined
       const resolved = await aiConfigStore!.getResolvedModelApiConfig()
       if (!resolved.isConfigured)
         throw new Error(`API Model is not configured. Open Settings > Model API to add your key and enable at least one model.`)
-      const env: Record<string, string> = {
+      return {
         ELECTRON_RUN_AS_NODE: `1`,
         MD_API_AGENT_CONFIG: JSON.stringify({
           protocol: resolved.protocol,
@@ -728,17 +732,8 @@ app.whenReady().then(() => {
           defaultModel: resolved.defaultModel,
         }),
       }
-      if (!context.forProbe && await aiConfigStore!.isImageGenConfigured()) {
-        const bridge = await imageGenBridge!.ensureStarted()
-        env.MD_IMAGE_BRIDGE_URL = bridge.url
-        env.MD_IMAGE_BRIDGE_TOKEN = bridge.token
-      }
-      return env
     },
-    resolveSessionMcpServers: async (agentId, workspaceDir): Promise<McpServer[]> => {
-      // The built-in API agent calls the local image bridge directly without MCP overhead.
-      if (agentId === API_MODEL_AGENT_ID)
-        return []
+    resolveSessionMcpServers: async (_agentId, workspaceDir): Promise<McpServer[]> => {
       if (!fs.existsSync(imageMcpScript) || !(await aiConfigStore!.isImageGenConfigured()))
         return []
       const bridge = await imageGenBridge!.ensureStarted()

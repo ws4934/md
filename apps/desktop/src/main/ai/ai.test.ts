@@ -15,6 +15,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { buildDesktopBundles } from '../../../scripts/build'
 import { generateAndSaveWorkspaceImage } from '../../agents/shared/image-client'
+import { readSkills } from '../../agents/shared/skills'
 import { AcpHost, buildPromptText } from '../acp/host'
 import { AcpRegistry } from '../acp/registry'
 import { ARTICLE_WRITING_RULES, buildArticleWritingRules } from '../acp/writing-rules'
@@ -352,8 +353,9 @@ async function startFakeOpenAiServer(apiKey = `sk-test-openai-secret`): Promise<
 
         const toolMsgs = messages.filter(m => m.role === `tool`)
         if (toolMsgs.length === 1) {
-          const parsedTool = JSON.parse(String(toolMsgs[0].content ?? `{}`)) as { path?: string }
-          const relPath = parsedTool.path || `images/hero-cover.png`
+          const toolText = String(toolMsgs[0].content ?? ``)
+          const imgMatch = /\b(images\/[^\s)"'`]+\.(?:png|jpe?g|gif|webp))\b/i.exec(toolText)
+          const relPath = imgMatch?.[1] || `images/hero-cover.png`
           const args = JSON.stringify({
             old_text: `Old intro paragraph.`,
             new_text: `Old intro paragraph.\n\n![Hero Cover](${relPath})`,
@@ -397,6 +399,69 @@ async function startFakeOpenAiServer(apiKey = `sk-test-openai-secret`): Promise<
           choices: [{
             index: 0,
             delta: { role: `assistant`, content: `Generated image and embedded it into article.md.` },
+            finish_reason: null,
+          }],
+        })
+        writeSseChunk(res, {
+          id,
+          object: `chat.completion.chunk`,
+          created,
+          model: modelId,
+          choices: [{ index: 0, delta: {}, finish_reason: `stop` }],
+        })
+        res.write(`data: [DONE]\n\n`)
+        res.end()
+        return
+      }
+
+      // Generic tool-call trigger: `TRIGGER_TOOL_CALL:{"name":"...","arguments":{...}}`
+      const toolTriggerMatch = /TRIGGER_TOOL_CALL:(\{[^\n]+\})/.exec(latestUserText)
+      if (toolTriggerMatch) {
+        if (lastRole === `user`) {
+          const spec = JSON.parse(toolTriggerMatch[1]) as { name: string, arguments?: Record<string, unknown> }
+          writeSseChunk(res, {
+            id,
+            object: `chat.completion.chunk`,
+            created,
+            model: modelId,
+            choices: [{
+              index: 0,
+              delta: {
+                role: `assistant`,
+                tool_calls: [{
+                  index: 0,
+                  id: `call_dyn_${chatRequests.length}`,
+                  type: `function`,
+                  function: {
+                    name: spec.name,
+                    arguments: JSON.stringify(spec.arguments ?? {}),
+                  },
+                }],
+              },
+              finish_reason: null,
+            }],
+          })
+          writeSseChunk(res, {
+            id,
+            object: `chat.completion.chunk`,
+            created,
+            model: modelId,
+            choices: [{ index: 0, delta: {}, finish_reason: `tool_calls` }],
+          })
+          res.write(`data: [DONE]\n\n`)
+          res.end()
+          return
+        }
+
+        const toolResultText = String(lastMsg?.content ?? ``)
+        writeSseChunk(res, {
+          id,
+          object: `chat.completion.chunk`,
+          created,
+          model: modelId,
+          choices: [{
+            index: 0,
+            delta: { role: `assistant`, content: `TOOL_RESULT:${toolResultText}` },
             finish_reason: null,
           }],
         })
@@ -784,6 +849,8 @@ describe(`api model ACP agent end-to-end through AcpHost`, () => {
   async function createWiredHost(fakeOpenAi: FakeOpenAiServer, options?: {
     configureModelApi?: boolean
     configureImageGen?: boolean
+    skillsDir?: string
+    extraMcpServers?: McpServer[]
     onEvent?: (event: AcpHostEvent) => void
   }) {
     const dataDir = await makeTempDir(`md-api-host-`)
@@ -821,6 +888,7 @@ describe(`api model ACP agent end-to-end through AcpHost`, () => {
 
     const host = new AcpHost({
       dataDir,
+      skillsDir: options?.skillsDir,
       extraBuiltinAgents: [
         {
           id: API_MODEL_AGENT_ID,
@@ -848,11 +916,11 @@ describe(`api model ACP agent end-to-end through AcpHost`, () => {
           return null
         return configStore.isModelApiConfigured()
       },
-      resolveAgentRuntimeEnv: async (agentId, ctx) => {
+      resolveAgentRuntimeEnv: async (agentId) => {
         if (agentId !== API_MODEL_AGENT_ID)
           return undefined
         const resolved = await configStore.getResolvedModelApiConfig()
-        const env: Record<string, string> = {
+        return {
           MD_API_AGENT_CONFIG: JSON.stringify({
             protocol: resolved.protocol,
             baseUrl: resolved.baseUrl,
@@ -861,33 +929,31 @@ describe(`api model ACP agent end-to-end through AcpHost`, () => {
             defaultModel: resolved.defaultModel,
           }),
         }
-        if (!ctx.forProbe && await configStore.isImageGenConfigured()) {
-          const conn = await bridge.ensureStarted()
-          env.MD_IMAGE_BRIDGE_URL = conn.url
-          env.MD_IMAGE_BRIDGE_TOKEN = conn.token
-        }
-        return env
       },
-      resolveSessionMcpServers: async (agentId, workspaceDir): Promise<McpServer[]> => {
-        if (agentId === API_MODEL_AGENT_ID || !(await configStore.isImageGenConfigured()))
-          return []
-        const conn = await bridge.ensureStarted()
-        return [{
-          name: `md-image`,
-          command: process.execPath,
-          args: [IMAGE_MCP_SCRIPT],
-          env: [
-            { name: `MD_IMAGE_BRIDGE_URL`, value: conn.url },
-            { name: `MD_IMAGE_BRIDGE_TOKEN`, value: conn.token },
-            { name: `MD_WORKSPACE_DIR`, value: workspaceDir },
-          ],
-        }]
+      resolveSessionMcpServers: async (_agentId, workspaceDir): Promise<McpServer[]> => {
+        const servers: McpServer[] = []
+        if (await configStore.isImageGenConfigured()) {
+          const conn = await bridge.ensureStarted()
+          servers.push({
+            name: `md-image`,
+            command: process.execPath,
+            args: [IMAGE_MCP_SCRIPT],
+            env: [
+              { name: `MD_IMAGE_BRIDGE_URL`, value: conn.url },
+              { name: `MD_IMAGE_BRIDGE_TOKEN`, value: conn.token },
+              { name: `MD_WORKSPACE_DIR`, value: workspaceDir },
+            ],
+          })
+        }
+        if (options?.extraMcpServers?.length)
+          servers.push(...options.extraMcpServers)
+        return servers
       },
       isImageGenConfigured: () => configStore.isImageGenConfigured(),
       onEvent: options?.onEvent,
     })
     openHosts.push(host)
-    return { host, configStore, bridge }
+    return { host, configStore, bridge, dataDir }
   }
 
   it(`marks api-model installed only when configured and never exposes secrets in listAgents`, async () => {
@@ -1042,7 +1108,7 @@ describe(`api model ACP agent end-to-end through AcpHost`, () => {
     expect(events.filter(e => e.type === `article_synced`)).toHaveLength(0)
   }, 20_000)
 
-  it(`generates workspace images via bridge readable by readWorkspaceImage, supports cancel, and injects MCP for CLI agents`, async () => {
+  it(`generates workspace images via md-image MCP server readable by readWorkspaceImage, supports cancel, and injects MCP for CLI agents`, async () => {
     const fakeServer = await startFakeOpenAiServer()
     const events: AcpHostEvent[] = []
     const { host } = await createWiredHost(fakeServer, {
@@ -1050,7 +1116,7 @@ describe(`api model ACP agent end-to-end through AcpHost`, () => {
       onEvent: e => events.push(e),
     })
 
-    // 1. API agent generate_image + edit_article in bypass mode.
+    // 1. API agent calls generate_image through the md-image MCP server, then edits article.md.
     const started = await host.startSession({
       agentId: API_MODEL_AGENT_ID,
       permissionLevel: `bypass`,
@@ -1067,6 +1133,13 @@ describe(`api model ACP agent end-to-end through AcpHost`, () => {
 
     expect(fakeServer.imageRequests).toHaveLength(1)
     expect(fakeServer.imageRequests[0].model).toBe(`mock-image-1`)
+
+    const imgToolEvents = events.filter(
+      (e): e is Extract<AcpHostEvent, { type: `tool_call` }> =>
+        e.type === `tool_call` && e.tool.status === `completed` && /generate[_ ]image/i.test(e.tool.title),
+    )
+    expect(imgToolEvents.length).toBeGreaterThanOrEqual(1)
+    expect(imgToolEvents[imgToolEvents.length - 1].tool.detail).toContain(`images/hero-cover.png`)
 
     const synced = events.filter((e): e is Extract<AcpHostEvent, { type: `article_synced` }> => e.type === `article_synced`)
     expect(synced.length).toBeGreaterThanOrEqual(1)
@@ -1355,4 +1428,382 @@ describe(`api model ACP agent end-to-end through AcpHost`, () => {
     const stat = await fs.stat(IMAGE_MCP_SCRIPT)
     expect(stat.size).toBeLessThan(50 * 1024)
   })
+
+  it(`readSkills parses folded >- descriptions, dedupes by name, and skips malformed entries`, async () => {
+    const dirA = await makeTempDir(`md-skills-a-`)
+    const dirB = await makeTempDir(`md-skills-b-`)
+
+    await fs.mkdir(path.join(dirA, `folded-skill`), { recursive: true })
+    await fs.writeFile(
+      path.join(dirA, `folded-skill`, `SKILL.md`),
+      [
+        `---`,
+        `name: folded-skill`,
+        `description: >-`,
+        `  First line of a folded`,
+        `  multiline description with`,
+        `  extra context.`,
+        `---`,
+        ``,
+        `# Folded Skill`,
+      ].join(`\n`),
+    )
+
+    await fs.mkdir(path.join(dirA, `broken-yaml`), { recursive: true })
+    await fs.writeFile(path.join(dirA, `broken-yaml`, `SKILL.md`), `---\nname: [unterminated\n---\n`)
+
+    await fs.mkdir(path.join(dirA, `no-frontmatter`), { recursive: true })
+    await fs.writeFile(path.join(dirA, `no-frontmatter`, `SKILL.md`), `# Just markdown\n`)
+
+    await fs.mkdir(path.join(dirA, `missing-name`), { recursive: true })
+    await fs.writeFile(path.join(dirA, `missing-name`, `SKILL.md`), `---\ndescription: no name\n---\n`)
+
+    await fs.mkdir(path.join(dirA, `non-string-desc`), { recursive: true })
+    await fs.writeFile(path.join(dirA, `non-string-desc`, `SKILL.md`), `---\nname: bad-desc\ndescription:\n  - a\n  - b\n---\n`)
+
+    await fs.mkdir(path.join(dirB, `folded-skill`), { recursive: true })
+    await fs.writeFile(
+      path.join(dirB, `folded-skill`, `SKILL.md`),
+      `---\nname: folded-skill\ndescription: Duplicate from dirB should be ignored\n---\n`,
+    )
+
+    await fs.mkdir(path.join(dirB, `second-skill`), { recursive: true })
+    await fs.writeFile(
+      path.join(dirB, `second-skill`, `SKILL.md`),
+      `---\nname: second-skill\ndescription: Single line description\n---\n`,
+    )
+
+    const skills = await readSkills([dirA, dirB, path.join(dirA, `missing-dir`)])
+    expect(skills).toEqual([
+      {
+        name: `folded-skill`,
+        description: `First line of a folded multiline description with extra context.`,
+        dir: path.join(dirA, `folded-skill`),
+        skillFile: path.join(dirA, `folded-skill`, `SKILL.md`),
+      },
+      {
+        name: `second-skill`,
+        description: `Single line description`,
+        dir: path.join(dirB, `second-skill`),
+        skillFile: path.join(dirB, `second-skill`, `SKILL.md`),
+      },
+    ])
+  })
+
+  it(`announces workspace skills via available_commands_update, expands /skill turns, and supports load_skill`, async () => {
+    const fakeServer = await startFakeOpenAiServer()
+    const skillsDir = await makeTempDir(`md-api-skills-`)
+    await fs.mkdir(path.join(skillsDir, `editorial-tone`, `references`), { recursive: true })
+    await fs.writeFile(
+      path.join(skillsDir, `editorial-tone`, `SKILL.md`),
+      [
+        `---`,
+        `name: editorial-tone`,
+        `description: >-`,
+        `  Apply the house editorial`,
+        `  voice and lead structure.`,
+        `---`,
+        ``,
+        `# Editorial Tone`,
+        `EDITORIAL_TONE_INSTRUCTIONS_42: lead with a sharp concrete scene.`,
+      ].join(`\n`),
+    )
+    await fs.writeFile(
+      path.join(skillsDir, `editorial-tone`, `references`, `checklist.md`),
+      `- Keep paragraphs short.\n`,
+    )
+
+    const events: AcpHostEvent[] = []
+    const { host } = await createWiredHost(fakeServer, {
+      skillsDir,
+      onEvent: e => events.push(e),
+    })
+
+    const started = await host.startSession({
+      agentId: API_MODEL_AGENT_ID,
+      permissionLevel: `bypass`,
+      postId: `post-skills`,
+      postTitle: `Skills Test`,
+      content: `# Draft\n`,
+    })
+
+    // Wait for available_commands_update sent right after session/new.
+    const deadline = Date.now() + 5_000
+    while (!events.some(e => e.type === `commands_updated`) && Date.now() < deadline)
+      await new Promise(resolve => setTimeout(resolve, 25))
+    const cmdEvent = events.find(
+      (e): e is Extract<AcpHostEvent, { type: `commands_updated` }> => e.type === `commands_updated`,
+    )
+    expect(cmdEvent).toBeDefined()
+    expect(cmdEvent!.commands).toEqual([
+      {
+        name: `editorial-tone`,
+        description: `Apply the house editorial voice and lead structure.`,
+      },
+    ])
+
+    // 1. Slash command turn inlines SKILL.md into the request body sent to the model.
+    await host.prompt({
+      sessionId: started.sessionId,
+      text: `/editorial-tone Draft a strong opening`,
+      content: `# Draft\n`,
+      postTitle: `Skills Test`,
+    })
+    const firstReq = fakeServer.chatRequests[0]
+    const systemMsg = String(firstReq.messages?.find(m => m.role === `system`)?.content ?? ``)
+    const userMsg = String(firstReq.messages?.find(m => m.role === `user`)?.content ?? ``)
+    expect(systemMsg).toContain(`editorial-tone`)
+    expect(systemMsg).toContain(`load_skill`)
+    expect(systemMsg).not.toContain(`generate_image`)
+    expect(userMsg).toContain(`EDITORIAL_TONE_INSTRUCTIONS_42`)
+    expect(userMsg).toContain(`Draft a strong opening`)
+
+    // 2. load_skill returns SKILL.md content plus relative paths of other files in the skill dir.
+    events.length = 0
+    await host.prompt({
+      sessionId: started.sessionId,
+      text: `TRIGGER_TOOL_CALL:${JSON.stringify({ name: `load_skill`, arguments: { name: `editorial-tone` } })}`,
+      content: `# Draft\n`,
+      postTitle: `Skills Test`,
+    })
+    const loadReply = events
+      .filter((e): e is Extract<AcpHostEvent, { type: `message_chunk` }> => e.type === `message_chunk`)
+      .map(e => e.text)
+      .join(``)
+    const loadResult = JSON.parse(loadReply.slice(loadReply.indexOf(`TOOL_RESULT:`) + `TOOL_RESULT:`.length)) as {
+      ok: boolean
+      name: string
+      content: string
+      files: string[]
+    }
+    expect(loadResult.ok).toBe(true)
+    expect(loadResult.name).toBe(`editorial-tone`)
+    expect(loadResult.content).toContain(`EDITORIAL_TONE_INSTRUCTIONS_42`)
+    expect(loadResult.files).toEqual([`references/checklist.md`])
+
+    // 3. Even with no workspace skills, available_commands_update is still emitted (empty).
+    const emptyEvents: AcpHostEvent[] = []
+    const { host: emptyHost } = await createWiredHost(fakeServer, {
+      onEvent: e => emptyEvents.push(e),
+    })
+    await emptyHost.startSession({
+      agentId: API_MODEL_AGENT_ID,
+      permissionLevel: `bypass`,
+      postId: `post-no-skills`,
+      postTitle: `No Skills`,
+      content: `# Empty\n`,
+    })
+    const emptyDeadline = Date.now() + 5_000
+    while (!emptyEvents.some(e => e.type === `commands_updated`) && Date.now() < emptyDeadline)
+      await new Promise(resolve => setTimeout(resolve, 25))
+    const emptyCmdEvent = emptyEvents.find(
+      (e): e is Extract<AcpHostEvent, { type: `commands_updated` }> => e.type === `commands_updated`,
+    )
+    expect(emptyCmdEvent?.commands).toEqual([])
+  }, 20_000)
+
+  it(`confines list_files, read_file, and write_file to session cwd, refuses article.md, and enforces plan mode`, async () => {
+    const fakeServer = await startFakeOpenAiServer()
+    const outsideDir = await makeTempDir(`md-api-outside-`)
+    const outsideSecretPath = path.join(outsideDir, `secret.txt`)
+    await fs.writeFile(outsideSecretPath, `TOP_SECRET_OUTSIDE`, `utf8`)
+
+    const events: AcpHostEvent[] = []
+    let nextDecision: `allow_once` | `reject` = `reject`
+    const { host, dataDir } = await createWiredHost(fakeServer, {
+      onEvent: (event) => {
+        events.push(event)
+        if (event.type === `permission_requested`)
+          host.respondPermission({ sessionId: event.sessionId, requestId: event.request.requestId, decision: nextDecision })
+      },
+    })
+
+    const started = await host.startSession({
+      agentId: API_MODEL_AGENT_ID,
+      permissionLevel: `bypass`,
+      postId: `post-files`,
+      postTitle: `Files Test`,
+      content: `# Original Article\n`,
+    })
+
+    const wsNames = await fs.readdir(path.join(dataDir, `acp-workspaces`))
+    expect(wsNames).toHaveLength(1)
+    const workspaceDir = path.join(dataDir, `acp-workspaces`, wsNames[0])
+
+    await fs.mkdir(path.join(workspaceDir, `notes`), { recursive: true })
+    await fs.writeFile(path.join(workspaceDir, `notes`, `memo.txt`), `workspace memo content`, `utf8`)
+    await fs.symlink(outsideSecretPath, path.join(workspaceDir, `escape-file.txt`))
+    await fs.symlink(outsideDir, path.join(workspaceDir, `escape-dir`))
+    await fs.symlink(path.join(workspaceDir, `article.md`), path.join(workspaceDir, `article-alias.md`))
+
+    const invokeTool = async (name: string, args: Record<string, unknown>) => {
+      events.length = 0
+      await host.prompt({
+        sessionId: started.sessionId,
+        text: `TRIGGER_TOOL_CALL:${JSON.stringify({ name, arguments: args })}`,
+        content: `# Original Article\n`,
+        postTitle: `Files Test`,
+      })
+      const reply = events
+        .filter((e): e is Extract<AcpHostEvent, { type: `message_chunk` }> => e.type === `message_chunk`)
+        .map(e => e.text)
+        .join(``)
+      return JSON.parse(reply.slice(reply.indexOf(`TOOL_RESULT:`) + `TOOL_RESULT:`.length)) as Record<string, unknown>
+    }
+
+    // 1. list_files marks directories with trailing "/".
+    const listed = await invokeTool(`list_files`, {})
+    expect(listed.ok).toBe(true)
+    expect(listed.entries).toContain(`notes/`)
+    expect(listed.entries).toContain(`article.md`)
+
+    // 2. read_file reads inside workspace and rejects absolute, "..", and symlink escapes.
+    const okRead = await invokeTool(`read_file`, { path: `notes/memo.txt` })
+    expect(okRead).toMatchObject({ ok: true, content: `workspace memo content` })
+
+    const absRead = await invokeTool(`read_file`, { path: outsideSecretPath })
+    expect(absRead.ok).toBe(false)
+    expect(String(absRead.error)).toMatch(/absolute/i)
+
+    const dotDotRead = await invokeTool(`read_file`, { path: `../secret.txt` })
+    expect(dotDotRead.ok).toBe(false)
+    expect(String(dotDotRead.error)).toMatch(/\.\.|traversal/i)
+
+    const symlinkRead = await invokeTool(`read_file`, { path: `escape-file.txt` })
+    expect(symlinkRead.ok).toBe(false)
+    expect(String(symlinkRead.error)).toMatch(/outside/i)
+
+    // 3. write_file creates parent dirs, writes safely, and refuses article.md and escapes.
+    const okWrite = await invokeTool(`write_file`, { path: `ip/selected.json`, content: `{"id":"ip-1"}` })
+    expect(okWrite).toMatchObject({ ok: true, path: `ip/selected.json` })
+    expect(await fs.readFile(path.join(workspaceDir, `ip`, `selected.json`), `utf8`)).toBe(`{"id":"ip-1"}`)
+
+    for (const blockedTarget of [`article.md`, `./article.md`, `article-alias.md`]) {
+      const refused = await invokeTool(`write_file`, { path: blockedTarget, content: `# Hijacked` })
+      expect(refused.ok).toBe(false)
+      expect(String(refused.error)).toMatch(/article\.md/i)
+    }
+    expect(await fs.readFile(path.join(workspaceDir, `article.md`), `utf8`)).toBe(`# Original Article\n`)
+
+    const escapeWriteAbs = await invokeTool(`write_file`, { path: path.join(outsideDir, `abs.txt`), content: `bad` })
+    expect(escapeWriteAbs.ok).toBe(false)
+    const escapeWriteDotDot = await invokeTool(`write_file`, { path: `../dotdot.txt`, content: `bad` })
+    expect(escapeWriteDotDot.ok).toBe(false)
+    const escapeWriteSymlinkDir = await invokeTool(`write_file`, { path: `escape-dir/nested/pwn.txt`, content: `bad` })
+    expect(escapeWriteSymlinkDir.ok).toBe(false)
+    expect(await fs.readdir(outsideDir)).toEqual([`secret.txt`])
+
+    // 4. Permission gating: ask rejects when user denies; auto_edits allows without prompting.
+    await host.setPermissionMode({ sessionId: started.sessionId, permissionLevel: `ask` })
+    nextDecision = `reject`
+    const rejectedWrite = await invokeTool(`write_file`, { path: `notes/denied.txt`, content: `nope` })
+    expect(rejectedWrite.ok).toBe(false)
+    expect(events.filter(e => e.type === `permission_requested`)).toHaveLength(1)
+    await expect(fs.access(path.join(workspaceDir, `notes`, `denied.txt`))).rejects.toThrow()
+
+    await host.setPermissionMode({ sessionId: started.sessionId, permissionLevel: `auto_edits` })
+    const autoWrite = await invokeTool(`write_file`, { path: `notes/auto.txt`, content: `auto ok` })
+    expect(autoWrite.ok).toBe(true)
+    expect(events.filter(e => e.type === `permission_requested`)).toHaveLength(0)
+
+    // 5. Plan mode keeps reads working and blocks write_file.
+    await host.setPermissionMode({ sessionId: started.sessionId, permissionLevel: `plan` })
+    const planRead = await invokeTool(`read_file`, { path: `notes/auto.txt` })
+    expect(planRead).toMatchObject({ ok: true, content: `auto ok` })
+    const planWrite = await invokeTool(`write_file`, { path: `notes/plan.txt`, content: `blocked` })
+    expect(planWrite.ok).toBe(false)
+    expect(String(planWrite.error)).toMatch(/plan mode/i)
+    await expect(fs.access(path.join(workspaceDir, `notes`, `plan.txt`))).rejects.toThrow()
+  }, 25_000)
+
+  it(`connects stdio MCP servers, lists and calls their tools, skips broken servers, and blocks MCP calls in plan mode`, async () => {
+    const fakeServer = await startFakeOpenAiServer()
+    const mcpFixtureCode = [
+      `const rl = require('node:readline').createInterface({ input: process.stdin, crlfDelay: Infinity });`,
+      `const send = o => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...o }) + '\\n');`,
+      `rl.on('line', line => {`,
+      `  const s = line.trim(); if (!s) return;`,
+      `  const m = JSON.parse(s);`,
+      `  if (m.id === undefined || m.id === null) return;`,
+      `  if (m.method === 'initialize') return send({ id: m.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'echo-mcp', version: '1.0.0' } } });`,
+      `  if (m.method === 'tools/list') return send({ id: m.id, result: { tools: [{ name: 'echo_upper', description: 'Return uppercase text', inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } }] } });`,
+      `  if (m.method === 'tools/call') return send({ id: m.id, result: { content: [{ type: 'text', text: 'UPPER:' + String(m.params?.arguments?.text ?? '').toUpperCase() + ':' + (process.env.MCP_FIXTURE_TAG || '') }] } });`,
+      `  send({ id: m.id, error: { code: -32601, message: 'Method not found' } });`,
+      `});`,
+    ].join(`\n`)
+
+    const events: AcpHostEvent[] = []
+    const { host } = await createWiredHost(fakeServer, {
+      extraMcpServers: [
+        {
+          name: `broken-mcp`,
+          command: `/nonexistent-binary-md-test-mcp`,
+          args: [],
+          env: [],
+        },
+        {
+          name: `echo-mcp`,
+          command: process.execPath,
+          args: [`-e`, mcpFixtureCode],
+          env: [{ name: `MCP_FIXTURE_TAG`, value: `ok` }],
+        },
+      ],
+      onEvent: e => events.push(e),
+    })
+
+    const started = await host.startSession({
+      agentId: API_MODEL_AGENT_ID,
+      permissionLevel: `bypass`,
+      postId: `post-mcp`,
+      postTitle: `MCP Test`,
+      content: `# MCP\n`,
+    })
+
+    await host.prompt({
+      sessionId: started.sessionId,
+      text: `TRIGGER_TOOL_CALL:${JSON.stringify({ name: `echo_upper`, arguments: { text: `hello mcp` } })}`,
+      content: `# MCP\n`,
+      postTitle: `MCP Test`,
+    })
+
+    const advertisedTools = (fakeServer.chatRequests[0].tools ?? []).map(t => t.function?.name)
+    expect(advertisedTools).toEqual(expect.arrayContaining([
+      `read_article`,
+      `edit_article`,
+      `write_article`,
+      `list_files`,
+      `read_file`,
+      `write_file`,
+      `load_skill`,
+      `echo_upper`,
+    ]))
+
+    const reply = events
+      .filter((e): e is Extract<AcpHostEvent, { type: `message_chunk` }> => e.type === `message_chunk`)
+      .map(e => e.text)
+      .join(``)
+    expect(reply).toContain(`UPPER:HELLO MCP:ok`)
+
+    const mcpToolDone = events.find(
+      (e): e is Extract<AcpHostEvent, { type: `tool_call` }> =>
+        e.type === `tool_call` && e.tool.title === `echo_upper` && e.tool.status === `completed`,
+    )
+    expect(mcpToolDone?.tool.detail).toBe(`UPPER:HELLO MCP:ok`)
+
+    // Plan mode blocks external MCP tools.
+    await host.setPermissionMode({ sessionId: started.sessionId, permissionLevel: `plan` })
+    events.length = 0
+    await host.prompt({
+      sessionId: started.sessionId,
+      text: `TRIGGER_TOOL_CALL:${JSON.stringify({ name: `echo_upper`, arguments: { text: `blocked` } })}`,
+      content: `# MCP\n`,
+      postTitle: `MCP Test`,
+    })
+    const planReply = events
+      .filter((e): e is Extract<AcpHostEvent, { type: `message_chunk` }> => e.type === `message_chunk`)
+      .map(e => e.text)
+      .join(``)
+    expect(planReply).toMatch(/plan mode/i)
+    await host.closeSession(started.sessionId)
+  }, 20_000)
 })
