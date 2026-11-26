@@ -1,6 +1,7 @@
 export { initializeMermaid } from '../extensions/mermaid'
 export * from './asyncDiagramState'
 export * from './basicHelpers'
+export * from './chatMarkdown'
 export * from './front-matter'
 export * from './incrementalRender'
 export * from './languages'

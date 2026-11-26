@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { AcpToolCallItem } from '@md/shared/types'
 import { Check, ChevronDown, ChevronRight, LoaderCircle, PencilLine, X } from '@lucide/vue'
-import { formatShortFilePath, getDiffLines, getDiffStats } from '@/lib/agent/unified-diff'
+import { cleanDisplayPath } from '@/lib/agent/timeline-blocks'
+import { getDiffLines, getDiffStats } from '@/lib/agent/unified-diff'
 import AgentDiffLines from './AgentDiffLines.vue'
 
 const props = defineProps<{
@@ -32,7 +33,7 @@ const diffLines = computed(() =>
 )
 
 const displayPath = computed(() =>
-  formatShortFilePath(props.tool.filePath, props.tool.title),
+  cleanDisplayPath(props.tool.filePath) || props.tool.title,
 )
 </script>
 

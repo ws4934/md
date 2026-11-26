@@ -25,12 +25,18 @@ const isAllCompleted = computed(() =>
 </script>
 
 <template>
-  <div class="flex flex-col gap-0.5">
+  <div
+    class="flex flex-col gap-1 rounded-[10px] px-3 py-2"
+    style="
+      background-color: var(--dt-canvas);
+      border: 1px solid var(--dt-line);
+    "
+  >
     <button
       type="button"
       data-testid="plan-steps-toggle"
       :aria-expanded="!collapsed"
-      class="flex h-6 w-full cursor-pointer items-center gap-2 rounded-md text-left transition-opacity hover:opacity-85"
+      class="flex h-5 w-full cursor-pointer items-center gap-2 rounded-md text-left transition-opacity hover:opacity-85"
       @click="collapsed = !collapsed"
     >
       <component
