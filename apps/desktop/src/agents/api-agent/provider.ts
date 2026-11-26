@@ -117,5 +117,9 @@ export function buildReasoningProviderOptions(
  */
 export function isUnsupportedReasoningError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
-  return /reasoning[_ ]?effort|thinking(?:_?config|_?budget)?|budget_?tokens|unrecognized|unknown field|extra_forbidden|not supported/i.test(message)
+  if (/reasoning[_ ]?effort|thinking(?:_?config|_?budget|_?level)?|budget_?tokens/i.test(message))
+    return true
+  return /\b(?:unrecognized|unknown field|extra_forbidden)\b/i.test(message)
+    || /\b(?:reasoning|thinking|effort|budget)\b[\s\S]{1,80}\bnot supported\b/i.test(message)
+    || /\bnot supported\b[\s\S]{1,80}\b(?:reasoning|thinking|effort|budget)\b/i.test(message)
 }

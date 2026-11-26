@@ -246,8 +246,14 @@ export class AiConfigStore {
     const snapshot = `${JSON.stringify(this.data, null, 2)}\n`
     await fs.mkdir(path.dirname(this.configPath), { recursive: true })
     const tmpPath = `${this.configPath}.${randomUUID()}.tmp`
-    await fs.writeFile(tmpPath, snapshot, { encoding: `utf8`, mode: 0o600 })
-    await fs.rename(tmpPath, this.configPath)
+    try {
+      await fs.writeFile(tmpPath, snapshot, { encoding: `utf8`, mode: 0o600 })
+      await fs.rename(tmpPath, this.configPath)
+    }
+    catch (error) {
+      await fs.rm(tmpPath, { force: true }).catch(() => undefined)
+      throw error
+    }
   }
 
   private persist(): Promise<void> {

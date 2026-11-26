@@ -28,6 +28,7 @@ import { jsonSchema, stepCountIs, streamText, tool } from 'ai'
 import { z } from 'zod'
 import { redactSecret } from '../../main/ai/sanitize'
 import { listSkillSupportFiles, readSkills } from '../shared/skills'
+import { trimMessageHistory } from './history'
 import { connectMcpServers } from './mcp-client'
 import {
   API_AGENT_MODES,
@@ -175,6 +176,8 @@ function extractPromptText(blocks: ContentBlock[]): string {
         return block.text
       if (block.type === `resource_link`)
         return `[Resource: ${block.name || block.uri}]`
+      if (block.type === `resource` && `text` in block.resource && typeof block.resource.text === `string`)
+        return block.resource.text
       return ``
     })
     .filter(Boolean)
@@ -185,14 +188,22 @@ function toPosixRelative(fromDir: string, targetPath: string): string {
   return path.relative(fromDir, targetPath).replace(/\\/g, `/`)
 }
 
+function normalizePathForCompare(p: string): string {
+  const trimmedWin = process.platform === `win32` ? p.replace(/[. ]+$/, ``) : p
+  return CASE_INSENSITIVE_FS ? trimmedWin.toLowerCase() : trimmedWin
+}
+
 function isSameFsPath(a: string, b: string): boolean {
-  return CASE_INSENSITIVE_FS ? a.toLowerCase() === b.toLowerCase() : a === b
+  return normalizePathForCompare(a) === normalizePathForCompare(b)
 }
 
 function isWithinRoot(canonicalRoot: string, canonicalTarget: string, allowRoot: boolean): boolean {
-  if (allowRoot && canonicalTarget === canonicalRoot)
+  const normRoot = CASE_INSENSITIVE_FS ? canonicalRoot.toLowerCase() : canonicalRoot
+  const normTarget = CASE_INSENSITIVE_FS ? canonicalTarget.toLowerCase() : canonicalTarget
+  if (allowRoot && normTarget === normRoot)
     return true
-  return canonicalTarget.startsWith(`${canonicalRoot}${path.sep}`)
+  const prefix = normRoot.endsWith(path.sep) ? normRoot : `${normRoot}${path.sep}`
+  return normTarget !== normRoot && normTarget.startsWith(prefix)
 }
 
 function validateRelativePath(
@@ -216,6 +227,46 @@ function validateRelativePath(
   if (posixNorm === `..` || posixNorm.startsWith(`../`))
     return { ok: false, error: `Path escapes workspace: ${rawPath}` }
   return { ok: true, normalizedRel: posixNorm }
+}
+
+async function resolveConfinedArticlePath(
+  cwd: string,
+): Promise<{ ok: true, canonicalRoot: string, targetPath: string, exists: boolean, size: number } | { ok: false, error: string }> {
+  let canonicalRoot: string
+  try {
+    canonicalRoot = await fs.realpath(cwd)
+  }
+  catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+
+  const candidate = path.join(canonicalRoot, `article.md`)
+  try {
+    const lstat = await fs.lstat(candidate)
+    if (lstat.isSymbolicLink()) {
+      let realTarget: string
+      try {
+        realTarget = await fs.realpath(candidate)
+      }
+      catch {
+        return { ok: false, error: `Refusing to access dangling symlink article.md` }
+      }
+      if (!isWithinRoot(canonicalRoot, realTarget, false))
+        return { ok: false, error: `article.md resolves outside the session workspace` }
+      const targetStat = await fs.stat(realTarget)
+      if (!targetStat.isFile())
+        return { ok: false, error: `article.md is not a regular file` }
+      return { ok: true, canonicalRoot, targetPath: realTarget, exists: true, size: targetStat.size }
+    }
+    if (!lstat.isFile())
+      return { ok: false, error: `article.md is not a regular file` }
+    return { ok: true, canonicalRoot, targetPath: candidate, exists: true, size: lstat.size }
+  }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === `ENOENT`)
+      return { ok: true, canonicalRoot, targetPath: candidate, exists: false, size: 0 }
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 async function resolveExistingWorkspacePath(
@@ -254,6 +305,40 @@ async function resolveExistingWorkspacePath(
   }
 }
 
+async function verifyTargetNotEscapingOrArticle(
+  targetPath: string,
+  canonicalRoot: string,
+  canonicalArticlePath: string,
+  rawPath: string,
+): Promise<{ ok: true } | { ok: false, error: string }> {
+  if (isSameFsPath(targetPath, canonicalArticlePath))
+    return { ok: false, error: `Cannot modify article.md with write_file; use edit_article or write_article instead.` }
+
+  try {
+    const stat = await fs.lstat(targetPath)
+    if (stat.isDirectory())
+      return { ok: false, error: `Path is a directory: ${rawPath}` }
+    if (stat.isSymbolicLink()) {
+      let resolvedTarget: string
+      try {
+        resolvedTarget = await fs.realpath(targetPath)
+      }
+      catch {
+        return { ok: false, error: `Refusing to write through a dangling symlink: ${rawPath}` }
+      }
+      if (!isWithinRoot(canonicalRoot, resolvedTarget, false))
+        return { ok: false, error: `Symlink resolves outside the session workspace: ${rawPath}` }
+      if (isSameFsPath(resolvedTarget, canonicalArticlePath))
+        return { ok: false, error: `Cannot modify article.md with write_file; use edit_article or write_article instead.` }
+    }
+  }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== `ENOENT`)
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+  return { ok: true }
+}
+
 async function resolveWritableWorkspacePath(
   cwd: string,
   rawPath: string,
@@ -269,32 +354,10 @@ async function resolveWritableWorkspacePath(
   const candidate = path.resolve(canonicalRoot, validated.normalizedRel)
   if (!isWithinRoot(canonicalRoot, candidate, false))
     return { ok: false, error: `Path escapes workspace: ${rawPath}` }
-  if (isSameFsPath(candidate, canonicalArticlePath))
-    return { ok: false, error: `Cannot modify article.md with write_file; use edit_article or write_article instead.` }
 
-  // Reject symlinks on the target path itself that escape the workspace, dangle, or alias article.md.
-  try {
-    const stat = await fs.lstat(candidate)
-    if (stat.isDirectory())
-      return { ok: false, error: `Path is a directory: ${rawPath}` }
-    if (stat.isSymbolicLink()) {
-      let resolvedTarget: string
-      try {
-        resolvedTarget = await fs.realpath(candidate)
-      }
-      catch {
-        return { ok: false, error: `Refusing to write through a dangling symlink: ${rawPath}` }
-      }
-      if (!isWithinRoot(canonicalRoot, resolvedTarget, false))
-        return { ok: false, error: `Symlink resolves outside the session workspace: ${rawPath}` }
-      if (isSameFsPath(resolvedTarget, canonicalArticlePath))
-        return { ok: false, error: `Cannot modify article.md with write_file; use edit_article or write_article instead.` }
-    }
-  }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code !== `ENOENT`)
-      return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  }
+  const leafCheck = await verifyTargetNotEscapingOrArticle(candidate, canonicalRoot, canonicalArticlePath, rawPath)
+  if (!leafCheck.ok)
+    return leafCheck
 
   // Walk up until an existing ancestor directory is found so symlinks in parent segments cannot escape cwd.
   let probe = path.dirname(candidate)
@@ -348,43 +411,104 @@ function formatMcpPermissionPreview(rawInput: Record<string, unknown>): string |
   return JSON.stringify(rawInput)
 }
 
-async function expandSlashSkill(userText: string, session: SessionState): Promise<string> {
-  const trimmed = userText.trimStart()
+async function readConfinedSkill(
+  session: SessionState,
+  skill: SkillEntry,
+): Promise<{ ok: true, content: string, files: string[], relSkillDir: string } | { ok: false, error: string }> {
+  try {
+    const [canonicalWorkspace, canonicalSkillDir, canonicalSkillFile] = await Promise.all([
+      fs.realpath(session.cwd),
+      fs.realpath(skill.dir),
+      fs.realpath(skill.skillFile),
+    ])
+    if (
+      !isWithinRoot(canonicalWorkspace, canonicalSkillDir, false)
+      || !isWithinRoot(canonicalSkillDir, canonicalSkillFile, false)
+    ) {
+      return { ok: false, error: `Skill "${skill.name}" resolves outside the session workspace` }
+    }
+    const stat = await fs.stat(canonicalSkillFile)
+    if (!stat.isFile())
+      return { ok: false, error: `Skill "${skill.name}" SKILL.md is not a regular file` }
+    if (stat.size > MAX_READ_FILE_BYTES)
+      return { ok: false, error: `Skill "${skill.name}" SKILL.md exceeds 256 KB read limit` }
+
+    const [content, files] = await Promise.all([
+      fs.readFile(canonicalSkillFile, `utf8`),
+      listSkillSupportFiles(canonicalSkillDir, { rootDir: canonicalWorkspace }),
+    ])
+    return {
+      ok: true,
+      content,
+      files,
+      relSkillDir: toPosixRelative(canonicalWorkspace, canonicalSkillDir),
+    }
+  }
+  catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+async function tryExpandLeadingSkillToken(segment: string, session: SessionState): Promise<string | null> {
+  const trimmed = segment.trimStart()
   const firstToken = trimmed.split(/\s/, 1)[0]
   if (!firstToken.startsWith(`/`))
-    return userText
+    return null
   const skillName = firstToken.slice(1)
   if (!skillName)
-    return userText
+    return null
   const skill = session.skills.find(s => s.name === skillName)
   if (!skill)
-    return userText
+    return null
 
-  let skillContent: string
-  try {
-    skillContent = await fs.readFile(skill.skillFile, `utf8`)
-  }
-  catch {
-    return userText
-  }
+  const loaded = await readConfinedSkill(session, skill)
+  if (!loaded.ok)
+    return null
 
-  const supportFiles = await listSkillSupportFiles(skill.dir)
-  const relSkillDir = toPosixRelative(session.cwd, skill.dir)
-  const filesNote = supportFiles.length > 0
-    ? `\nAdditional files in ${relSkillDir}: ${supportFiles.join(`, `)}`
+  const filesNote = loaded.files.length > 0
+    ? `\nAdditional files in ${loaded.relSkillDir}: ${loaded.files.join(`, `)}`
     : ``
   const rest = trimmed.slice(firstToken.length).trimStart()
-  const inlined = `<skill name="${skill.name}" dir="${relSkillDir}">\n${skillContent.trimEnd()}\n</skill>${filesNote}`
+  const inlined = `<skill name="${skill.name}" dir="${loaded.relSkillDir}">\n${loaded.content.trimEnd()}\n</skill>${filesNote}`
   return rest ? `${inlined}\n\n${rest}` : inlined
 }
 
-async function readArticleSafe(articlePath: string): Promise<string> {
+async function expandSlashSkill(userText: string, session: SessionState): Promise<string> {
+  const direct = await tryExpandLeadingSkillToken(userText, session)
+  if (direct !== null)
+    return direct
+
+  // Also expand `/skill` when AcpHost wrapped `[Context]...` ahead of the user message
+  // (e.g. before `available_commands_update` arrived or when leading spaces were typed).
+  if (userText.startsWith(`[Context]`)) {
+    const sepIdx = userText.lastIndexOf(`\n\n`)
+    if (sepIdx !== -1) {
+      const expandedTail = await tryExpandLeadingSkillToken(userText.slice(sepIdx + 2), session)
+      if (expandedTail !== null)
+        return `${userText.slice(0, sepIdx)}\n\n${expandedTail}`
+    }
+  }
+  return userText
+}
+
+async function readConfinedArticleSafe(cwd: string): Promise<string | null> {
+  const resolved = await resolveConfinedArticlePath(cwd)
+  if (!resolved.ok)
+    return null
+  if (!resolved.exists)
+    return ``
+  if (resolved.size > MAX_WRITE_FILE_BYTES)
+    return null
   try {
-    return await fs.readFile(articlePath, `utf8`)
+    return await fs.readFile(resolved.targetPath, `utf8`)
   }
   catch {
-    return ``
+    return null
   }
+}
+
+function isPlanMode(session: SessionState): boolean {
+  return session.modeId === `plan`
 }
 
 async function emitUpdate(client: AgentContext, sessionId: string, update: Record<string, unknown>): Promise<void> {
@@ -400,12 +524,15 @@ async function requestToolPermission(params: {
   toolCallId: string
   title: string
   kind: ToolKind
+  abortSignal: AbortSignal
   locations?: Array<{ path: string }>
   content?: ToolCallContent[]
   rawInput?: Record<string, unknown>
 }): Promise<boolean> {
-  const { client, session, toolCallId, title, kind, locations, content, rawInput } = params
+  const { client, session, toolCallId, title, kind, abortSignal, locations, content, rawInput } = params
 
+  if (abortSignal.aborted)
+    return false
   if (session.modeId === `bypassPermissions`)
     return true
   if (session.modeId === `acceptEdits` && kind === `edit`)
@@ -413,7 +540,7 @@ async function requestToolPermission(params: {
   if (session.alwaysAllowedKinds.has(kind))
     return true
 
-  const response = await client.request<RequestPermissionResponse>(`session/request_permission`, {
+  const permissionPromise = client.request<RequestPermissionResponse>(`session/request_permission`, {
     sessionId: session.id,
     toolCall: {
       toolCallId,
@@ -431,7 +558,32 @@ async function requestToolPermission(params: {
     ],
   })
 
-  const outcome = response?.outcome
+  // Guard unhandled rejection if abort wins the race before the client resolves the RPC.
+  permissionPromise.catch(() => undefined)
+
+  let onAbort: (() => void) | undefined
+  const abortPromise = new Promise<null>((resolve) => {
+    if (abortSignal.aborted) {
+      resolve(null)
+      return
+    }
+    onAbort = () => resolve(null)
+    abortSignal.addEventListener(`abort`, onAbort, { once: true })
+  })
+
+  let response: RequestPermissionResponse | null
+  try {
+    response = await Promise.race([permissionPromise, abortPromise])
+  }
+  finally {
+    if (onAbort)
+      abortSignal.removeEventListener(`abort`, onAbort)
+  }
+
+  if (!response || abortSignal.aborted)
+    return false
+
+  const outcome = response.outcome
   if (outcome?.outcome !== `selected`)
     return false
   if (outcome.optionId === `opt_allow_always`) {
@@ -457,7 +609,8 @@ function buildToolsForTurn(params: {
     // Serialize concurrent tool calls within the same step so parallel edits never clobber article.md.
     const run = async () => {
       const toolCallId = opts.toolCallId || `tc-${randomUUID().slice(0, 8)}`
-      const existing = await readArticleSafe(session.articlePath)
+      if (abortSignal.aborted)
+        return { ok: false, error: `Cancelled` }
 
       if (session.modeId === `plan`) {
         await emitUpdate(client, session.id, {
@@ -473,6 +626,39 @@ function buildToolsForTurn(params: {
         return { ok: false, error: `Plan mode is read-only; propose your plan without modifying article.md.` }
       }
 
+      const resolvedArticle = await resolveConfinedArticlePath(session.cwd)
+      if (!resolvedArticle.ok) {
+        await emitUpdate(client, session.id, {
+          sessionUpdate: `tool_call`,
+          toolCallId,
+          title: opts.title,
+          kind: `edit`,
+          status: `failed`,
+          locations: [{ path: session.articlePath }],
+          rawInput: opts.rawInput,
+          rawOutput: { error: resolvedArticle.error },
+        })
+        return { ok: false, error: resolvedArticle.error }
+      }
+      if (resolvedArticle.exists && resolvedArticle.size > MAX_WRITE_FILE_BYTES) {
+        const error = `article.md exceeds 1 MB edit limit (${resolvedArticle.size} bytes)`
+        await emitUpdate(client, session.id, {
+          sessionUpdate: `tool_call`,
+          toolCallId,
+          title: opts.title,
+          kind: `edit`,
+          status: `failed`,
+          locations: [{ path: session.articlePath }],
+          rawInput: opts.rawInput,
+          rawOutput: { error },
+        })
+        return { ok: false, error }
+      }
+
+      const existing = resolvedArticle.exists
+        ? await fs.readFile(resolvedArticle.targetPath, `utf8`).catch(() => ``)
+        : ``
+
       const computed = opts.computeNext(existing)
       if (!computed.ok) {
         await emitUpdate(client, session.id, {
@@ -486,6 +672,22 @@ function buildToolsForTurn(params: {
           rawOutput: { error: computed.error },
         })
         return { ok: false, error: computed.error }
+      }
+
+      const nextBytes = Buffer.byteLength(computed.next, `utf8`)
+      if (nextBytes > MAX_WRITE_FILE_BYTES) {
+        const error = `Article content exceeds 1 MB write limit (${nextBytes} bytes)`
+        await emitUpdate(client, session.id, {
+          sessionUpdate: `tool_call`,
+          toolCallId,
+          title: opts.title,
+          kind: `edit`,
+          status: `failed`,
+          locations: [{ path: session.articlePath }],
+          rawInput: opts.rawInput,
+          rawOutput: { error },
+        })
+        return { ok: false, error }
       }
 
       const diffContent: ToolCallContent[] = [
@@ -514,13 +716,16 @@ function buildToolsForTurn(params: {
         toolCallId,
         title: opts.title,
         kind: `edit`,
+        abortSignal,
         locations: [{ path: session.articlePath }],
         content: diffContent,
         rawInput: opts.rawInput,
       })
 
-      if (abortSignal.aborted || !allowed) {
-        const reason = abortSignal.aborted ? `Cancelled` : `Edit rejected by user`
+      if (abortSignal.aborted || !allowed || isPlanMode(session)) {
+        const reason = abortSignal.aborted
+          ? `Cancelled`
+          : (isPlanMode(session) ? `Plan mode is read-only` : `Edit rejected by user`)
         await emitUpdate(client, session.id, {
           sessionUpdate: `tool_call_update`,
           toolCallId,
@@ -536,7 +741,18 @@ function buildToolsForTurn(params: {
         status: `in_progress`,
       })
 
-      await fs.writeFile(session.articlePath, computed.next, `utf8`)
+      const rechecked = await resolveConfinedArticlePath(session.cwd)
+      if (!rechecked.ok) {
+        await emitUpdate(client, session.id, {
+          sessionUpdate: `tool_call_update`,
+          toolCallId,
+          status: `failed`,
+          rawOutput: { error: rechecked.error },
+        })
+        return { ok: false, error: rechecked.error }
+      }
+
+      await fs.writeFile(rechecked.targetPath, computed.next, `utf8`)
       session.lastAgentArticleContent = computed.next
 
       await emitUpdate(client, session.id, {
@@ -559,6 +775,36 @@ function buildToolsForTurn(params: {
     inputSchema: z.object({}),
     execute: async (_input, options) => {
       const toolCallId = options?.toolCallId || `tc-${randomUUID().slice(0, 8)}`
+      if (abortSignal.aborted)
+        return { ok: false, error: `Cancelled` }
+
+      const resolved = await resolveConfinedArticlePath(session.cwd)
+      if (!resolved.ok) {
+        await emitUpdate(client, session.id, {
+          sessionUpdate: `tool_call`,
+          toolCallId,
+          title: `Read article.md`,
+          kind: `read`,
+          status: `failed`,
+          locations: [{ path: session.articlePath }],
+          rawOutput: { error: resolved.error },
+        })
+        return { ok: false, error: resolved.error }
+      }
+      if (resolved.exists && resolved.size > MAX_WRITE_FILE_BYTES) {
+        const error = `article.md exceeds 1 MB read limit (${resolved.size} bytes)`
+        await emitUpdate(client, session.id, {
+          sessionUpdate: `tool_call`,
+          toolCallId,
+          title: `Read article.md`,
+          kind: `read`,
+          status: `failed`,
+          locations: [{ path: session.articlePath }],
+          rawOutput: { error },
+        })
+        return { ok: false, error }
+      }
+
       await emitUpdate(client, session.id, {
         sessionUpdate: `tool_call`,
         toolCallId,
@@ -567,7 +813,9 @@ function buildToolsForTurn(params: {
         status: `in_progress`,
         locations: [{ path: session.articlePath }],
       })
-      const content = await readArticleSafe(session.articlePath)
+      const content = resolved.exists
+        ? await fs.readFile(resolved.targetPath, `utf8`).catch(() => ``)
+        : ``
       session.lastAgentArticleContent = content
       await emitUpdate(client, session.id, {
         sessionUpdate: `tool_call_update`,
@@ -589,7 +837,12 @@ function buildToolsForTurn(params: {
       return applyArticleUpdate({
         toolCallId: options?.toolCallId,
         title: `Edit article.md`,
-        rawInput: { path: session.articlePath, old_text, new_text },
+        rawInput: {
+          path: session.articlePath,
+          old_text,
+          new_text,
+          ...(replace_all !== undefined ? { replace_all } : {}),
+        },
         computeNext: (existing) => {
           const firstIdx = existing.indexOf(old_text)
           if (firstIdx === -1)
@@ -627,6 +880,9 @@ function buildToolsForTurn(params: {
     }),
     execute: async ({ path: relPath }, options) => {
       const toolCallId = options?.toolCallId || `tc-${randomUUID().slice(0, 8)}`
+      if (abortSignal.aborted)
+        return { ok: false, error: `Cancelled` }
+
       const rawPath = relPath ?? `.`
       const title = rawPath && rawPath !== `.` ? `List ${rawPath}` : `List workspace files`
       const rawInput = relPath !== undefined ? { path: relPath } : {}
@@ -713,6 +969,9 @@ function buildToolsForTurn(params: {
     }),
     execute: async ({ path: relPath }, options) => {
       const toolCallId = options?.toolCallId || `tc-${randomUUID().slice(0, 8)}`
+      if (abortSignal.aborted)
+        return { ok: false, error: `Cancelled` }
+
       const title = `Read ${relPath}`
       const rawInput = { path: relPath }
 
@@ -793,6 +1052,9 @@ function buildToolsForTurn(params: {
     execute: async ({ path: relPath, content }, options) => {
       const run = async () => {
         const toolCallId = options?.toolCallId || `tc-${randomUUID().slice(0, 8)}`
+        if (abortSignal.aborted)
+          return { ok: false, error: `Cancelled` }
+
         const title = `Write ${relPath}`
         const rawInput = { path: relPath, content }
 
@@ -840,7 +1102,9 @@ function buildToolsForTurn(params: {
 
         let existing = ``
         try {
-          existing = await fs.readFile(resolved.targetPath, `utf8`)
+          const existingStat = await fs.stat(resolved.targetPath)
+          if (existingStat.isFile() && existingStat.size <= MAX_WRITE_FILE_BYTES)
+            existing = await fs.readFile(resolved.targetPath, `utf8`)
         }
         catch {
           existing = ``
@@ -872,13 +1136,16 @@ function buildToolsForTurn(params: {
           toolCallId,
           title,
           kind: `edit`,
+          abortSignal,
           locations: [{ path: resolved.targetPath }],
           content: diffContent,
           rawInput,
         })
 
-        if (abortSignal.aborted || !allowed) {
-          const reason = abortSignal.aborted ? `Cancelled` : `Write rejected by user`
+        if (abortSignal.aborted || !allowed || isPlanMode(session)) {
+          const reason = abortSignal.aborted
+            ? `Cancelled`
+            : (isPlanMode(session) ? `Plan mode is read-only` : `Write rejected by user`)
           await emitUpdate(client, session.id, {
             sessionUpdate: `tool_call_update`,
             toolCallId,
@@ -895,12 +1162,25 @@ function buildToolsForTurn(params: {
         })
 
         try {
-          await fs.mkdir(path.dirname(resolved.targetPath), { recursive: true })
-          const canonicalParent = await fs.realpath(path.dirname(resolved.targetPath))
-          const finalPath = path.join(canonicalParent, path.basename(resolved.targetPath))
-          if (!isWithinRoot(resolved.canonicalRoot, canonicalParent, true) || isSameFsPath(finalPath, resolved.canonicalArticlePath)) {
-            throw new Error(`Resolved target escapes workspace or aliases article.md: ${relPath}`)
-          }
+          // Re-verify confinement after awaiting user approval so mid-prompt symlinks cannot escape or alias article.md.
+          const rechecked = await resolveWritableWorkspacePath(session.cwd, relPath)
+          if (!rechecked.ok)
+            throw new Error(rechecked.error)
+
+          await fs.mkdir(path.dirname(rechecked.targetPath), { recursive: true })
+          const canonicalParent = await fs.realpath(path.dirname(rechecked.targetPath))
+          const finalPath = path.join(canonicalParent, path.basename(rechecked.targetPath))
+          if (!isWithinRoot(rechecked.canonicalRoot, canonicalParent, true))
+            throw new Error(`Resolved target escapes workspace: ${relPath}`)
+          const finalLeafCheck = await verifyTargetNotEscapingOrArticle(
+            finalPath,
+            rechecked.canonicalRoot,
+            rechecked.canonicalArticlePath,
+            relPath,
+          )
+          if (!finalLeafCheck.ok)
+            throw new Error(finalLeafCheck.error)
+
           await fs.writeFile(finalPath, content, `utf8`)
           await emitUpdate(client, session.id, {
             sessionUpdate: `tool_call_update`,
@@ -908,7 +1188,7 @@ function buildToolsForTurn(params: {
             status: `completed`,
             content: diffContent,
           })
-          return { ok: true, path: resolved.normalizedRel, length: content.length }
+          return { ok: true, path: rechecked.normalizedRel, length: content.length }
         }
         catch (error) {
           const message = error instanceof Error ? error.message : String(error)
@@ -935,6 +1215,9 @@ function buildToolsForTurn(params: {
     }),
     execute: async ({ name }, options) => {
       const toolCallId = options?.toolCallId || `tc-${randomUUID().slice(0, 8)}`
+      if (abortSignal.aborted)
+        return { ok: false, error: `Cancelled` }
+
       const title = `Load skill ${name}`
       const rawInput = { name }
       const skill = session.skills.find(s => s.name === name)
@@ -966,34 +1249,29 @@ function buildToolsForTurn(params: {
         rawInput,
       })
 
-      try {
-        const [content, files] = await Promise.all([
-          fs.readFile(skill.skillFile, `utf8`),
-          listSkillSupportFiles(skill.dir),
-        ])
-        await emitUpdate(client, session.id, {
-          sessionUpdate: `tool_call_update`,
-          toolCallId,
-          status: `completed`,
-        })
-        return {
-          ok: true,
-          name: skill.name,
-          description: skill.description,
-          dir: toPosixRelative(session.cwd, skill.dir),
-          content,
-          files,
-        }
-      }
-      catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
+      const loaded = await readConfinedSkill(session, skill)
+      if (!loaded.ok) {
         await emitUpdate(client, session.id, {
           sessionUpdate: `tool_call_update`,
           toolCallId,
           status: `failed`,
-          rawOutput: { error: message },
+          rawOutput: { error: loaded.error },
         })
-        return { ok: false, error: message }
+        return { ok: false, error: loaded.error }
+      }
+
+      await emitUpdate(client, session.id, {
+        sessionUpdate: `tool_call_update`,
+        toolCallId,
+        status: `completed`,
+      })
+      return {
+        ok: true,
+        name: skill.name,
+        description: skill.description,
+        dir: loaded.relSkillDir,
+        content: loaded.content,
+        files: loaded.files,
       }
     },
   })
@@ -1026,6 +1304,9 @@ function buildToolsForTurn(params: {
         inputSchema: jsonSchema<Record<string, unknown>>(normalizeMcpInputSchema(mcpTool.inputSchema)),
         execute: async (input, options) => {
           const toolCallId = options?.toolCallId || `tc-${randomUUID().slice(0, 8)}`
+          if (abortSignal.aborted)
+            return { ok: false, error: `Cancelled` }
+
           const rawInput = input && typeof input === `object` ? input : {}
 
           if (session.modeId === `plan`) {
@@ -1057,12 +1338,15 @@ function buildToolsForTurn(params: {
             toolCallId,
             title: toolTitle,
             kind: `other`,
+            abortSignal,
             rawInput,
             ...(previewText ? { content: [{ type: `content`, content: { type: `text`, text: previewText } }] } : {}),
           })
 
-          if (abortSignal.aborted || !allowed) {
-            const reason = abortSignal.aborted ? `Cancelled` : `Tool call rejected by user`
+          if (abortSignal.aborted || !allowed || isPlanMode(session)) {
+            const reason = abortSignal.aborted
+              ? `Cancelled`
+              : (isPlanMode(session) ? `Plan mode is read-only` : `Tool call rejected by user`)
             await emitUpdate(client, session.id, {
               sessionUpdate: `tool_call_update`,
               toolCallId,
@@ -1123,83 +1407,98 @@ async function runPromptTurn(params: {
   session: SessionState
   client: AgentContext
   userText: string
+  requestSignal?: AbortSignal
 }): Promise<`end_turn` | `cancelled`> {
-  const { config, session, client, userText } = params
+  const { config, session, client, userText, requestSignal } = params
   const abortController = new AbortController()
   session.activeAbort = abortController
-
-  const expandedUserText = await expandSlashSkill(userText, session)
-  const currentDiskArticle = await readArticleSafe(session.articlePath)
-  const changedExternally = session.messages.length > 0
-    && session.lastAgentArticleContent !== null
-    && currentDiskArticle !== session.lastAgentArticleContent
-  const effectiveUserText = changedExternally
-    ? `[System note: article.md was updated outside this conversation since the previous turn (for example, local images/... paths were uploaded to hosted URLs or the user edited the article). Call read_article to inspect the latest article.md before calling edit_article or write_article.]\n\n${expandedUserText}`
-    : expandedUserText
-
-  const turnMessages: ModelMessage[] = [
-    ...session.messages,
-    { role: `user`, content: effectiveUserText },
-  ]
-
-  const runStreamOnce = async (useReasoningOptions: boolean) => {
-    const model = createApiAgentLanguageModel(config, session.modelId)
-    const providerOptions = useReasoningOptions
-      ? buildReasoningProviderOptions(config.protocol, session.thoughtLevel)
-      : undefined
-    const tools = buildToolsForTurn({
-      client,
-      session,
-      abortSignal: abortController.signal,
-    })
-
-    const result = streamText({
-      model,
-      system: buildSystemPrompt(session.articlePath, session.modeId, session.skills),
-      messages: turnMessages,
-      tools,
-      stopWhen: stepCountIs(MAX_AGENT_STEPS),
-      abortSignal: abortController.signal,
-      ...(providerOptions ? { providerOptions: providerOptions as never } : {}),
-    })
-
-    let emittedAnyOutput = false
-    let streamError: unknown = null
-
-    for await (const part of result.fullStream) {
-      if (abortController.signal.aborted)
-        break
-      if (part.type === `text-delta` && part.text) {
-        emittedAnyOutput = true
-        await emitUpdate(client, session.id, {
-          sessionUpdate: `agent_message_chunk`,
-          content: { type: `text`, text: part.text },
-        })
-      }
-      else if (part.type === `reasoning-delta` && part.text) {
-        emittedAnyOutput = true
-        await emitUpdate(client, session.id, {
-          sessionUpdate: `agent_thought_chunk`,
-          content: { type: `text`, text: part.text },
-        })
-      }
-      else if (part.type === `error`) {
-        streamError = part.error
-      }
-    }
-
-    if (streamError) {
-      const tagged = Object.assign(
-        streamError instanceof Error ? streamError : new Error(String(streamError)),
-        { emittedAnyOutput },
-      )
-      throw tagged
-    }
-
-    return result
-  }
+  const onRequestAbort = () => abortController.abort()
+  if (requestSignal?.aborted)
+    abortController.abort()
+  else
+    requestSignal?.addEventListener(`abort`, onRequestAbort, { once: true })
 
   try {
+    const expandedUserText = await expandSlashSkill(userText, session)
+    const currentDiskArticle = await readConfinedArticleSafe(session.cwd)
+    const changedExternally = session.messages.length > 0
+      && session.lastAgentArticleContent !== null
+      && currentDiskArticle !== null
+      && currentDiskArticle !== session.lastAgentArticleContent
+    const effectiveUserText = changedExternally
+      ? `[System note: article.md was updated outside this conversation since the previous turn (for example, local images/... paths were uploaded to hosted URLs or the user edited the article). Call read_article to inspect the latest article.md before calling edit_article or write_article.]\n\n${expandedUserText}`
+      : expandedUserText
+
+    const turnMessages: ModelMessage[] = [
+      ...session.messages,
+      { role: `user`, content: effectiveUserText },
+    ]
+
+    const runStreamOnce = async (useReasoningOptions: boolean) => {
+      const model = createApiAgentLanguageModel(config, session.modelId)
+      const providerOptions = useReasoningOptions
+        ? buildReasoningProviderOptions(config.protocol, session.thoughtLevel)
+        : undefined
+      const tools = buildToolsForTurn({
+        client,
+        session,
+        abortSignal: abortController.signal,
+      })
+
+      const result = streamText({
+        model,
+        system: buildSystemPrompt(session.articlePath, session.modeId, session.skills),
+        messages: turnMessages,
+        tools,
+        stopWhen: stepCountIs(MAX_AGENT_STEPS),
+        abortSignal: abortController.signal,
+        ...(providerOptions ? { providerOptions: providerOptions as never } : {}),
+      })
+
+      let emittedAnyOutput = false
+      let streamError: unknown = null
+
+      for await (const part of result.fullStream) {
+        if (abortController.signal.aborted)
+          break
+        if (part.type === `text-delta` && part.text) {
+          emittedAnyOutput = true
+          await emitUpdate(client, session.id, {
+            sessionUpdate: `agent_message_chunk`,
+            content: { type: `text`, text: part.text },
+          })
+        }
+        else if (part.type === `reasoning-delta` && part.text) {
+          emittedAnyOutput = true
+          await emitUpdate(client, session.id, {
+            sessionUpdate: `agent_thought_chunk`,
+            content: { type: `text`, text: part.text },
+          })
+        }
+        else if (
+          part.type === `tool-input-start`
+          || part.type === `tool-call`
+          || part.type === `tool-result`
+        ) {
+          // Never retry from step 1 once a tool call has started or completed.
+          emittedAnyOutput = true
+        }
+        else if (part.type === `error`) {
+          streamError = part.error
+        }
+      }
+
+      if (streamError) {
+        const tagged = Object.assign(
+          streamError instanceof Error ? streamError : new Error(String(streamError)),
+          { emittedAnyOutput },
+        )
+        throw tagged
+      }
+
+      return result
+    }
+
     let result: Awaited<ReturnType<typeof runStreamOnce>>
     const shouldTryReasoning = session.thoughtLevel !== `default`
     try {
@@ -1221,16 +1520,17 @@ async function runPromptTurn(params: {
       return `cancelled`
 
     const response = await result.response
-    session.messages = [...turnMessages, ...response.messages]
+    session.messages = trimMessageHistory([...turnMessages, ...response.messages])
     return `end_turn`
   }
   catch (error) {
     if (abortController.signal.aborted || (error instanceof Error && error.name === `AbortError`))
       return `cancelled`
     const rawMessage = error instanceof Error ? error.message : String(error)
-    throw new Error(redactSecret(rawMessage, config.apiKey))
+    throw RequestError.internalError(undefined, redactSecret(rawMessage, config.apiKey))
   }
   finally {
+    requestSignal?.removeEventListener(`abort`, onRequestAbort)
     if (session.activeAbort === abortController)
       session.activeAbort = null
   }
@@ -1242,8 +1542,11 @@ async function closeSessionResources(session: SessionState): Promise<void> {
   session.mcpClients = []
 }
 
+let runtimeSecretForFatalLog: string | undefined
+
 async function main(): Promise<void> {
   const config = loadRuntimeConfig()
+  runtimeSecretForFatalLog = config.apiKey
   const sessions = new Map<string, SessionState>()
 
   const closeAllSessions = async (): Promise<void> => {
@@ -1268,7 +1571,7 @@ async function main(): Promise<void> {
   const getSessionOrThrow = (sessionId: string): SessionState => {
     const found = sessions.get(sessionId)
     if (!found)
-      throw RequestError.invalidParams(`Unknown sessionId: ${sessionId}`)
+      throw RequestError.invalidParams(undefined, `Unknown sessionId: ${sessionId}`)
     return found
   }
 
@@ -1296,7 +1599,7 @@ async function main(): Promise<void> {
       const cwd = params.cwd || process.cwd()
       const skillDirs = WORKSPACE_SKILL_DIRS.map(sub => path.join(cwd, sub))
       const [skills, mcpClients] = await Promise.all([
-        readSkills(skillDirs),
+        readSkills(skillDirs, { rootDir: cwd }),
         connectMcpServers(params.mcpServers ?? [], cwd),
       ])
 
@@ -1335,14 +1638,14 @@ async function main(): Promise<void> {
     .onRequest(`session/set_model`, setModelParamsSchema, ({ params }) => {
       const session = getSessionOrThrow(params.sessionId)
       if (!config.enabledModels.includes(params.modelId))
-        throw RequestError.invalidParams(`Model "${params.modelId}" is not enabled`)
+        throw RequestError.invalidParams(undefined, `Model "${params.modelId}" is not enabled`)
       session.modelId = params.modelId
       return {}
     })
     .onRequest(`session/set_mode`, async ({ params, client }) => {
       const session = getSessionOrThrow(params.sessionId)
       if (!VALID_MODES.has(params.modeId as ApiModeId))
-        throw RequestError.invalidParams(`Unsupported mode: ${params.modeId}`)
+        throw RequestError.invalidParams(undefined, `Unsupported mode: ${params.modeId}`)
       session.modeId = params.modeId as ApiModeId
       if (session.modeId === `default` || session.modeId === `plan`)
         session.alwaysAllowedKinds.clear()
@@ -1357,12 +1660,12 @@ async function main(): Promise<void> {
       const value = typeof params.value === `string` ? params.value : ``
       if (params.configId === `model`) {
         if (!config.enabledModels.includes(value))
-          throw RequestError.invalidParams(`Model "${value}" is not enabled`)
+          throw RequestError.invalidParams(undefined, `Model "${value}" is not enabled`)
         session.modelId = value
       }
       else if (params.configId === `mode`) {
         if (!VALID_MODES.has(value as ApiModeId))
-          throw RequestError.invalidParams(`Unsupported mode: ${value}`)
+          throw RequestError.invalidParams(undefined, `Unsupported mode: ${value}`)
         session.modeId = value as ApiModeId
         if (session.modeId === `default` || session.modeId === `plan`)
           session.alwaysAllowedKinds.clear()
@@ -1373,22 +1676,25 @@ async function main(): Promise<void> {
       }
       else if (params.configId === `thought_level`) {
         if (!VALID_THOUGHT_LEVELS.has(value as ApiThoughtLevel))
-          throw RequestError.invalidParams(`Unsupported thinking level: ${value}`)
+          throw RequestError.invalidParams(undefined, `Unsupported thinking level: ${value}`)
         session.thoughtLevel = value as ApiThoughtLevel
       }
       else {
-        throw RequestError.invalidParams(`Unknown configId: ${params.configId}`)
+        throw RequestError.invalidParams(undefined, `Unknown configId: ${params.configId}`)
       }
       return { configOptions: buildConfigOptions(config, session) }
     })
-    .onRequest(`session/prompt`, async ({ params, client }) => {
+    .onRequest(`session/prompt`, async ({ params, client, signal }) => {
       const session = getSessionOrThrow(params.sessionId)
+      if (session.activeAbort)
+        throw RequestError.invalidParams(undefined, `Session "${params.sessionId}" already has an active prompt turn`)
       const userText = extractPromptText(params.prompt)
       const stopReason = await runPromptTurn({
         config,
         session,
         client,
         userText,
+        requestSignal: signal,
       })
       return { stopReason }
     })
@@ -1415,6 +1721,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  process.stderr.write(`[md-api-agent] fatal: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`)
+  const raw = error instanceof Error ? error.stack ?? error.message : String(error)
+  process.stderr.write(`[md-api-agent] fatal: ${redactSecret(raw, runtimeSecretForFatalLog)}\n`)
   process.exit(1)
 })

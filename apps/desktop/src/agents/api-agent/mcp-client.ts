@@ -3,13 +3,16 @@ import type { Buffer } from 'node:buffer'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { spawn } from 'node:child_process'
 import process from 'node:process'
-import readline from 'node:readline'
+import { redactSecret } from '../../main/ai/sanitize'
+import { readNdjsonLines } from '../shared/ndjson'
 
 const MCP_PROTOCOL_VERSION = `2024-11-05`
 const STARTUP_TIMEOUT_MS = 10_000
 const TOOL_CALL_TIMEOUT_MS = 120_000
 const CLOSE_GRACE_MS = 500
 const MAX_TOOL_LIST_PAGES = 10
+const MAX_STDERR_TAIL_CHARS = 2_048
+const SECRET_ENV_NAME_RE = /key|token|secret|password|auth/i
 
 export interface McpToolDefinition {
   name: string
@@ -23,8 +26,9 @@ export interface McpToolCallOutput {
   isError: boolean
 }
 
-interface JsonRpcResponse {
-  id?: string | number | null
+interface JsonRpcIncomingMessage {
+  id?: unknown
+  method?: unknown
   result?: unknown
   error?: { code?: number, message?: string }
 }
@@ -61,68 +65,117 @@ function createAbortError(): Error {
   return err
 }
 
+function parseResponseId(rawId: unknown): number | null {
+  if (typeof rawId === `number` && Number.isSafeInteger(rawId))
+    return rawId
+  if (typeof rawId === `string` && /^\d+$/.test(rawId)) {
+    const parsed = Number(rawId)
+    if (Number.isSafeInteger(parsed))
+      return parsed
+  }
+  return null
+}
+
+function isValidRpcId(rawId: unknown): rawId is string | number {
+  return typeof rawId === `string` || (typeof rawId === `number` && Number.isFinite(rawId))
+}
+
 export class McpStdioClient {
   readonly serverName: string
   readonly tools: McpToolDefinition[] = []
 
   private readonly child: ChildProcessWithoutNullStreams
-  private readonly rl: readline.Interface
+  private readonly lineReader: { close: () => void }
   private readonly pending = new Map<number, PendingRequest>()
-  private readonly stderrChunks: string[] = []
+  private readonly secretValues: string[]
+  private stderrTail = ``
   private nextId = 1
   private closed = false
+  private terminalError: Error | null = null
   private closePromise: Promise<void> | null = null
 
-  private constructor(serverName: string, child: ChildProcessWithoutNullStreams) {
+  private constructor(
+    serverName: string,
+    child: ChildProcessWithoutNullStreams,
+    secretValues: string[],
+  ) {
     this.serverName = serverName
     this.child = child
-    this.rl = readline.createInterface({
-      input: child.stdout,
-      crlfDelay: Infinity,
-    })
+    this.secretValues = secretValues
+
+    // Swallow broken-pipe errors on child stdio streams so an exiting MCP child cannot crash api-agent.
+    child.stdin.on(`error`, () => {})
+    child.stdout.on(`error`, () => {})
+    child.stderr.on(`error`, () => {})
 
     child.stderr.on(`data`, (chunk: Buffer | string) => {
-      this.stderrChunks.push(chunk.toString())
-      if (this.stderrChunks.length > 50)
-        this.stderrChunks.shift()
+      const next = `${this.stderrTail}${chunk.toString()}`
+      this.stderrTail = next.length > MAX_STDERR_TAIL_CHARS
+        ? next.slice(-MAX_STDERR_TAIL_CHARS)
+        : next
     })
 
-    this.rl.on(`line`, (line) => {
-      const trimmed = line.trim()
-      if (!trimmed)
-        return
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(trimmed)
-      }
-      catch {
-        return
-      }
-      if (!parsed || typeof parsed !== `object` || Array.isArray(parsed))
-        return
-      const msg = parsed as JsonRpcResponse
-      if (msg.id === undefined || msg.id === null)
-        return
-      const numericId = typeof msg.id === `number` ? msg.id : Number(msg.id)
-      const pending = this.pending.get(numericId)
-      if (!pending)
-        return
-      this.pending.delete(numericId)
-      clearTimeout(pending.timer)
-      if (msg.error)
-        pending.reject(new Error(msg.error.message || `MCP error (${msg.error.code ?? `unknown`})`))
-      else
-        pending.resolve(msg.result)
+    this.lineReader = readNdjsonLines(child.stdout, {
+      onLine: (line) => {
+        const trimmed = line.trim()
+        if (!trimmed)
+          return
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(trimmed)
+        }
+        catch {
+          return
+        }
+        if (!parsed || typeof parsed !== `object` || Array.isArray(parsed))
+          return
+        const msg = parsed as JsonRpcIncomingMessage
+
+        // Handle server-initiated requests/notifications separately so their IDs never collide with pending client calls.
+        if (`method` in msg && typeof msg.method === `string`) {
+          if (isValidRpcId(msg.id)) {
+            if (msg.method === `ping`)
+              this.tryWriteMessage({ id: msg.id, result: {} })
+            else
+              this.tryWriteMessage({ id: msg.id, error: { code: -32601, message: `Method not found: ${msg.method}` } })
+          }
+          return
+        }
+
+        if (!(`result` in msg) && !(`error` in msg))
+          return
+
+        const numericId = parseResponseId(msg.id)
+        if (numericId === null)
+          return
+        const pending = this.pending.get(numericId)
+        if (!pending)
+          return
+        this.pending.delete(numericId)
+        clearTimeout(pending.timer)
+        if (msg.error) {
+          const rawErr = msg.error.message || `MCP error (${msg.error.code ?? `unknown`})`
+          pending.reject(new Error(this.redact(rawErr)))
+        }
+        else {
+          pending.resolve(msg.result)
+        }
+      },
     })
 
     child.once(`error`, (error) => {
-      this.failAllPending(new Error(`MCP server "${serverName}" failed: ${error.message}`))
+      const err = new Error(this.redact(`MCP server "${serverName}" failed: ${error.message}`))
+      this.terminalError ??= err
+      this.failAllPending(err)
     })
 
     child.once(`exit`, (code, signal) => {
-      const stderrTail = this.stderrChunks.join(``).trim().slice(-400)
-      const detail = stderrTail ? `: ${stderrTail}` : ``
-      this.failAllPending(new Error(`MCP server "${serverName}" exited (code=${code ?? `null`}, signal=${signal ?? `null`})${detail}`))
+      this.lineReader.close()
+      const tail = this.stderrTail.trim().slice(-400)
+      const detail = tail ? `: ${this.redact(tail)}` : ``
+      const err = new Error(`MCP server "${serverName}" exited (code=${code ?? `null`}, signal=${signal ?? `null`})${detail}`)
+      this.terminalError ??= err
+      this.failAllPending(err)
     })
   }
 
@@ -130,16 +183,21 @@ export class McpStdioClient {
     const env: NodeJS.ProcessEnv = { ...process.env }
     // Keep the API agent's LLM credentials out of child MCP server environments.
     delete env.MD_API_AGENT_CONFIG
-    for (const entry of server.env ?? [])
+    const secretValues: string[] = []
+    for (const entry of server.env ?? []) {
       env[entry.name] = entry.value
+      if (SECRET_ENV_NAME_RE.test(entry.name) && entry.value.trim().length >= 3)
+        secretValues.push(entry.value.trim())
+    }
 
     const child = spawn(server.command, server.args ?? [], {
       cwd,
       env,
       stdio: [`pipe`, `pipe`, `pipe`],
+      windowsHide: true,
     })
 
-    const client = new McpStdioClient(server.name, child)
+    const client = new McpStdioClient(server.name, child, secretValues)
     try {
       await client.request(`initialize`, {
         protocolVersion: MCP_PROTOCOL_VERSION,
@@ -160,6 +218,10 @@ export class McpStdioClient {
     }
   }
 
+  private redact(message: string): string {
+    return redactSecret(message, ...this.secretValues)
+  }
+
   private failAllPending(error: Error): void {
     for (const [id, pending] of this.pending.entries()) {
       clearTimeout(pending.timer)
@@ -169,18 +231,26 @@ export class McpStdioClient {
   }
 
   private writeMessage(payload: Record<string, unknown>): void {
-    if (this.closed || this.child.stdin.destroyed || !this.child.stdin.writable)
+    if (this.closed)
+      throw new Error(`MCP server "${this.serverName}" is closed`)
+    if (this.terminalError)
+      throw this.terminalError
+    if (this.child.stdin.destroyed || !this.child.stdin.writable)
       throw new Error(`MCP server "${this.serverName}" stdin is closed`)
     this.child.stdin.write(`${JSON.stringify({ jsonrpc: `2.0`, ...payload })}\n`)
   }
 
-  private notify(method: string, params?: Record<string, unknown>): void {
+  private tryWriteMessage(payload: Record<string, unknown>): void {
     try {
-      this.writeMessage(params !== undefined ? { method, params } : { method })
+      this.writeMessage(payload)
     }
     catch {
-      // Best-effort notification.
+      // Best-effort message write.
     }
+  }
+
+  private notify(method: string, params?: Record<string, unknown>): void {
+    this.tryWriteMessage(params !== undefined ? { method, params } : { method })
   }
 
   private request(
@@ -191,6 +261,8 @@ export class McpStdioClient {
   ): Promise<unknown> {
     if (this.closed)
       return Promise.reject(new Error(`MCP server "${this.serverName}" is closed`))
+    if (this.terminalError)
+      return Promise.reject(this.terminalError)
     if (abortSignal?.aborted)
       return Promise.reject(createAbortError())
 
@@ -243,6 +315,8 @@ export class McpStdioClient {
   }
 
   private async fetchTools(): Promise<void> {
+    const seenCursors = new Set<string>()
+    const seenNames = new Set<string>()
     let cursor: string | undefined
     for (let page = 0; page < MAX_TOOL_LIST_PAGES; page++) {
       const raw = await this.request(
@@ -260,8 +334,12 @@ export class McpStdioClient {
           const rec = item as Record<string, unknown>
           if (typeof rec.name !== `string` || !rec.name.trim())
             continue
+          const name = rec.name.trim()
+          if (seenNames.has(name))
+            continue
+          seenNames.add(name)
           this.tools.push({
-            name: rec.name.trim(),
+            name,
             ...(typeof rec.title === `string` && rec.title.trim() ? { title: rec.title.trim() } : {}),
             ...(typeof rec.description === `string` ? { description: rec.description } : {}),
             ...(rec.inputSchema && typeof rec.inputSchema === `object` && !Array.isArray(rec.inputSchema)
@@ -270,10 +348,13 @@ export class McpStdioClient {
           })
         }
       }
-      if (typeof response.nextCursor === `string` && response.nextCursor)
+      if (typeof response.nextCursor === `string` && response.nextCursor && !seenCursors.has(response.nextCursor)) {
+        seenCursors.add(response.nextCursor)
         cursor = response.nextCursor
-      else
+      }
+      else {
         break
+      }
     }
   }
 
@@ -292,7 +373,7 @@ export class McpStdioClient {
       return { text: ``, isError: false }
     const response = raw as { content?: unknown, isError?: unknown }
     return {
-      text: extractTextFromMcpContent(response.content),
+      text: this.redact(extractTextFromMcpContent(response.content)),
       isError: Boolean(response.isError),
     }
   }
@@ -302,7 +383,7 @@ export class McpStdioClient {
       return this.closePromise
     this.closed = true
     this.failAllPending(new Error(`MCP server "${this.serverName}" closed`))
-    this.rl.close()
+    this.lineReader.close()
     try {
       this.child.stdin.end()
     }
@@ -321,6 +402,7 @@ export class McpStdioClient {
         if (settled)
           return
         settled = true
+        this.child.off(`exit`, done)
         if (killTimer)
           clearTimeout(killTimer)
         resolve()
@@ -342,6 +424,9 @@ export class McpStdioClient {
             // Ignore kill errors for already-exited child.
           }
         }
+        this.child.stdin.destroy()
+        this.child.stdout.destroy()
+        this.child.stderr.destroy()
         done()
       }, CLOSE_GRACE_MS)
     })
@@ -353,7 +438,7 @@ export class McpStdioClient {
     this.closed = true
     if (this.child.exitCode === null && this.child.signalCode === null) {
       try {
-        this.child.kill()
+        this.child.kill(`SIGKILL`)
       }
       catch {
         // Ignore already-exited child.

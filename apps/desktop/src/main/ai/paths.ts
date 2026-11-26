@@ -6,8 +6,9 @@ import path from 'node:path'
  */
 function toUnpackedPath(resolved: string): string {
   const asarSegment = `${path.sep}app.asar${path.sep}`
-  if (resolved.includes(asarSegment))
-    return resolved.replace(asarSegment, `${path.sep}app.asar.unpacked${path.sep}`)
+  const idx = resolved.lastIndexOf(asarSegment)
+  if (idx !== -1)
+    return `${resolved.slice(0, idx)}${path.sep}app.asar.unpacked${path.sep}${resolved.slice(idx + asarSegment.length)}`
   return resolved
 }
 

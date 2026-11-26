@@ -29,6 +29,7 @@ const MAX_REFERENCE_IMAGE_BYTES = 8 * 1024 * 1024
 const MAX_REFERENCE_BASE64_CHARS = Math.ceil(MAX_REFERENCE_IMAGE_BYTES / 3) * 4
 // Sized for up to 4 max-size base64 reference images plus prompt and JSON framing.
 const MAX_BODY_BYTES = MAX_REFERENCE_IMAGES * MAX_REFERENCE_BASE64_CHARS + 256 * 1024
+const MAX_DRAIN_BYTES = MAX_BODY_BYTES + 16 * 1024 * 1024
 const BODY_READ_TIMEOUT_MS = 15_000
 const MAX_PROMPT_CHARS = 8_000
 const MAX_PARAM_CHARS = 64
@@ -74,13 +75,29 @@ function parseReferenceImages(raw: unknown): Uint8Array[] | undefined {
   return decoded
 }
 
-function sendJson(res: ServerResponse, statusCode: number, body: Record<string, unknown>): void {
+function sendJson(
+  res: ServerResponse,
+  statusCode: number,
+  body: Record<string, unknown>,
+  reqToClose?: IncomingMessage,
+): void {
   const payload = JSON.stringify(body)
+  const shouldClose = Boolean(reqToClose && !reqToClose.complete)
   res.writeHead(statusCode, {
     'Content-Type': `application/json; charset=utf-8`,
     'Content-Length': Buffer.byteLength(payload),
+    ...(shouldClose ? { Connection: `close` } : {}),
   })
   res.end(payload)
+  if (shouldClose && reqToClose) {
+    // Allow loopback clients to read the HTTP error response before tearing down an unread upload stream.
+    const destroyTimer = setTimeout(() => {
+      if (!reqToClose.destroyed)
+        reqToClose.destroy()
+    }, 200)
+    destroyTimer.unref()
+    res.once(`close`, () => clearTimeout(destroyTimer))
+  }
 }
 
 function tokensEqual(expected: string, actual: string): boolean {
@@ -93,38 +110,58 @@ function tokensEqual(expected: string, actual: string): boolean {
 
 function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
+    const declaredLength = Number(req.headers[`content-length`])
+    let tooLarge = Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES
     const chunks: Buffer[] = []
     let total = 0
     let settled = false
+
+    const stopReading = () => {
+      req.off(`data`, onData)
+      req.off(`end`, onEnd)
+      req.off(`error`, onError)
+      chunks.length = 0
+      req.pause()
+    }
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true
+        stopReading()
         reject(new Error(`Request body timed out`))
-        req.destroy()
       }
     }, BODY_READ_TIMEOUT_MS)
     const cleanup = () => clearTimeout(timer)
 
-    req.on(`data`, (chunk: Buffer) => {
+    function onData(chunk: Buffer) {
       total += chunk.length
       if (total > MAX_BODY_BYTES) {
-        if (!settled) {
+        tooLarge = true
+        chunks.length = 0
+        if (total > MAX_DRAIN_BYTES && !settled) {
           settled = true
           cleanup()
+          stopReading()
           reject(new Error(`Request body too large`))
-          req.destroy()
         }
         return
       }
-      chunks.push(chunk)
-    })
-    req.on(`end`, () => {
+      if (!tooLarge)
+        chunks.push(chunk)
+    }
+
+    function onEnd() {
       if (settled)
         return
       settled = true
       cleanup()
+      if (tooLarge) {
+        chunks.length = 0
+        reject(new Error(`Request body too large`))
+        return
+      }
       try {
         const raw = Buffer.concat(chunks).toString(`utf8`)
+        chunks.length = 0
         const parsed = raw ? JSON.parse(raw) : {}
         if (typeof parsed !== `object` || parsed === null || Array.isArray(parsed)) {
           reject(new Error(`Expected JSON object`))
@@ -135,14 +172,20 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
       catch {
         reject(new Error(`Invalid JSON body`))
       }
-    })
-    req.on(`error`, (error) => {
+    }
+
+    function onError(error: Error) {
       if (settled)
         return
       settled = true
       cleanup()
+      chunks.length = 0
       reject(error)
-    })
+    }
+
+    req.on(`data`, onData)
+    req.on(`end`, onEnd)
+    req.on(`error`, onError)
   })
 }
 
@@ -186,19 +229,27 @@ export class ImageGenBridge {
       const server = http.createServer((req, res) => {
         void this.handleRequest(req, res)
       })
+      this.server = server
       server.once(`error`, (error) => {
+        if (this.server === server)
+          this.server = null
         this.startPromise = null
         reject(error)
       })
       server.listen(0, `127.0.0.1`, () => {
+        if (this.server !== server) {
+          server.close()
+          reject(new Error(`Image bridge closed before startup completed`))
+          return
+        }
         const address = server.address()
         if (!address || typeof address === `string`) {
           server.close()
+          this.server = null
           this.startPromise = null
           reject(new Error(`Failed to resolve local image bridge port`))
           return
         }
-        this.server = server
         this.connectionInfo = {
           url: `http://127.0.0.1:${address.port}/generate`,
           token: this.token,
@@ -211,54 +262,20 @@ export class ImageGenBridge {
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method !== `POST` || req.url !== `/generate`) {
-      sendJson(res, 404, { error: `Not found` })
+      sendJson(res, 404, { error: `Not found` }, req)
       return
     }
 
     const authHeader = req.headers.authorization ?? ``
     const match = /^Bearer\s+(\S+)$/i.exec(authHeader)
     if (!match || !tokensEqual(this.token, match[1])) {
-      sendJson(res, 401, { error: `Unauthorized` })
+      sendJson(res, 401, { error: `Unauthorized` }, req)
       return
     }
 
-    let body: Record<string, unknown>
-    try {
-      body = await readJsonBody(req)
-    }
-    catch (error) {
-      sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-      return
-    }
-
-    const prompt = typeof body.prompt === `string` ? body.prompt.trim() : ``
-    if (!prompt) {
-      sendJson(res, 400, { error: `prompt is required` })
-      return
-    }
-    if (prompt.length > MAX_PROMPT_CHARS) {
-      sendJson(res, 400, { error: `prompt exceeds maximum length of ${MAX_PROMPT_CHARS} characters` })
-      return
-    }
-
-    const rawSize = typeof body.size === `string` ? body.size.trim() : ``
-    const rawQuality = typeof body.quality === `string` ? body.quality.trim() : ``
-    if (rawSize.length > MAX_PARAM_CHARS || rawQuality.length > MAX_PARAM_CHARS) {
-      sendJson(res, 400, { error: `size or quality parameter is too long` })
-      return
-    }
-
-    let referenceImages: Uint8Array[] | undefined
-    try {
-      referenceImages = parseReferenceImages(body.referenceImages)
-    }
-    catch (error) {
-      sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-      return
-    }
-
+    // Enforce concurrency before buffering/decoding up to 43 MB of request payload.
     if (this.activeRequests >= MAX_CONCURRENT_REQUESTS) {
-      sendJson(res, 429, { error: `Too many concurrent image generation requests` })
+      sendJson(res, 429, { error: `Too many concurrent image generation requests` }, req)
       return
     }
 
@@ -272,6 +289,42 @@ export class ImageGenBridge {
     res.once(`close`, onClose)
 
     try {
+      let body: Record<string, unknown>
+      try {
+        body = await readJsonBody(req)
+      }
+      catch (error) {
+        if (!res.writableEnded)
+          sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) }, req)
+        return
+      }
+
+      const prompt = typeof body.prompt === `string` ? body.prompt.trim() : ``
+      if (!prompt) {
+        sendJson(res, 400, { error: `prompt is required` })
+        return
+      }
+      if (prompt.length > MAX_PROMPT_CHARS) {
+        sendJson(res, 400, { error: `prompt exceeds maximum length of ${MAX_PROMPT_CHARS} characters` })
+        return
+      }
+
+      const rawSize = typeof body.size === `string` ? body.size.trim() : ``
+      const rawQuality = typeof body.quality === `string` ? body.quality.trim() : ``
+      if (rawSize.length > MAX_PARAM_CHARS || rawQuality.length > MAX_PARAM_CHARS) {
+        sendJson(res, 400, { error: `size or quality parameter is too long` })
+        return
+      }
+
+      let referenceImages: Uint8Array[] | undefined
+      try {
+        referenceImages = parseReferenceImages(body.referenceImages)
+      }
+      catch (error) {
+        sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        return
+      }
+
       config = await this.getConfig()
       if (!config.isConfigured) {
         sendJson(res, 503, { error: `Image generation is not configured` })

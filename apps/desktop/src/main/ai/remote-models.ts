@@ -3,11 +3,13 @@ import type {
   DesktopListRemoteModelsResult,
   DesktopRemoteModelInfo,
 } from '@md/shared/types'
+import { Buffer } from 'node:buffer'
 import { DEFAULT_PROTOCOL_BASE_URLS } from '@md/shared/types'
 import { redactSecret, validateHttpBaseUrl } from './sanitize'
 
 const DEFAULT_FETCH_TIMEOUT_MS = 15_000
 const MAX_PAGINATION_PAGES = 5
+const MAX_MODELS_RESPONSE_BYTES = 10 * 1024 * 1024
 const ANTHROPIC_API_VERSION = `2023-06-01`
 
 function dedupeModels(models: DesktopRemoteModelInfo[]): DesktopRemoteModelInfo[] {
@@ -124,20 +126,60 @@ export function parseGoogleModelsResponse(payload: unknown): {
   }
 }
 
+async function readBoundedResponseText(response: Response, maxBytes: number): Promise<string> {
+  const contentLength = Number(response.headers?.get(`content-length`))
+  if (Number.isFinite(contentLength) && contentLength > maxBytes)
+    throw new Error(`Provider response exceeded ${Math.round(maxBytes / 1024 / 1024)} MB limit`)
+
+  if (!response.body)
+    return response.text()
+
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done)
+        break
+      if (!value || value.byteLength === 0)
+        continue
+      total += value.byteLength
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined)
+        throw new Error(`Provider response exceeded ${Math.round(maxBytes / 1024 / 1024)} MB limit`)
+      }
+      chunks.push(value)
+    }
+  }
+  finally {
+    reader.releaseLock()
+  }
+
+  return Buffer.concat(chunks).toString(`utf8`)
+}
+
 async function fetchJsonWithTimeout(
   url: string,
   init: RequestInit,
   fetchImpl: typeof fetch,
   timeoutMs: number,
 ): Promise<unknown> {
+  if (timeoutMs <= 0)
+    throw new Error(`Request timed out`)
+
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
   try {
     const response = await fetchImpl(url, {
       ...init,
       signal: controller.signal,
     })
-    const text = await response.text()
+    const text = await readBoundedResponseText(response, MAX_MODELS_RESPONSE_BYTES)
     let json: unknown
     try {
       json = text ? JSON.parse(text) : {}
@@ -160,6 +202,11 @@ async function fetchJsonWithTimeout(
       throw new Error(`Provider returned non-JSON response`)
     return json
   }
+  catch (error) {
+    if (timedOut)
+      throw new Error(`Request timed out after ${timeoutMs}ms`)
+    throw error
+  }
   finally {
     clearTimeout(timer)
   }
@@ -174,6 +221,13 @@ export async function fetchRemoteModels(options: {
 }): Promise<DesktopListRemoteModelsResult> {
   const fetchImpl = options.fetchImpl ?? fetch
   const timeoutMs = options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS
+  const deadline = Date.now() + timeoutMs
+  const remainingTimeout = () => {
+    const rem = deadline - Date.now()
+    if (rem <= 0)
+      throw new Error(`Request timed out after ${timeoutMs}ms`)
+    return rem
+  }
   const apiKey = options.apiKey.trim()
 
   if (!apiKey) {
@@ -197,7 +251,7 @@ export async function fetchRemoteModels(options: {
           },
         },
         fetchImpl,
-        timeoutMs,
+        remainingTimeout(),
       )
       return {
         ok: true,
@@ -207,6 +261,7 @@ export async function fetchRemoteModels(options: {
 
     if (options.protocol === `anthropic`) {
       const collected: DesktopRemoteModelInfo[] = []
+      const seenCursors = new Set<string>()
       let afterId: string | undefined
       for (let page = 0; page < MAX_PAGINATION_PAGES; page++) {
         const query = new URLSearchParams({ limit: `100` })
@@ -223,12 +278,13 @@ export async function fetchRemoteModels(options: {
             },
           },
           fetchImpl,
-          timeoutMs,
+          remainingTimeout(),
         )
         const parsed = parseAnthropicModelsResponse(payload)
         collected.push(...parsed.models)
-        if (!parsed.hasMore || !parsed.lastId)
+        if (!parsed.hasMore || !parsed.lastId || seenCursors.has(parsed.lastId))
           break
+        seenCursors.add(parsed.lastId)
         afterId = parsed.lastId
       }
       return {
@@ -239,6 +295,7 @@ export async function fetchRemoteModels(options: {
 
     // Native Google Gemini API: GET {base}/models?key=...
     const collected: DesktopRemoteModelInfo[] = []
+    const seenTokens = new Set<string>()
     let pageToken: string | undefined
     for (let page = 0; page < MAX_PAGINATION_PAGES; page++) {
       const query = new URLSearchParams({
@@ -256,12 +313,13 @@ export async function fetchRemoteModels(options: {
           },
         },
         fetchImpl,
-        timeoutMs,
+        remainingTimeout(),
       )
       const parsed = parseGoogleModelsResponse(payload)
       collected.push(...parsed.models)
-      if (!parsed.nextPageToken)
+      if (!parsed.nextPageToken || seenTokens.has(parsed.nextPageToken))
         break
+      seenTokens.add(parsed.nextPageToken)
       pageToken = parsed.nextPageToken
     }
     return {

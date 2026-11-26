@@ -1,7 +1,9 @@
 import { Buffer } from 'node:buffer'
 import { randomBytes } from 'node:crypto'
+import { constants as fsConstants } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import process from 'node:process'
 
 export interface WorkspaceImageResult {
   relativePath: string
@@ -30,6 +32,10 @@ export interface GenerateAndSaveWorkspaceImageParams {
 export const MAX_WORKSPACE_IMAGE_BYTES = 10 * 1024 * 1024
 export const MAX_REFERENCE_IMAGES = 4
 export const MAX_REFERENCE_IMAGE_BYTES = 8 * 1024 * 1024
+
+const DEFAULT_BRIDGE_TIMEOUT_MS = 130_000
+const MAX_BRIDGE_RESPONSE_BYTES = Math.ceil(MAX_WORKSPACE_IMAGE_BYTES / 3) * 4 + 64 * 1024
+const CASE_INSENSITIVE_FS = process.platform === `darwin` || process.platform === `win32`
 
 const MIME_TO_EXT: Record<string, string> = {
   'image/png': `.png`,
@@ -67,6 +73,13 @@ export function sanitizeImageSlug(raw: string | undefined, fallbackPrompt?: stri
   return `img-${randomBytes(4).toString(`hex`)}`
 }
 
+function isWithinDirectory(parentReal: string, targetReal: string): boolean {
+  const normParent = CASE_INSENSITIVE_FS ? parentReal.toLowerCase() : parentReal
+  const normTarget = CASE_INSENSITIVE_FS ? targetReal.toLowerCase() : targetReal
+  const prefix = normParent.endsWith(path.sep) ? normParent : `${normParent}${path.sep}`
+  return normTarget !== normParent && normTarget.startsWith(prefix)
+}
+
 async function ensureConfinedImagesDir(workspaceDir: string): Promise<string> {
   const workspaceReal = await fs.realpath(workspaceDir)
   const candidateImagesDir = path.join(workspaceReal, `images`)
@@ -76,7 +89,7 @@ async function ensureConfinedImagesDir(workspaceDir: string): Promise<string> {
 
   await fs.mkdir(candidateImagesDir, { recursive: true })
   const imagesReal = await fs.realpath(candidateImagesDir)
-  if (!imagesReal.startsWith(`${workspaceReal}${path.sep}`))
+  if (!isWithinDirectory(workspaceReal, imagesReal))
     throw new Error(`Workspace images directory resolved outside workspace`)
   return imagesReal
 }
@@ -107,9 +120,39 @@ async function writeUniqueImageFile(
   throw new Error(`Failed to allocate unique image filename under images/`)
 }
 
-function isWithinDirectory(parentReal: string, targetReal: string): boolean {
-  const prefix = parentReal.endsWith(path.sep) ? parentReal : `${parentReal}${path.sep}`
-  return targetReal !== parentReal && targetReal.startsWith(prefix)
+async function readBoundedRegularFile(targetReal: string, maxBytes: number, label: string): Promise<Buffer> {
+  const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)
+  const handle = await fs.open(targetReal, flags)
+  try {
+    const stat = await handle.stat()
+    if (!stat.isFile())
+      throw new Error(`Reference image "${label}" is not a regular file`)
+    if (stat.size === 0)
+      throw new Error(`Reference image "${label}" is empty`)
+    if (stat.size > maxBytes)
+      throw new Error(`Reference image "${label}" exceeds maximum size of 8 MB`)
+
+    const buf = Buffer.allocUnsafe(stat.size)
+    let offset = 0
+    while (offset < stat.size) {
+      const { bytesRead } = await handle.read(buf, offset, stat.size - offset, offset)
+      if (bytesRead === 0)
+        break
+      offset += bytesRead
+    }
+    const probe = Buffer.allocUnsafe(1)
+    const { bytesRead: extra } = await handle.read(probe, 0, 1, offset)
+    if (extra > 0)
+      throw new Error(`Reference image "${label}" exceeds maximum size of 8 MB`)
+
+    const actual = offset === buf.byteLength ? buf : buf.subarray(0, offset)
+    if (actual.byteLength === 0)
+      throw new Error(`Reference image "${label}" is empty`)
+    return actual
+  }
+  finally {
+    await handle.close()
+  }
 }
 
 async function loadReferenceImages(
@@ -160,19 +203,7 @@ async function loadReferenceImages(
     if (!mediaType)
       throw new Error(`Reference image "${refPath}" resolves to an unsupported file type (allowed: png, jpg, jpeg, webp)`)
 
-    const stat = await fs.stat(targetReal)
-    if (!stat.isFile())
-      throw new Error(`Reference image "${refPath}" is not a regular file`)
-    if (stat.size === 0)
-      throw new Error(`Reference image "${refPath}" is empty`)
-    if (stat.size > MAX_REFERENCE_IMAGE_BYTES)
-      throw new Error(`Reference image "${refPath}" exceeds maximum size of 8 MB`)
-
-    const bytes = await fs.readFile(targetReal)
-    if (bytes.byteLength === 0)
-      throw new Error(`Reference image "${refPath}" is empty`)
-    if (bytes.byteLength > MAX_REFERENCE_IMAGE_BYTES)
-      throw new Error(`Reference image "${refPath}" exceeds maximum size of 8 MB`)
+    const bytes = await readBoundedRegularFile(targetReal, MAX_REFERENCE_IMAGE_BYTES, refPath)
 
     payloads.push({
       base64: bytes.toString(`base64`),
@@ -198,7 +229,12 @@ export async function generateAndSaveWorkspaceImage(
     : []
 
   // Verify workspace confinement upfront so a tampered workspace fails before spending API quota.
-  const imagesDir = await ensureConfinedImagesDir(params.workspaceDir)
+  await ensureConfinedImagesDir(params.workspaceDir)
+
+  const timeoutSignal = AbortSignal.timeout(DEFAULT_BRIDGE_TIMEOUT_MS)
+  const signal = params.abortSignal
+    ? AbortSignal.any([timeoutSignal, params.abortSignal])
+    : timeoutSignal
 
   const response = await fetch(params.bridgeUrl, {
     method: `POST`,
@@ -211,8 +247,12 @@ export async function generateAndSaveWorkspaceImage(
       ...(params.size?.trim() ? { size: params.size.trim() } : {}),
       ...(referencePayloads.length > 0 ? { referenceImages: referencePayloads } : {}),
     }),
-    signal: params.abortSignal,
+    signal,
   })
+
+  const declaredLength = Number(response.headers.get(`content-length`))
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_BRIDGE_RESPONSE_BYTES)
+    throw new Error(`Generated image exceeds maximum size of 10 MB`)
 
   const text = await response.text()
   let payload: Record<string, unknown> = {}
@@ -247,7 +287,7 @@ export async function generateAndSaveWorkspaceImage(
   // Re-check confinement immediately before atomic exclusive write in case the workspace mutated mid-request.
   const verifiedImagesDir = await ensureConfinedImagesDir(params.workspaceDir)
   const { fileName, absolutePath } = await writeUniqueImageFile(
-    verifiedImagesDir || imagesDir,
+    verifiedImagesDir,
     slug,
     ext,
     bytes,

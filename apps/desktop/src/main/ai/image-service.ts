@@ -20,7 +20,7 @@ export interface GeneratedDesktopImage {
   mimeType: string
 }
 
-const IMAGE_SIZE_RE = /^\d+x\d+$/
+const IMAGE_SIZE_RE = /^[1-9]\d{0,4}x[1-9]\d{0,4}$/
 const DEFAULT_IMAGE_TIMEOUT_MS = 120_000
 
 export async function generateDesktopImage(
@@ -81,6 +81,9 @@ export async function generateDesktopImage(
   }
   catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    throw new Error(redactSecret(message, apiKey))
+    const wrapped = new Error(redactSecret(message, apiKey))
+    if (error instanceof Error && error.name)
+      wrapped.name = error.name
+    throw wrapped
   }
 }

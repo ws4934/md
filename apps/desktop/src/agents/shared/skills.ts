@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import process from 'node:process'
 import { load as loadYaml } from 'js-yaml'
 
 export interface SkillEntry {
@@ -8,6 +9,15 @@ export interface SkillEntry {
   dir: string
   skillFile: string
 }
+
+export interface SkillConfinementOptions {
+  rootDir?: string
+}
+
+const MAX_SKILL_FILE_BYTES = 256 * 1024
+const MAX_SKILL_SUPPORT_FILES = 200
+const MAX_SKILL_SUPPORT_DEPTH = 8
+const CASE_INSENSITIVE_FS = process.platform === `darwin` || process.platform === `win32`
 
 const FRONT_MATTER_RE = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/
 
@@ -44,14 +54,37 @@ function parseSkillFrontMatter(raw: string): { name: string, description: string
   return { name, description }
 }
 
-export async function readSkills(dirs: string[]): Promise<SkillEntry[]> {
+function isWithinDir(root: string, target: string, allowRoot = true): boolean {
+  const normRoot = CASE_INSENSITIVE_FS ? root.toLowerCase() : root
+  const normTarget = CASE_INSENSITIVE_FS ? target.toLowerCase() : target
+  if (allowRoot && normTarget === normRoot)
+    return true
+  const prefix = normRoot.endsWith(path.sep) ? normRoot : `${normRoot}${path.sep}`
+  return normTarget !== normRoot && normTarget.startsWith(prefix)
+}
+
+export async function readSkills(dirs: string[], options?: SkillConfinementOptions): Promise<SkillEntry[]> {
   const results: SkillEntry[] = []
   const seen = new Set<string>()
 
+  let canonicalRoot: string | null = null
+  if (options?.rootDir) {
+    try {
+      canonicalRoot = await fs.realpath(options.rootDir)
+    }
+    catch {
+      return []
+    }
+  }
+
   for (const dir of dirs) {
+    let canonicalDir: string
     let entries
     try {
-      entries = await fs.readdir(dir, { withFileTypes: true })
+      canonicalDir = await fs.realpath(dir)
+      if (canonicalRoot && !isWithinDir(canonicalRoot, canonicalDir, true))
+        continue
+      entries = await fs.readdir(canonicalDir, { withFileTypes: true })
     }
     catch {
       continue
@@ -65,7 +98,20 @@ export async function readSkills(dirs: string[]): Promise<SkillEntry[]> {
       const skillFile = path.join(skillDir, `SKILL.md`)
       let content: string
       try {
-        content = await fs.readFile(skillFile, `utf8`)
+        const [canonicalSkillDir, canonicalSkillFile] = await Promise.all([
+          fs.realpath(skillDir),
+          fs.realpath(skillFile),
+        ])
+        if (
+          !isWithinDir(canonicalDir, canonicalSkillDir, false)
+          || !isWithinDir(canonicalSkillDir, canonicalSkillFile, false)
+        ) {
+          continue
+        }
+        const stat = await fs.stat(canonicalSkillFile)
+        if (!stat.isFile() || stat.size > MAX_SKILL_FILE_BYTES)
+          continue
+        content = await fs.readFile(canonicalSkillFile, `utf8`)
       }
       catch {
         continue
@@ -86,15 +132,19 @@ export async function readSkills(dirs: string[]): Promise<SkillEntry[]> {
   return results
 }
 
-function isWithinDir(root: string, target: string): boolean {
-  return target === root || target.startsWith(`${root}${path.sep}`)
-}
-
-/** Lists relative POSIX paths of all non-SKILL.md files inside a skill directory. */
-export async function listSkillSupportFiles(skillDir: string): Promise<string[]> {
+/** Lists relative POSIX paths of non-SKILL.md files inside a skill directory (bounded & confined). */
+export async function listSkillSupportFiles(
+  skillDir: string,
+  options?: SkillConfinementOptions,
+): Promise<string[]> {
   let canonicalRoot: string
   try {
     canonicalRoot = await fs.realpath(skillDir)
+    if (options?.rootDir) {
+      const canonicalWorkspace = await fs.realpath(options.rootDir)
+      if (!isWithinDir(canonicalWorkspace, canonicalRoot, false))
+        return []
+    }
   }
   catch {
     return []
@@ -103,7 +153,9 @@ export async function listSkillSupportFiles(skillDir: string): Promise<string[]>
   const files: string[] = []
   const visitedDirs = new Set<string>([canonicalRoot])
 
-  const walk = async (currentDir: string, relPrefix: string): Promise<void> => {
+  const walk = async (currentDir: string, relPrefix: string, depth: number): Promise<void> => {
+    if (depth > MAX_SKILL_SUPPORT_DEPTH || files.length >= MAX_SKILL_SUPPORT_FILES)
+      return
     let entries
     try {
       entries = await fs.readdir(currentDir, { withFileTypes: true })
@@ -114,6 +166,8 @@ export async function listSkillSupportFiles(skillDir: string): Promise<string[]>
     entries.sort((a, b) => a.name.localeCompare(b.name))
 
     for (const entry of entries) {
+      if (files.length >= MAX_SKILL_SUPPORT_FILES)
+        return
       const fullPath = path.join(currentDir, entry.name)
       const relPath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name
       if (relPath === `SKILL.md`)
@@ -126,7 +180,7 @@ export async function listSkillSupportFiles(skillDir: string): Promise<string[]>
       catch {
         continue
       }
-      if (!isWithinDir(canonicalRoot, realPath))
+      if (!isWithinDir(canonicalRoot, realPath, false))
         continue
 
       let stat
@@ -140,7 +194,7 @@ export async function listSkillSupportFiles(skillDir: string): Promise<string[]>
         if (visitedDirs.has(realPath))
           continue
         visitedDirs.add(realPath)
-        await walk(realPath, relPath)
+        await walk(realPath, relPath, depth + 1)
       }
       else if (stat.isFile()) {
         files.push(relPath)
@@ -148,6 +202,6 @@ export async function listSkillSupportFiles(skillDir: string): Promise<string[]>
     }
   }
 
-  await walk(canonicalRoot, ``)
+  await walk(canonicalRoot, ``, 0)
   return files
 }
