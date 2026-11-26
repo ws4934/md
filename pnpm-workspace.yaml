@@ -96,6 +96,8 @@ allowBuilds:
   '@vscode/vsce-sign': true
   core-js: true
   electron: true
+  # Squirrel.Windows helper pulled in by electron-builder; desktop ships NSIS, so its script never needs to run.
+  electron-winstaller: false
   esbuild: true
   keytar: true
   sharp: true

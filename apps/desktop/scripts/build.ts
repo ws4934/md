@@ -29,7 +29,7 @@ export async function buildDesktopBundles(): Promise<void> {
       format: `esm`,
       target: `node22`,
       sourcemap: true,
-      external: [`electron`, `@agentclientprotocol/sdk`],
+      external: [`electron`],
       banner: { js: ESM_CJS_SHIM_BANNER },
     }),
     build({

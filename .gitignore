@@ -67,3 +67,4 @@ dev-dist
 # uTools build artifacts
 apps/utools/dist
 apps/utools/release
+apps/desktop/release

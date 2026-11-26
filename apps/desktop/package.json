@@ -7,6 +7,12 @@
   "description": "Electron desktop edition of doocs/md with local ACP agent integration",
   "main": "dist/main/index.js",
   "build": {
+    "appId": "org.doocs.md",
+    "artifactName": "md-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
     "files": [
       "dist/**/*",
       "!**/*.map"
@@ -14,34 +20,58 @@
     "asarUnpack": [
       "dist/agents/*.js",
       "dist/skills/**"
-    ]
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Office"
+    },
+    "detectUpdateChannel": false,
+    "publish": {
+      "provider": "generic",
+      "url": "https://github.com/doocs/md/releases/download/desktop-latest"
+    }
   },
   "scripts": {
     "dev": "tsx scripts/dev.ts",
     "build:main": "tsx scripts/build.ts",
     "build": "pnpm --filter @md/web run build:desktop && pnpm run build:main",
+    "dist": "pnpm run build && electron-builder --publish never",
     "start": "electron .",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "dependencies": {
+  "devDependencies": {
     "@agentclientprotocol/sdk": "^2.9.1",
     "@ai-sdk/anthropic": "^4.0.108",
     "@ai-sdk/google": "^4.0.126",
     "@ai-sdk/openai-compatible": "^3.0.94",
+    "@md/config": "workspace:*",
     "@md/shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "ai": "^7.0.181",
-    "zod": "catalog:"
-  },
-  "devDependencies": {
-    "@md/config": "workspace:*",
     "@types/node": "catalog:",
+    "ai": "^7.0.181",
     "electron": "^45.4.1",
+    "electron-builder": "^26.18.0",
+    "electron-updater": "^6.8.11",
     "esbuild": "^0.28.2",
     "tsx": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "zod": "catalog:"
   }
 }
