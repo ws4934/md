@@ -119,6 +119,8 @@ export function reduceUpdateState(state: DesktopUpdateState, event: UpdaterState
       }
     }
     case `download-progress`: {
+      if (state.mode !== `install` || state.status !== `downloading`)
+        return state
       const percent = normalizePercent(event.percent) ?? state.percent
       return {
         ...base,
@@ -128,6 +130,8 @@ export function reduceUpdateState(state: DesktopUpdateState, event: UpdaterState
       }
     }
     case `downloaded`:
+      if (state.mode !== `install`)
+        return state
       return {
         ...base,
         status: `downloaded`,

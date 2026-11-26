@@ -6,6 +6,7 @@ import type {
   DesktopIpCharacterUpdate,
   DesktopIpLibrary,
   DesktopListRemoteModelsParams,
+  DesktopMarketplaceListParams,
   DesktopModelApiConfigUpdate,
   DesktopTestImageGenParams,
   DesktopUpdateState,
@@ -19,12 +20,31 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { API_MODEL_AGENT_ID } from '@md/shared/types'
+import { API_MODEL_AGENT_ID, DEFAULT_PROTOCOL_BASE_URLS } from '@md/shared/types'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, powerMonitor, protocol, safeStorage, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { API_AGENT_MODES, API_THOUGHT_LEVEL_OPTIONS } from '../agents/api-agent/provider'
 import { readSkills } from '../agents/shared/skills'
 import { IPC_CHANNELS } from '../shared/ipc-channels'
+import {
+  resolveEffectiveApiKey,
+  validateAcpSettingsPatch,
+  validateCustomAgentInput,
+  validateIdArg,
+  validateImageGenConfigUpdate,
+  validateListRemoteModelsParams,
+  validateLocaleArg,
+  validateModelApiConfigUpdate,
+  validateProbeOptions,
+  validatePromptParams,
+  validateReadWorkspaceImageParams,
+  validateRespondPermissionParams,
+  validateSetModelParams,
+  validateSetPermissionModeParams,
+  validateSetThinkingLevelParams,
+  validateStartSessionParams,
+  validateTestImageGenParams,
+} from '../shared/ipc-validators'
 import { AcpEventBatcher } from './acp/event-batcher'
 import { AcpHost } from './acp/host'
 import { AiConfigStore } from './ai/config-store'
@@ -33,7 +53,7 @@ import { generateDesktopImage } from './ai/image-service'
 import { resolveUnpackedAgentScript, resolveUnpackedSkillsDir } from './ai/paths'
 import { fetchRemoteModels } from './ai/remote-models'
 import { redactSecret } from './ai/sanitize'
-import { APP_HOST, APP_SCHEME, isSafeExternalUrl, resolveAppProtocolTarget } from './app-protocol'
+import { APP_HOST, APP_SCHEME, isSafeExternalUrl, isTrustedRendererUrl, resolveAppProtocolTarget } from './app-protocol'
 import {
   areUpdateStatesEqual,
   createInitialUpdateState,
@@ -55,6 +75,17 @@ const DEV_SERVER_URL = process.env.MD_DESKTOP_DEV_URL
 const QUIT_DISPOSE_TIMEOUT_MS = 4_000
 const UPDATE_FIRST_CHECK_DELAY_MS = 10_000
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+const MAX_PICKED_IMAGE_BYTES = 10 * 1024 * 1024
+
+async function fileExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.promises.access(targetPath)
+    return true
+  }
+  catch {
+    return false
+  }
+}
 
 app.setName(`md`)
 
@@ -85,7 +116,12 @@ function registerAppProtocol(): void {
     const resolved = await resolveAppProtocolTarget(request.url, rendererDir)
     if (resolved.status !== 200)
       return new Response(resolved.body, { status: resolved.status })
-    return net.fetch(pathToFileURL(resolved.filePath).toString())
+    try {
+      return await net.fetch(pathToFileURL(resolved.filePath).toString())
+    }
+    catch {
+      return new Response(`Not Found`, { status: 404 })
+    }
   })
 }
 
@@ -115,7 +151,26 @@ let installingUpdate = false
 let inFlightUpdateCheck: InFlightUpdateCheck | null = null
 let promptOnNextDownload = false
 let restartPromptActive = false
+let menuDownloadingDialogPromise: Promise<void> | null = null
+let updateStartupTimer: ReturnType<typeof setTimeout> | null = null
+let updateIntervalTimer: ReturnType<typeof setInterval> | null = null
+let smokeExitTimer: ReturnType<typeof setTimeout> | null = null
 const shouldPromptUpdate = createUpdatePromptGate()
+
+function clearBackgroundTimers(): void {
+  if (updateStartupTimer) {
+    clearTimeout(updateStartupTimer)
+    updateStartupTimer = null
+  }
+  if (updateIntervalTimer) {
+    clearInterval(updateIntervalTimer)
+    updateIntervalTimer = null
+  }
+  if (smokeExitTimer) {
+    clearTimeout(smokeExitTimer)
+    smokeExitTimer = null
+  }
+}
 
 const testQuitResponses: Array<`cancel` | `confirm`> = (process.env.MD_DESKTOP_TEST_QUIT_RESPONSES ?? ``)
   .split(`,`)
@@ -228,6 +283,16 @@ function createMainWindow(): BrowserWindow {
     return { action: `deny` }
   })
 
+  // Block top-level navigations away from the app origin so external pages never inherit the preload bridge.
+  win.webContents.on(`will-navigate`, (event, url) => {
+    if (isTrustedRendererUrl(url, DEV_SERVER_URL))
+      return
+    event.preventDefault()
+    const safeUrl = isSafeExternalUrl(url)
+    if (safeUrl)
+      void shell.openExternal(safeUrl)
+  })
+
   if (DEV_SERVER_URL) {
     void win.loadURL(DEV_SERVER_URL)
   }
@@ -247,13 +312,29 @@ function createMainWindow(): BrowserWindow {
   return win
 }
 
+function assertTrustedIpcSender(event: Electron.IpcMainInvokeEvent): void {
+  const frame = event.senderFrame
+  if (!frame || frame.parent !== null || !isTrustedRendererUrl(frame.url, DEV_SERVER_URL))
+    throw new Error(`Untrusted IPC sender`)
+}
+
+function handleTrustedIpc<TArgs extends unknown[], TResult>(
+  channel: string,
+  handler: (event: Electron.IpcMainInvokeEvent, ...args: TArgs) => TResult | Promise<TResult>,
+): void {
+  ipcMain.handle(channel, (event, ...args) => {
+    assertTrustedIpcSender(event)
+    return handler(event, ...(args as TArgs))
+  })
+}
+
 function registerIpc(
   host: AcpHost,
   publisher: WeChatPublisher,
   configStore: AiConfigStore,
   ipStore: IpCharacterStore,
 ): void {
-  ipcMain.handle(IPC_CHANNELS.PICK_FILES, async () => {
+  handleTrustedIpc(IPC_CHANNELS.PICK_FILES, async () => {
     const owner = mainWindow ?? BrowserWindow.getFocusedWindow() ?? undefined
     const options: Electron.OpenDialogOptions = {
       properties: [`openFile`, `multiSelections`],
@@ -269,7 +350,7 @@ function registerIpc(
     }))
   })
 
-  ipcMain.handle(IPC_CHANNELS.PICK_IMAGE, async () => {
+  handleTrustedIpc(IPC_CHANNELS.PICK_IMAGE, async () => {
     const owner = mainWindow ?? BrowserWindow.getFocusedWindow() ?? undefined
     const options: Electron.OpenDialogOptions = {
       properties: [`openFile`],
@@ -284,9 +365,13 @@ function registerIpc(
       return null
 
     const filePath = result.filePaths[0]
-    publisher.allowLocalImagePath(filePath)
-    const raw = await fs.promises.readFile(filePath)
-    const mime = mimeForExtension(path.extname(filePath))
+    const realPath = await fs.promises.realpath(filePath)
+    const stat = await fs.promises.stat(realPath)
+    if (!stat.isFile() || stat.size === 0 || stat.size > MAX_PICKED_IMAGE_BYTES)
+      throw new Error(`Selected image must be a non-empty file <= 10 MB`)
+    publisher.allowCanonicalLocalImagePath(realPath)
+    const raw = await fs.promises.readFile(realPath)
+    const mime = mimeForExtension(path.extname(realPath))
     return {
       path: filePath,
       name: path.basename(filePath),
@@ -294,43 +379,58 @@ function registerIpc(
     }
   })
 
-  ipcMain.handle(IPC_CHANNELS.OPEN_EXTERNAL, async (_event, url: string) => {
+  handleTrustedIpc(IPC_CHANNELS.OPEN_EXTERNAL, async (_event, url: unknown) => {
     const safeUrl = isSafeExternalUrl(url)
     if (safeUrl)
       await shell.openExternal(safeUrl)
   })
 
-  ipcMain.handle(IPC_CHANNELS.SET_LOCALE, (_event, locale: string) => {
-    quitGuard?.setLocale(locale)
-    if (updateMode)
+  handleTrustedIpc(IPC_CHANNELS.SET_LOCALE, (_event, locale: unknown) => {
+    const validLocale = validateLocaleArg(locale)
+    const previousLocale = quitGuard?.locale
+    quitGuard?.setLocale(validLocale)
+    if (updateMode && quitGuard?.locale !== previousLocale)
       setAppMenu()
   })
 
-  ipcMain.handle(IPC_CHANNELS.WECHAT_PUBLISH, (_event, request: WeChatPublishRequest) =>
+  handleTrustedIpc(IPC_CHANNELS.WECHAT_PUBLISH, (_event, request: WeChatPublishRequest) =>
     publisher.publish(request))
-  ipcMain.handle(IPC_CHANNELS.WECHAT_UPLOAD_IMAGE, (_event, request: WeChatUploadImageRequest) =>
+  handleTrustedIpc(IPC_CHANNELS.WECHAT_UPLOAD_IMAGE, (_event, request: WeChatUploadImageRequest) =>
     publisher.uploadImage(request))
 
-  ipcMain.handle(IPC_CHANNELS.AI_GET_CONFIGS, () => configStore.getPublicConfigs())
-  ipcMain.handle(IPC_CHANNELS.AI_UPDATE_MODEL_API, (_event, patch: DesktopModelApiConfigUpdate) =>
-    configStore.updateModelApiConfig(patch))
-  ipcMain.handle(IPC_CHANNELS.AI_UPDATE_IMAGE_GEN, (_event, patch: DesktopImageGenConfigUpdate) =>
-    configStore.updateImageGenConfig(patch))
-  ipcMain.handle(IPC_CHANNELS.AI_LIST_REMOTE_MODELS, async (_event, params: DesktopListRemoteModelsParams) => {
+  handleTrustedIpc(IPC_CHANNELS.AI_GET_CONFIGS, () => configStore.getPublicConfigs())
+  handleTrustedIpc(IPC_CHANNELS.AI_UPDATE_MODEL_API, (_event, patch: DesktopModelApiConfigUpdate) =>
+    configStore.updateModelApiConfig(validateModelApiConfigUpdate(patch)))
+  handleTrustedIpc(IPC_CHANNELS.AI_UPDATE_IMAGE_GEN, (_event, patch: DesktopImageGenConfigUpdate) =>
+    configStore.updateImageGenConfig(validateImageGenConfigUpdate(patch)))
+  handleTrustedIpc(IPC_CHANNELS.AI_LIST_REMOTE_MODELS, async (_event, rawParams: DesktopListRemoteModelsParams) => {
+    const params = validateListRemoteModelsParams(rawParams)
     const saved = await configStore.getResolvedModelApiConfig()
-    const apiKey = params.apiKey?.trim() || saved.apiKey
+    const requestedBaseUrl = params.baseUrl.trim() || DEFAULT_PROTOCOL_BASE_URLS[params.protocol]
+    const apiKey = resolveEffectiveApiKey({
+      explicitApiKey: params.apiKey,
+      savedApiKey: saved.apiKey,
+      requestedBaseUrl,
+      savedBaseUrl: saved.baseUrl,
+    })
     return fetchRemoteModels({
       protocol: params.protocol,
-      baseUrl: params.baseUrl,
+      baseUrl: requestedBaseUrl,
       apiKey,
     })
   })
-  ipcMain.handle(IPC_CHANNELS.AI_TEST_IMAGE_GEN, async (_event, params?: DesktopTestImageGenParams) => {
+  handleTrustedIpc(IPC_CHANNELS.AI_TEST_IMAGE_GEN, async (_event, rawParams?: DesktopTestImageGenParams) => {
     let usedApiKey = ``
     try {
+      const params = validateTestImageGenParams(rawParams)
       const saved = await configStore.getResolvedImageGenConfig()
       const baseUrl = params?.baseUrl?.trim() || saved.baseUrl
-      const apiKey = params?.apiKey?.trim() || saved.apiKey
+      const apiKey = resolveEffectiveApiKey({
+        explicitApiKey: params?.apiKey,
+        savedApiKey: saved.apiKey,
+        requestedBaseUrl: baseUrl,
+        savedBaseUrl: saved.baseUrl,
+      })
       usedApiKey = apiKey
       const model = params?.model?.trim() || saved.model
       const size = params?.size?.trim() || saved.size
@@ -360,28 +460,43 @@ function registerIpc(
     }
   })
 
-  ipcMain.handle(IPC_CHANNELS.ACP_LIST_AGENTS, () => host.listAgents())
-  ipcMain.handle(IPC_CHANNELS.ACP_DETECT_AGENTS, () => host.detectAgents())
-  ipcMain.handle(IPC_CHANNELS.ACP_GET_SETTINGS, () => host.getSettings())
-  ipcMain.handle(IPC_CHANNELS.ACP_UPDATE_SETTINGS, (_event, patch) => host.updateSettings(patch))
-  ipcMain.handle(IPC_CHANNELS.ACP_ADD_CUSTOM_AGENT, (_event, agent) => host.addCustomAgent(agent))
-  ipcMain.handle(IPC_CHANNELS.ACP_REMOVE_CUSTOM_AGENT, (_event, agentId) => host.removeCustomAgent(agentId))
-  ipcMain.handle(IPC_CHANNELS.ACP_INSTALL_AGENT, (_event, agentId) => host.installAgent(agentId))
-  ipcMain.handle(IPC_CHANNELS.ACP_CANCEL_INSTALL, (_event, agentId) => host.cancelInstall(agentId))
-  ipcMain.handle(IPC_CHANNELS.ACP_PROBE_AGENT, (_event, agentId, options) => host.probeAgent(agentId, options))
-  ipcMain.handle(IPC_CHANNELS.ACP_START_SESSION, (_event, params) => host.startSession(params))
-  ipcMain.handle(IPC_CHANNELS.ACP_PROMPT, (_event, params) => host.prompt(params))
-  ipcMain.handle(IPC_CHANNELS.ACP_CANCEL_TURN, (_event, sessionId) => host.cancelTurn(sessionId))
-  ipcMain.handle(IPC_CHANNELS.ACP_SET_MODEL, (_event, params) => host.setModel(params))
-  ipcMain.handle(IPC_CHANNELS.ACP_SET_THINKING_LEVEL, (_event, params) => host.setThinkingLevel(params))
-  ipcMain.handle(IPC_CHANNELS.ACP_SET_PERMISSION_MODE, (_event, params) => host.setPermissionMode(params))
-  ipcMain.handle(IPC_CHANNELS.ACP_RESPOND_PERMISSION, (_event, params) => host.respondPermission(params))
-  ipcMain.handle(IPC_CHANNELS.ACP_CLOSE_SESSION, (_event, sessionId) => host.closeSession(sessionId))
-  ipcMain.handle(IPC_CHANNELS.ACP_READ_WORKSPACE_IMAGE, (_event, params) => host.readWorkspaceImage(params))
+  handleTrustedIpc(IPC_CHANNELS.ACP_LIST_AGENTS, () => host.listAgents())
+  handleTrustedIpc(IPC_CHANNELS.ACP_DETECT_AGENTS, () => host.detectAgents())
+  handleTrustedIpc(IPC_CHANNELS.ACP_GET_SETTINGS, () => host.getSettings())
+  handleTrustedIpc(IPC_CHANNELS.ACP_UPDATE_SETTINGS, (_event, patch) =>
+    host.updateSettings(validateAcpSettingsPatch(patch)))
+  handleTrustedIpc(IPC_CHANNELS.ACP_ADD_CUSTOM_AGENT, (_event, agent) =>
+    host.addCustomAgent(validateCustomAgentInput(agent)))
+  handleTrustedIpc(IPC_CHANNELS.ACP_REMOVE_CUSTOM_AGENT, (_event, agentId) =>
+    host.removeCustomAgent(validateIdArg(agentId, `agentId`)))
+  handleTrustedIpc(IPC_CHANNELS.ACP_INSTALL_AGENT, (_event, agentId) =>
+    host.installAgent(validateIdArg(agentId, `agentId`)))
+  handleTrustedIpc(IPC_CHANNELS.ACP_CANCEL_INSTALL, (_event, agentId) =>
+    host.cancelInstall(validateIdArg(agentId, `agentId`)))
+  handleTrustedIpc(IPC_CHANNELS.ACP_PROBE_AGENT, (_event, agentId, options) =>
+    host.probeAgent(validateIdArg(agentId, `agentId`), validateProbeOptions(options)))
+  handleTrustedIpc(IPC_CHANNELS.ACP_START_SESSION, (_event, params) =>
+    host.startSession(validateStartSessionParams(params)))
+  handleTrustedIpc(IPC_CHANNELS.ACP_PROMPT, (_event, params) =>
+    host.prompt(validatePromptParams(params)))
+  handleTrustedIpc(IPC_CHANNELS.ACP_CANCEL_TURN, (_event, sessionId) =>
+    host.cancelTurn(validateIdArg(sessionId, `sessionId`)))
+  handleTrustedIpc(IPC_CHANNELS.ACP_SET_MODEL, (_event, params) =>
+    host.setModel(validateSetModelParams(params)))
+  handleTrustedIpc(IPC_CHANNELS.ACP_SET_THINKING_LEVEL, (_event, params) =>
+    host.setThinkingLevel(validateSetThinkingLevelParams(params)))
+  handleTrustedIpc(IPC_CHANNELS.ACP_SET_PERMISSION_MODE, (_event, params) =>
+    host.setPermissionMode(validateSetPermissionModeParams(params)))
+  handleTrustedIpc(IPC_CHANNELS.ACP_RESPOND_PERMISSION, (_event, params) =>
+    host.respondPermission(validateRespondPermissionParams(params)))
+  handleTrustedIpc(IPC_CHANNELS.ACP_CLOSE_SESSION, (_event, sessionId) =>
+    host.closeSession(validateIdArg(sessionId, `sessionId`)))
+  handleTrustedIpc(IPC_CHANNELS.ACP_READ_WORKSPACE_IMAGE, (_event, params) =>
+    host.readWorkspaceImage(validateReadWorkspaceImageParams(params)))
 
-  ipcMain.handle(IPC_CHANNELS.UPDATES_GET_STATE, () => updateState)
-  ipcMain.handle(IPC_CHANNELS.UPDATES_CHECK, () => checkForUpdates(`settings`))
-  ipcMain.handle(IPC_CHANNELS.UPDATES_INSTALL, () => {
+  handleTrustedIpc(IPC_CHANNELS.UPDATES_GET_STATE, () => updateState)
+  handleTrustedIpc(IPC_CHANNELS.UPDATES_CHECK, () => checkForUpdates(`settings`))
+  handleTrustedIpc(IPC_CHANNELS.UPDATES_INSTALL, () => {
     if (updateMode !== `install` || updateState.status !== `downloaded`)
       return
     quitAndInstallThroughGuard()
@@ -390,18 +505,21 @@ function registerIpc(
   const marketplaceClient = createDesktopMarketplaceClient({
     apiUrl: process.env.MD_MARKETPLACE_API_URL,
   })
-  ipcMain.handle(IPC_CHANNELS.MARKETPLACE_LIST_THEMES, (_event, params) => marketplaceClient.listThemes(params))
-  ipcMain.handle(IPC_CHANNELS.MARKETPLACE_GET_ITEM, (_event, id) => marketplaceClient.getItem(id))
-  ipcMain.handle(IPC_CHANNELS.MARKETPLACE_INSTALL_ITEM, (_event, id) => marketplaceClient.installItem(id))
+  handleTrustedIpc(IPC_CHANNELS.MARKETPLACE_LIST_THEMES, (_event, params: DesktopMarketplaceListParams | undefined) =>
+    marketplaceClient.listThemes(params))
+  handleTrustedIpc(IPC_CHANNELS.MARKETPLACE_GET_ITEM, (_event, id: string) =>
+    marketplaceClient.getItem(id))
+  handleTrustedIpc(IPC_CHANNELS.MARKETPLACE_INSTALL_ITEM, (_event, id: string) =>
+    marketplaceClient.installItem(id))
 
-  ipcMain.handle(IPC_CHANNELS.IP_LIST, () => ipStore.list())
-  ipcMain.handle(IPC_CHANNELS.IP_UPDATE, (_event, id: string, patch: DesktopIpCharacterUpdate) =>
+  handleTrustedIpc(IPC_CHANNELS.IP_LIST, () => ipStore.list())
+  handleTrustedIpc(IPC_CHANNELS.IP_UPDATE, (_event, id: string, patch: DesktopIpCharacterUpdate) =>
     ipStore.update(id, patch))
-  ipcMain.handle(IPC_CHANNELS.IP_SET_DEFAULT, (_event, id: string | null) =>
+  handleTrustedIpc(IPC_CHANNELS.IP_SET_DEFAULT, (_event, id: string | null) =>
     ipStore.setDefault(id))
-  ipcMain.handle(IPC_CHANNELS.IP_REMOVE, (_event, id: string) =>
+  handleTrustedIpc(IPC_CHANNELS.IP_REMOVE, (_event, id: string) =>
     ipStore.remove(id))
-  ipcMain.handle(IPC_CHANNELS.IP_READ_IMAGE, (_event, id: string) =>
+  handleTrustedIpc(IPC_CHANNELS.IP_READ_IMAGE, (_event, id: string) =>
     ipStore.readImage(id))
 }
 
@@ -436,6 +554,8 @@ function quitAndInstallThroughGuard(): void {
 }
 
 async function promptRestartToUpdate(version: string): Promise<void> {
+  if (menuDownloadingDialogPromise)
+    await menuDownloadingDialogPromise.catch(() => undefined)
   if (restartPromptActive)
     return
   restartPromptActive = true
@@ -463,13 +583,41 @@ async function promptDownloadUpdate(version: string, fileUrl: string | undefined
     await shell.openExternal(page)
 }
 
+async function showDownloadingDialog(version: string): Promise<void> {
+  const copy = updateCopy()
+  const p = showUpdateMessage(`info`, copy.downloading(version), copy.downloadingDetail, [copy.ok]).then(() => undefined)
+  menuDownloadingDialogPromise = p
+  try {
+    await p
+  }
+  finally {
+    if (menuDownloadingDialogPromise === p)
+      menuDownloadingDialogPromise = null
+  }
+}
+
 async function checkForUpdates(origin: UpdateCheckOrigin): Promise<DesktopUpdateState> {
   if (!updateMode)
     return updateState
 
-  // Do not let periodic background checks overwrite active download progress or a ready-to-install update.
-  if (origin === `background` && (updateState.status === `downloading` || updateState.status === `downloaded`))
+  // Once an update is already staged on disk, never clobber its state or restart Squirrel.Mac's local feed.
+  if (updateState.status === `downloaded`) {
+    const readyVersion = downloadedUpdateVersion ?? updateState.version
+    if (origin === `menu` && readyVersion) {
+      shouldPromptUpdate(readyVersion, true)
+      await promptRestartToUpdate(readyVersion)
+    }
     return updateState
+  }
+
+  // Avoid starting duplicate concurrent downloads while an installer is already downloading.
+  if (updateState.status === `downloading`) {
+    if (origin === `menu` && updateState.version) {
+      promptOnNextDownload = true
+      await showDownloadingDialog(updateState.version)
+    }
+    return updateState
+  }
 
   // Avoid queuing duplicate native dialogs if the menu item is clicked again while a menu check is in flight.
   if (origin === `menu` && inFlightUpdateCheck?.origins.has(`menu`)) {
@@ -545,12 +693,13 @@ async function checkForUpdates(origin: UpdateCheckOrigin): Promise<DesktopUpdate
   }
   else if (origin === `menu`) {
     if (downloadedUpdateVersion === info.version) {
+      promptOnNextDownload = false
       shouldPromptUpdate(info.version, true)
       await promptRestartToUpdate(info.version)
     }
     else {
       promptOnNextDownload = true
-      await showUpdateMessage(`info`, copy.downloading(info.version), copy.downloadingDetail, [copy.ok])
+      await showDownloadingDialog(info.version)
     }
   }
 
@@ -637,8 +786,10 @@ function startAutoUpdate(mode: UpdateMode): void {
       app.quit()
   })
   setAppMenu()
-  setTimeout(() => void checkForUpdates(`background`), UPDATE_FIRST_CHECK_DELAY_MS)
-  setInterval(() => void checkForUpdates(`background`), UPDATE_CHECK_INTERVAL_MS)
+  updateStartupTimer = setTimeout(() => void checkForUpdates(`background`), UPDATE_FIRST_CHECK_DELAY_MS)
+  updateStartupTimer.unref?.()
+  updateIntervalTimer = setInterval(() => void checkForUpdates(`background`), UPDATE_CHECK_INTERVAL_MS)
+  updateIntervalTimer.unref?.()
 }
 
 app.whenReady().then(() => {
@@ -666,7 +817,7 @@ app.whenReady().then(() => {
   ipCharacterStore = new IpCharacterStore({
     dir: path.join(userDataDir, `ip-characters`),
   })
-  ipCharacterStore.onChange((library) => {
+  const unsubscribeIpCharacters = ipCharacterStore.onChange((library) => {
     broadcastIpCharactersChanged(library)
     void acpHost?.refreshIpSnapshots()
   })
@@ -734,7 +885,7 @@ app.whenReady().then(() => {
       }
     },
     resolveSessionMcpServers: async (_agentId, workspaceDir): Promise<McpServer[]> => {
-      if (!fs.existsSync(imageMcpScript) || !(await aiConfigStore!.isImageGenConfigured()))
+      if (!(await fileExists(imageMcpScript)) || !(await aiConfigStore!.isImageGenConfigured()))
         return []
       const bridge = await imageGenBridge!.ensureStarted()
       return [
@@ -760,6 +911,8 @@ app.whenReady().then(() => {
   quitGuard = new QuitGuard({
     getActiveSessions: () => acpHost?.getActiveSessions() ?? [],
     dispose: async () => {
+      clearBackgroundTimers()
+      unsubscribeIpCharacters()
       acpEventBatcher?.dispose()
       await acpHost?.dispose()
       await imageGenBridge?.close()
@@ -822,7 +975,8 @@ app.whenReady().then(() => {
   if (smokeExitMs > 0) {
     mainWindow.webContents.once(`did-finish-load`, () => {
       console.log(`[md-desktop] window finished loading`)
-      setTimeout(() => quitGuard?.requestNonInteractiveQuit(), smokeExitMs)
+      smokeExitTimer = setTimeout(() => quitGuard?.requestNonInteractiveQuit(), smokeExitMs)
+      smokeExitTimer.unref?.()
     })
   }
 
@@ -856,5 +1010,6 @@ app.on(`before-quit`, (event) => {
 })
 
 app.on(`window-all-closed`, () => {
-  app.quit()
+  if (!installingUpdate)
+    app.quit()
 })

@@ -330,6 +330,58 @@ describe(`ipCharacterStore`, () => {
     expect(await exists(path.join(ipDir, `${cat.id}.jpg`))).toBe(false)
     expect(await fs.readFile(path.join(ipDir, `selected.json`), `utf8`)).toBe(pendingSelected)
   })
+
+  it(`defends against symlinked workspace ip/selected.json and preserves pending selected.json image across snapshot refresh`, async () => {
+    const dir = await makeTempDir(`md-ip-symlink-guard-`)
+    const ws = await makeTempDir(`md-ip-symlink-ws-`)
+    const outsidePictures = await makeTempDir(`md-ip-outside-pics-`)
+    const store = new IpCharacterStore({ dir })
+    vi.spyOn(console, `warn`).mockImplementation(() => {})
+
+    // Seed an outside directory with precious .png/.json files and replace `<ws>/ip` with a symlink to it.
+    const preciousPhoto = path.join(outsidePictures, `family.png`)
+    const outsideSelected = path.join(outsidePictures, `selected.json`)
+    await fs.writeFile(preciousPhoto, Buffer.from([1, 2, 3, 4]))
+    await fs.writeFile(outsideSelected, JSON.stringify({ name: `Evil`, prompt: `Steal` }), `utf8`)
+    await fs.symlink(outsidePictures, path.join(ws, `ip`))
+
+    // applyWorkspaceSelection must remove the symlink `<ws>/ip` without deleting outside files.
+    expect(await store.applyWorkspaceSelection(ws)).toBe(false)
+    expect(await exists(preciousPhoto)).toBe(true)
+    expect(await exists(outsideSelected)).toBe(true)
+
+    // Re-plant symlink and verify writeWorkspaceSnapshot never deletes outside images or writes library.json outside.
+    await fs.symlink(outsidePictures, path.join(ws, `ip`))
+    await store.writeWorkspaceSnapshot(ws)
+    expect(await exists(preciousPhoto)).toBe(true)
+    expect(await exists(path.join(outsidePictures, `library.json`))).toBe(false)
+    expect(await exists(path.join(ws, `ip`, `library.json`))).toBe(true)
+
+    // Symlinked selected.json inside real `<ws>/ip` is unlinked without following target.
+    await fs.rm(path.join(ws, `ip`, `selected.json`), { force: true })
+    await fs.symlink(outsideSelected, path.join(ws, `ip`, `selected.json`))
+    expect(await store.applyWorkspaceSelection(ws)).toBe(false)
+    expect(await exists(outsideSelected)).toBe(true)
+
+    // Pending `ip/selected.json` referencing `ip/candidate.png` keeps `ip/candidate.png` alive across snapshot refresh.
+    await fs.writeFile(path.join(ws, `ip`, `candidate.png`), Buffer.from([137, 80, 78, 71]))
+    await writeSelected(ws, {
+      name: `New Mascot`,
+      prompt: `Cute panda mascot`,
+      image: `ip/candidate.png`,
+    })
+    await store.writeWorkspaceSnapshot(ws)
+    expect(await exists(path.join(ws, `ip`, `candidate.png`))).toBe(true)
+    expect(await store.applyWorkspaceSelection(ws)).toBe(true)
+    expect((await store.list()).characters).toHaveLength(1)
+
+    // IPC argument type validation rejects invalid inputs with TypeError.
+    await expect(store.update(123 as never, { name: `x` })).rejects.toThrow(TypeError)
+    await expect(store.update(`id`, null as never)).rejects.toThrow(TypeError)
+    await expect(store.setDefault(123 as never)).rejects.toThrow(TypeError)
+    await expect(store.remove(undefined as never)).rejects.toThrow(TypeError)
+    expect(await store.readImage(null as never)).toBeNull()
+  })
 })
 
 describe(`acpHost IP character integration`, () => {

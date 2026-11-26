@@ -256,4 +256,24 @@ describe(`reduceUpdateState`, () => {
     expect(areUpdateStatesEqual(retrying, { ...retrying })).toBe(true)
     expect(areUpdateStatesEqual(retrying, errored)).toBe(false)
   })
+
+  it(`ignores late download-progress after downloaded/error and ignores download events in notify mode`, () => {
+    const downloading = reduceUpdateState(createInitialUpdateState(`2.1.0`, `install`), {
+      type: `available`,
+      version: `2.2.0`,
+    })
+    const downloaded = reduceUpdateState(downloading, { type: `downloaded`, version: `2.2.0` })
+    expect(reduceUpdateState(downloaded, { type: `download-progress`, percent: 99 })).toBe(downloaded)
+
+    const errored = reduceUpdateState(downloading, { type: `error`, message: `network lost` })
+    expect(reduceUpdateState(errored, { type: `download-progress`, percent: 50 })).toBe(errored)
+
+    const notifyAvailable = reduceUpdateState(createInitialUpdateState(`2.1.0`, `notify`), {
+      type: `available`,
+      version: `2.2.0`,
+      fileUrl: `https://github.com/doocs/md/releases/download/desktop-v2.2.0/md-2.2.0-mac-arm64.zip`,
+    })
+    expect(reduceUpdateState(notifyAvailable, { type: `download-progress`, percent: 40 })).toBe(notifyAvailable)
+    expect(reduceUpdateState(notifyAvailable, { type: `downloaded`, version: `2.2.0` })).toBe(notifyAvailable)
+  })
 })

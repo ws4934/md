@@ -482,4 +482,85 @@ describe(`weChatPublisher state machine`, () => {
       await fs.rm(tmpDir, { recursive: true, force: true })
     }
   })
+
+  it(`deduplicates concurrent 40001 token refreshes across parallel image uploads and scopes cache by appsecret`, async () => {
+    let tokenCalls = 0
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === `string` ? input : input instanceof URL ? input.toString() : input.url
+      if (url.endsWith(`/cgi-bin/stable_token`)) {
+        tokenCalls += 1
+        const idx = tokenCalls
+        await new Promise(resolve => setTimeout(resolve, 20))
+        const parsed = JSON.parse(String(init?.body ?? `{}`)) as { secret?: string }
+        return jsonResponse({ access_token: `tok_${idx}_${parsed.secret}`, expires_in: 7200 })
+      }
+      if (url.startsWith(`https://cdn.example.com/`))
+        return binaryResponse(new Uint8Array([1, 2, 3, 4]), `image/png`)
+      if (url.includes(`/cgi-bin/media/uploadimg`)) {
+        if (url.includes(`access_token=tok_1_`))
+          return jsonResponse({ errcode: 40001, errmsg: `invalid credential` })
+        return jsonResponse({ url: `http://mmbiz.qpic.cn/mmbiz_png/retried/0` })
+      }
+      if (url.includes(`/cgi-bin/material/add_material`))
+        return jsonResponse({ media_id: `cover_ok` })
+      if (url.includes(`/cgi-bin/draft/add`))
+        return jsonResponse({ media_id: `draft_ok` })
+      throw new Error(`Unexpected URL: ${url}`)
+    }) as unknown as typeof fetch
+
+    const publisher = new WeChatPublisher({ fetchFn: mockFetch, concurrency: 3 })
+    const res = await publisher.publish({
+      credentials: { appID: `wx_stampede`, appsecret: `sec_1` },
+      mode: `draft`,
+      title: `Stampede Test`,
+      contentHtml: `<img src="https://cdn.example.com/a.png"><img src="https://cdn.example.com/b.png"><img src="https://cdn.example.com/c.png">`,
+      coverSource: `data:image/png;base64,iVBORw0KGgo=`,
+      needOpenComment: false,
+    })
+
+    expect(res.ok).toBe(true)
+    // 1 initial token fetch + 1 shared refresh across all 3 failing parallel uploads
+    expect(tokenCalls).toBe(2)
+
+    // Changing appsecret must not reuse cached token from old secret
+    await publisher.getAccessToken({ appID: `wx_stampede`, appsecret: `sec_2` })
+    expect(tokenCalls).toBe(3)
+  })
+
+  it(`validates malformed requests, invalid publish modes, unsafe proxy origins, and redacts padded secrets`, async () => {
+    const mockFetch = vi.fn() as unknown as typeof fetch
+    const publisher = new WeChatPublisher({ fetchFn: mockFetch })
+
+    expect(await publisher.publish(null as never)).toMatchObject({ ok: false })
+    expect(await publisher.uploadImage(null as never)).toMatchObject({ ok: false })
+
+    // Invalid mode must never create a draft or submit free publish
+    const badMode = await publisher.publish({
+      credentials: { appID: `wx_1`, appsecret: `sec_1` },
+      mode: `unexpected` as never,
+      title: `Title`,
+      contentHtml: `<p>Body</p>`,
+      coverSource: `data:image/png;base64,iVBORw0KGgo=`,
+      needOpenComment: false,
+    })
+    expect(badMode.ok).toBe(false)
+    expect(mockFetch).not.toHaveBeenCalled()
+
+    // Proxy origin with query string or embedded credentials rejected before network call
+    const badProxy = await publisher.publish({
+      credentials: { appID: `wx_1`, appsecret: `sec_1`, proxyOrigin: `https://proxy.example.com?leak=1` },
+      mode: `draft`,
+      title: `Title`,
+      contentHtml: `<p>Body</p>`,
+      coverSource: `data:image/png;base64,iVBORw0KGgo=`,
+      needOpenComment: false,
+    })
+    expect(badProxy.ok).toBe(false)
+    expect(badProxy.error).toMatch(/proxy origin/i)
+    expect(mockFetch).not.toHaveBeenCalled()
+
+    // Whitespace-padded appsecret still redacted when trimmed value appears in error text
+    expect(sanitizeWeChatText(`leaked trimmed_secret_val and "access_token":"tok_abc"`, `  trimmed_secret_val  `))
+      .toBe(`leaked [REDACTED] and "access_token":"[REDACTED]"`)
+  })
 })

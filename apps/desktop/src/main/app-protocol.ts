@@ -4,21 +4,65 @@ import path from 'node:path'
 export const APP_SCHEME = `app`
 export const APP_HOST = `md`
 
+const MAX_EXTERNAL_URL_LENGTH = 4096
+
+function hasAsciiControlChar(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i)
+    if (code <= 0x1F || code === 0x7F)
+      return true
+  }
+  return false
+}
+
+function isContainedInRoot(root: string, target: string): boolean {
+  const rel = path.relative(root, target)
+  return rel === `` || (!rel.startsWith(`..`) && !path.isAbsolute(rel))
+}
+
 export function isSafeExternalUrl(raw: unknown): string | null {
   if (typeof raw !== `string`)
     return null
   const trimmed = raw.trim()
-  if (!trimmed)
+  if (!trimmed || trimmed.length > MAX_EXTERNAL_URL_LENGTH || hasAsciiControlChar(trimmed))
     return null
   try {
     const parsed = new URL(trimmed)
     if ((parsed.protocol !== `https:` && parsed.protocol !== `http:`) || !parsed.hostname)
       return null
-    return trimmed
+    if (parsed.username || parsed.password)
+      return null
+    return parsed.toString()
   }
   catch {
     return null
   }
+}
+
+export function isTrustedRendererUrl(raw: unknown, devServerUrl?: string): boolean {
+  if (typeof raw !== `string` || !raw)
+    return false
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  }
+  catch {
+    return false
+  }
+
+  const devTrimmed = devServerUrl?.trim()
+  if (devTrimmed) {
+    try {
+      const devParsed = new URL(devTrimmed)
+      if ((devParsed.protocol === `http:` || devParsed.protocol === `https:`) && devParsed.origin === parsed.origin)
+        return true
+    }
+    catch {
+      // Ignore malformed dev server URL and fall back to app://md check.
+    }
+  }
+
+  return parsed.protocol === `${APP_SCHEME}:` && parsed.hostname === APP_HOST && !parsed.port
 }
 
 export type AppProtocolResolution
@@ -27,8 +71,8 @@ export type AppProtocolResolution
 
 /**
  * Resolves an `app://md/...` request strictly inside `rendererRoot`, rejecting
- * foreign hosts, malformed percent-encoding, `..` traversal, and symlinks pointing
- * outside `rendererRoot`. Missing asset paths fall back to SPA `index.html`.
+ * foreign schemes/hosts, malformed percent-encoding, null bytes, `..` traversal,
+ * and symlinks pointing outside `rendererRoot`. Missing asset paths fall back to SPA `index.html`.
  */
 export async function resolveAppProtocolTarget(
   requestUrl: string,
@@ -42,7 +86,7 @@ export async function resolveAppProtocolTarget(
     return { status: 400, body: `Bad Request` }
   }
 
-  if (url.hostname !== APP_HOST)
+  if (url.protocol !== `${APP_SCHEME}:` || url.hostname !== APP_HOST)
     return { status: 404, body: `Not Found` }
 
   let pathname: string
@@ -53,12 +97,15 @@ export async function resolveAppProtocolTarget(
     return { status: 400, body: `Bad Request` }
   }
 
+  if (pathname.includes(`\0`))
+    return { status: 400, body: `Bad Request` }
+
   if (pathname === `/` || pathname === ``)
     pathname = `/index.html`
 
   const resolvedRoot = path.resolve(rendererRoot)
   const candidate = path.resolve(resolvedRoot, `.${pathname}`)
-  if (candidate !== resolvedRoot && !candidate.startsWith(`${resolvedRoot}${path.sep}`))
+  if (!isContainedInRoot(resolvedRoot, candidate))
     return { status: 403, body: `Forbidden` }
 
   let realRoot = resolvedRoot
@@ -73,7 +120,7 @@ export async function resolveAppProtocolTarget(
     const stat = await fs.stat(candidate)
     if (stat.isFile()) {
       const realCandidate = await fs.realpath(candidate)
-      if (realCandidate !== realRoot && !realCandidate.startsWith(`${realRoot}${path.sep}`))
+      if (!isContainedInRoot(realRoot, realCandidate))
         return { status: 403, body: `Forbidden` }
       return { status: 200, filePath: realCandidate }
     }
@@ -82,5 +129,17 @@ export async function resolveAppProtocolTarget(
     // Missing asset falls back to SPA index.html below.
   }
 
-  return { status: 200, filePath: path.join(realRoot, `index.html`) }
+  const indexCandidate = path.join(realRoot, `index.html`)
+  try {
+    const indexStat = await fs.stat(indexCandidate)
+    if (!indexStat.isFile())
+      return { status: 404, body: `Not Found` }
+    const realIndex = await fs.realpath(indexCandidate)
+    if (!isContainedInRoot(realRoot, realIndex))
+      return { status: 403, body: `Forbidden` }
+    return { status: 200, filePath: realIndex }
+  }
+  catch {
+    return { status: 404, body: `Not Found` }
+  }
 }

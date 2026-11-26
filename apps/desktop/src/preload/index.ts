@@ -24,6 +24,18 @@ import { IPC_CHANNELS } from '../shared/ipc-channels'
 // eslint-disable-next-line node/prefer-global/process
 const hostPlatform = typeof process !== `undefined` ? process.platform : `unknown`
 
+function subscribeChannel<T>(channel: string, listener: (payload: T) => void): () => void {
+  if (typeof listener !== `function`)
+    throw new TypeError(`Listener must be a function`)
+  const handler = (_ipcEvent: Electron.IpcRendererEvent, payload: T) => {
+    listener(payload)
+  }
+  ipcRenderer.on(channel, handler)
+  return () => {
+    ipcRenderer.removeListener(channel, handler)
+  }
+}
+
 const desktopBridge: DesktopBridge = {
   isDesktop: true,
   platform: hostPlatform,
@@ -36,15 +48,8 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke(IPC_CHANNELS.WECHAT_PUBLISH, request),
     uploadImage: (request: WeChatUploadImageRequest) =>
       ipcRenderer.invoke(IPC_CHANNELS.WECHAT_UPLOAD_IMAGE, request),
-    onProgress: (listener: (event: WeChatPublishProgressEvent) => void) => {
-      const handler = (_ipcEvent: Electron.IpcRendererEvent, payload: WeChatPublishProgressEvent) => {
-        listener(payload)
-      }
-      ipcRenderer.on(IPC_CHANNELS.WECHAT_PUBLISH_PROGRESS, handler)
-      return () => {
-        ipcRenderer.removeListener(IPC_CHANNELS.WECHAT_PUBLISH_PROGRESS, handler)
-      }
-    },
+    onProgress: (listener: (event: WeChatPublishProgressEvent) => void) =>
+      subscribeChannel(IPC_CHANNELS.WECHAT_PUBLISH_PROGRESS, listener),
   },
   ai: {
     getConfigs: () => ipcRenderer.invoke(IPC_CHANNELS.AI_GET_CONFIGS),
@@ -83,29 +88,15 @@ const desktopBridge: DesktopBridge = {
     }) => ipcRenderer.invoke(IPC_CHANNELS.ACP_RESPOND_PERMISSION, params),
     closeSession: sessionId => ipcRenderer.invoke(IPC_CHANNELS.ACP_CLOSE_SESSION, sessionId),
     readWorkspaceImage: params => ipcRenderer.invoke(IPC_CHANNELS.ACP_READ_WORKSPACE_IMAGE, params),
-    onEvent: (listener: (event: AcpHostEvent) => void) => {
-      const handler = (_ipcEvent: Electron.IpcRendererEvent, payload: AcpHostEvent) => {
-        listener(payload)
-      }
-      ipcRenderer.on(IPC_CHANNELS.ACP_EVENT, handler)
-      return () => {
-        ipcRenderer.removeListener(IPC_CHANNELS.ACP_EVENT, handler)
-      }
-    },
+    onEvent: (listener: (event: AcpHostEvent) => void) =>
+      subscribeChannel(IPC_CHANNELS.ACP_EVENT, listener),
   },
   updates: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.UPDATES_GET_STATE),
     check: () => ipcRenderer.invoke(IPC_CHANNELS.UPDATES_CHECK),
     install: () => ipcRenderer.invoke(IPC_CHANNELS.UPDATES_INSTALL),
-    onState: (listener: (state: DesktopUpdateState) => void) => {
-      const handler = (_ipcEvent: Electron.IpcRendererEvent, payload: DesktopUpdateState) => {
-        listener(payload)
-      }
-      ipcRenderer.on(IPC_CHANNELS.UPDATES_STATE, handler)
-      return () => {
-        ipcRenderer.removeListener(IPC_CHANNELS.UPDATES_STATE, handler)
-      }
-    },
+    onState: (listener: (state: DesktopUpdateState) => void) =>
+      subscribeChannel(IPC_CHANNELS.UPDATES_STATE, listener),
   },
   marketplace: {
     listThemes: (params?: DesktopMarketplaceListParams) =>
@@ -125,15 +116,8 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke(IPC_CHANNELS.IP_REMOVE, id),
     readImage: (id: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.IP_READ_IMAGE, id),
-    onChanged: (callback: (library: DesktopIpLibrary) => void) => {
-      const handler = (_ipcEvent: Electron.IpcRendererEvent, payload: DesktopIpLibrary) => {
-        callback(payload)
-      }
-      ipcRenderer.on(IPC_CHANNELS.IP_CHANGED, handler)
-      return () => {
-        ipcRenderer.removeListener(IPC_CHANNELS.IP_CHANGED, handler)
-      }
-    },
+    onChanged: (callback: (library: DesktopIpLibrary) => void) =>
+      subscribeChannel(IPC_CHANNELS.IP_CHANGED, callback),
   },
 }
 

@@ -19,6 +19,7 @@ const MAX_NAME_LENGTH = 40
 const MAX_DESCRIPTION_LENGTH = 200
 const MAX_PROMPT_LENGTH = 2000
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const MAX_SELECTED_JSON_BYTES = 64 * 1024
 
 const IMAGE_MIME_BY_EXT = new Map<string, string>([
   [`.png`, `image/png`],
@@ -64,7 +65,9 @@ function parseLibraryJson(raw: string): DesktopIpLibrary {
       || typeof entry.prompt !== `string`
       || (entry.imageFile !== null && !isSafeImageFileName(entry.imageFile))
       || typeof entry.createdAt !== `number`
+      || !Number.isFinite(entry.createdAt)
       || typeof entry.updatedAt !== `number`
+      || !Number.isFinite(entry.updatedAt)
     ) {
       continue
     }
@@ -159,6 +162,24 @@ async function resolveWorkspaceImage(
   return { sourcePath: target, ext: targetExt }
 }
 
+async function copyFileAtomic(sourcePath: string, destPath: string, maxBytes?: number): Promise<void> {
+  await fs.mkdir(path.dirname(destPath), { recursive: true })
+  const tmpPath = `${destPath}.${randomUUID()}.tmp`
+  try {
+    await fs.copyFile(sourcePath, tmpPath)
+    if (maxBytes !== undefined) {
+      const stat = await fs.lstat(tmpPath)
+      if (!stat.isFile() || stat.size > maxBytes)
+        throw new Error(`Image must be a file <= ${maxBytes / 1024 / 1024} MB`)
+    }
+    await fs.rename(tmpPath, destPath)
+  }
+  catch (error) {
+    await fs.rm(tmpPath, { force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
 async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
   const content = `${JSON.stringify(value, null, 2)}\n`
   await fs.mkdir(path.dirname(filePath), { recursive: true })
@@ -171,6 +192,26 @@ async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> 
     await fs.rm(tmpPath, { force: true }).catch(() => undefined)
     throw error
   }
+}
+
+async function readPendingSelectedImageName(realWorkspace: string, realIpDir: string): Promise<string | null> {
+  const selectedPath = path.join(realIpDir, WORKSPACE_SELECTED_FILE)
+  try {
+    const st = await fs.lstat(selectedPath)
+    if (st.isSymbolicLink() || !st.isFile() || st.size > MAX_SELECTED_JSON_BYTES)
+      return null
+    const raw = await fs.readFile(selectedPath, `utf8`)
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    if (!parsed || typeof parsed !== `object` || Array.isArray(parsed) || typeof parsed.image !== `string`)
+      return null
+    const resolved = await resolveWorkspaceImage(realWorkspace, parsed.image)
+    if (path.dirname(resolved.sourcePath) === realIpDir)
+      return path.basename(resolved.sourcePath)
+  }
+  catch {
+    // Ignore missing or invalid selected.json during snapshot cleanup.
+  }
+  return null
 }
 
 export class IpCharacterStore {
@@ -238,6 +279,11 @@ export class IpCharacterStore {
   }
 
   update(id: string, patch: DesktopIpCharacterUpdate): Promise<DesktopIpLibrary> {
+    if (typeof id !== `string`)
+      return Promise.reject(new TypeError(`Character id must be a string`))
+    if (!patch || typeof patch !== `object` || Array.isArray(patch))
+      return Promise.reject(new TypeError(`Character update patch must be an object`))
+
     return this.runMutation(async () => {
       await this.ensureLoaded()
       const index = this.library.characters.findIndex(c => c.id === id)
@@ -267,6 +313,9 @@ export class IpCharacterStore {
   }
 
   setDefault(id: string | null): Promise<DesktopIpLibrary> {
+    if (id !== null && typeof id !== `string`)
+      return Promise.reject(new TypeError(`Default character id must be a string or null`))
+
     return this.runMutation(async () => {
       await this.ensureLoaded()
       if (id !== null && !this.library.characters.some(c => c.id === id))
@@ -287,6 +336,9 @@ export class IpCharacterStore {
   }
 
   remove(id: string): Promise<DesktopIpLibrary> {
+    if (typeof id !== `string`)
+      return Promise.reject(new TypeError(`Character id must be a string`))
+
     return this.runMutation(async () => {
       await this.ensureLoaded()
       const target = this.library.characters.find(c => c.id === id)
@@ -309,15 +361,24 @@ export class IpCharacterStore {
   }
 
   async readImage(id: string): Promise<string | null> {
+    if (typeof id !== `string` || !id)
+      return null
     await this.ensureLoaded()
     const character = this.library.characters.find(c => c.id === id)
-    if (!character?.imageFile)
+    if (!character?.imageFile || !isSafeImageFileName(character.imageFile))
       return null
     const mime = IMAGE_MIME_BY_EXT.get(path.extname(character.imageFile).toLowerCase())
     if (!mime)
       return null
     try {
-      const raw = await fs.readFile(path.join(this.dir, character.imageFile))
+      const realDir = await fs.realpath(this.dir)
+      const realFile = await fs.realpath(path.join(realDir, character.imageFile))
+      if (!isPathInside(realDir, realFile))
+        return null
+      const stat = await fs.stat(realFile)
+      if (!stat.isFile() || stat.size > MAX_IMAGE_BYTES)
+        return null
+      const raw = await fs.readFile(realFile)
       return `data:${mime};base64,${raw.toString(`base64`)}`
     }
     catch {
@@ -338,12 +399,35 @@ export class IpCharacterStore {
   }
 
   private async writeWorkspaceSnapshotInner(workspaceDir: string): Promise<void> {
+    // Wait for any in-flight mutation so snapshots always reflect the latest committed library.
+    await this.mutationChain.catch(() => undefined)
     await this.ensureLoaded()
     const snapshot = structuredClone(this.library)
-    const ipDir = path.join(workspaceDir, WORKSPACE_IP_DIR)
+
+    await fs.mkdir(workspaceDir, { recursive: true })
+    const realWorkspace = await fs.realpath(workspaceDir)
+    const ipDir = path.join(realWorkspace, WORKSPACE_IP_DIR)
+
+    // Never follow an agent-planted symlink at `<workspace>/ip` into an external directory.
+    try {
+      const st = await fs.lstat(ipDir)
+      if (st.isSymbolicLink() || !st.isDirectory())
+        await fs.rm(ipDir, { recursive: true, force: true })
+    }
+    catch {
+      // `ip` does not exist yet.
+    }
+
     await fs.mkdir(ipDir, { recursive: true })
+    const realIpDir = await fs.realpath(ipDir)
+    if (!isPathInside(realWorkspace, realIpDir))
+      throw new Error(`Workspace IP directory resolves outside workspace`)
 
     const activeImages = new Set<string>()
+    const pendingSelectedImage = await readPendingSelectedImageName(realWorkspace, realIpDir)
+    if (pendingSelectedImage)
+      activeImages.add(pendingSelectedImage)
+
     const characters: Array<{
       id: string
       name: string
@@ -356,7 +440,7 @@ export class IpCharacterStore {
       let image: string | null = null
       if (character.imageFile) {
         try {
-          await fs.copyFile(path.join(this.dir, character.imageFile), path.join(ipDir, character.imageFile))
+          await copyFileAtomic(path.join(this.dir, character.imageFile), path.join(realIpDir, character.imageFile))
           activeImages.add(character.imageFile)
           image = `${WORKSPACE_IP_DIR}/${character.imageFile}`
         }
@@ -373,12 +457,12 @@ export class IpCharacterStore {
       })
     }
 
-    await writeJsonAtomic(path.join(ipDir, LIBRARY_FILE), {
+    await writeJsonAtomic(path.join(realIpDir, LIBRARY_FILE), {
       defaultId: snapshot.defaultId,
       characters,
     })
 
-    const entries = await fs.readdir(ipDir, { withFileTypes: true })
+    const entries = await fs.readdir(realIpDir, { withFileTypes: true })
     await Promise.all(
       entries.map(async (entry) => {
         if (entry.name === LIBRARY_FILE || entry.name === WORKSPACE_SELECTED_FILE)
@@ -389,16 +473,50 @@ export class IpCharacterStore {
           return
         if (activeImages.has(entry.name))
           return
-        await fs.rm(path.join(ipDir, entry.name), { force: true }).catch(() => undefined)
+        await fs.rm(path.join(realIpDir, entry.name), { force: true }).catch(() => undefined)
       }),
     )
   }
 
   applyWorkspaceSelection(workspaceDir: string): Promise<boolean> {
     return this.runMutation(async () => {
-      const selectedPath = path.join(workspaceDir, WORKSPACE_IP_DIR, WORKSPACE_SELECTED_FILE)
+      let realWorkspace: string
+      try {
+        realWorkspace = await fs.realpath(workspaceDir)
+      }
+      catch {
+        return false
+      }
+
+      const ipDir = path.join(realWorkspace, WORKSPACE_IP_DIR)
+      let realIpDir: string
+      try {
+        const ipStat = await fs.lstat(ipDir)
+        if (ipStat.isSymbolicLink() || !ipStat.isDirectory()) {
+          console.warn(`[ip-characters] rejecting non-directory ${ipDir}`)
+          await fs.rm(ipDir, { recursive: true, force: true }).catch(() => undefined)
+          return false
+        }
+        realIpDir = await fs.realpath(ipDir)
+        if (!isPathInside(realWorkspace, realIpDir))
+          return false
+      }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === `ENOENT`)
+          return false
+        console.warn(`[ip-characters] failed to inspect ${ipDir}:`, error)
+        return false
+      }
+
+      const selectedPath = path.join(realIpDir, WORKSPACE_SELECTED_FILE)
       let raw: string
       try {
+        const selectedStat = await fs.lstat(selectedPath)
+        if (selectedStat.isSymbolicLink() || !selectedStat.isFile() || selectedStat.size > MAX_SELECTED_JSON_BYTES) {
+          console.warn(`[ip-characters] rejecting unsafe or oversized ${selectedPath}`)
+          await fs.rm(selectedPath, { recursive: true, force: true }).catch(() => undefined)
+          return false
+        }
         raw = await fs.readFile(selectedPath, `utf8`)
       }
       catch (error) {
@@ -454,7 +572,7 @@ export class IpCharacterStore {
           description = validateDescription(payload.description)
           prompt = validatePrompt(payload.prompt)
           if (payload.image !== undefined && payload.image !== null)
-            resolvedImage = await resolveWorkspaceImage(workspaceDir, payload.image)
+            resolvedImage = await resolveWorkspaceImage(realWorkspace, payload.image)
         }
         catch (error) {
           console.warn(`[ip-characters] invalid selection in ${selectedPath}:`, error)
@@ -478,9 +596,13 @@ export class IpCharacterStore {
         const id = randomUUID()
         let imageFile: string | null = null
         if (resolvedImage) {
+          const recheckedTarget = await fs.realpath(resolvedImage.sourcePath)
+          if (!isPathInside(realWorkspace, recheckedTarget)) {
+            console.warn(`[ip-characters] image escaped workspace before copy: ${selectedPath}`)
+            return false
+          }
           imageFile = `${id}${resolvedImage.ext}`
-          await fs.mkdir(this.dir, { recursive: true })
-          await fs.copyFile(resolvedImage.sourcePath, path.join(this.dir, imageFile))
+          await copyFileAtomic(recheckedTarget, path.join(this.dir, imageFile), MAX_IMAGE_BYTES)
         }
 
         const now = Date.now()

@@ -37,6 +37,11 @@ export { resolveWeChatApiOrigin }
 const DEFAULT_CONCURRENCY = 3
 const DEFAULT_POLL_INTERVAL_MS = 2000
 const DEFAULT_MAX_POLL_ATTEMPTS = 45
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+const MAX_WECHAT_IMAGE_BYTES = 10 * 1024 * 1024
+const MAX_WECHAT_DATA_URI_CHARS = 15 * 1024 * 1024
+const MAX_WECHAT_HTML_CHARS = 10 * 1024 * 1024
+const MAX_ALLOWED_LOCAL_PATHS = 256
 const ALLOWED_LOCAL_IMAGE_EXTENSIONS = new Set([`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`])
 
 export interface ImageBinary {
@@ -54,6 +59,7 @@ export interface WeChatPublisherOptions {
   concurrency?: number
   pollIntervalMs?: number
   maxPollAttempts?: number
+  requestTimeoutMs?: number
 }
 
 interface CachedToken {
@@ -146,16 +152,44 @@ export function mimeForExtension(ext: string): string {
   }
 }
 
+function validateWeChatOrigin(proxyOrigin?: string): string {
+  const origin = resolveWeChatApiOrigin(proxyOrigin)
+  let parsed: URL
+  try {
+    parsed = new URL(origin)
+  }
+  catch {
+    throw new Error(`Invalid proxy origin: must be a valid http:// or https:// URL`)
+  }
+  if ((parsed.protocol !== `http:` && parsed.protocol !== `https:`) || !parsed.hostname)
+    throw new Error(`Invalid proxy origin: must start with http:// or https://`)
+  if (parsed.username || parsed.password)
+    throw new Error(`Invalid proxy origin: embedded credentials are not allowed`)
+  if (parsed.search || parsed.hash)
+    throw new Error(`Invalid proxy origin: query parameters and fragments are not allowed`)
+  return origin
+}
+
 function parseDataImageUri(dataUri: string): ImageBinary {
-  const match = /^data:(image\/[a-z0-9.+-]+)(;base64)?,(.*)$/i.exec(dataUri)
+  if (dataUri.length > MAX_WECHAT_DATA_URI_CHARS)
+    throw new Error(`Image exceeds maximum size of 10 MB`)
+  const commaIdx = dataUri.indexOf(`,`)
+  if (commaIdx === -1)
+    throw new Error(`Unsupported image data URI`)
+  const header = dataUri.slice(0, commaIdx)
+  const match = /^data:(image\/[a-z0-9.+-]+)(;base64)?$/i.exec(header)
   if (!match)
     throw new Error(`Unsupported image data URI`)
   const mimeType = match[1].toLowerCase()
   const isBase64 = Boolean(match[2])
-  const payload = match[3]
+  const payload = dataUri.slice(commaIdx + 1)
   const raw = isBase64
-    ? Buffer.from(payload, `base64`)
+    ? Buffer.from(payload.replace(/\s+/g, ``), `base64`)
     : Buffer.from(decodeURIComponent(payload), `utf-8`)
+  if (raw.byteLength === 0)
+    throw new Error(`Image payload is empty`)
+  if (raw.byteLength > MAX_WECHAT_IMAGE_BYTES)
+    throw new Error(`Image exceeds maximum size of 10 MB`)
   const ext = extensionForMime(mimeType)
   return {
     buffer: raw,
@@ -169,6 +203,9 @@ async function defaultReadLocalFile(filePath: string): Promise<ImageBinary> {
   const ext = path.extname(resolved).toLowerCase()
   if (!ALLOWED_LOCAL_IMAGE_EXTENSIONS.has(ext))
     throw new Error(`Unsupported local image format: ${ext || `unknown`}`)
+  const stat = await fs.stat(resolved)
+  if (!stat.isFile() || stat.size === 0 || stat.size > MAX_WECHAT_IMAGE_BYTES)
+    throw new Error(`Local image must be a non-empty file <= 10 MB`)
   const data = await fs.readFile(resolved)
   return {
     buffer: data,
@@ -238,7 +275,9 @@ export class WeChatPublisher {
   private readonly concurrency: number
   private readonly pollIntervalMs: number
   private readonly maxPollAttempts: number
+  private readonly requestTimeoutMs: number
   private readonly tokenCache = new Map<string, CachedToken>()
+  private readonly inFlightTokens = new Map<string, Promise<string>>()
   private readonly allowedLocalPaths = new Set<string>()
 
   constructor(options: WeChatPublisherOptions = {}) {
@@ -251,6 +290,27 @@ export class WeChatPublisher {
     this.concurrency = options.concurrency ?? DEFAULT_CONCURRENCY
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
     this.maxPollAttempts = options.maxPollAttempts ?? DEFAULT_MAX_POLL_ATTEMPTS
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+  }
+
+  private rememberAllowedPath(canonicalPath: string): void {
+    if (this.allowedLocalPaths.has(canonicalPath))
+      this.allowedLocalPaths.delete(canonicalPath)
+    this.allowedLocalPaths.add(canonicalPath)
+    while (this.allowedLocalPaths.size > MAX_ALLOWED_LOCAL_PATHS) {
+      const oldest = this.allowedLocalPaths.values().next().value
+      if (oldest === undefined)
+        break
+      this.allowedLocalPaths.delete(oldest)
+    }
+  }
+
+  /** Authorize an already-canonicalized local image path resolved asynchronously by the main process. */
+  allowCanonicalLocalImagePath(canonicalPath: string): void {
+    const trimmed = canonicalPath.trim()
+    if (!trimmed)
+      return
+    this.rememberAllowedPath(path.resolve(trimmed))
   }
 
   /** Authorize a local image file explicitly picked by the user via the native picker. */
@@ -260,12 +320,19 @@ export class WeChatPublisher {
       return
     const resolved = path.resolve(trimmed)
     try {
-      this.allowedLocalPaths.add(fsSync.realpathSync.native(resolved))
+      this.rememberAllowedPath(fsSync.realpathSync.native(resolved))
     }
     catch {
       if (this.hasCustomLocalReader)
-        this.allowedLocalPaths.add(resolved)
+        this.rememberAllowedPath(resolved)
     }
+  }
+
+  private fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+    return this.fetchFn(url, {
+      ...init,
+      signal: init?.signal ?? AbortSignal.timeout(this.requestTimeoutMs),
+    })
   }
 
   private emitProgress(event: WeChatPublishProgressEvent): void {
@@ -314,49 +381,73 @@ export class WeChatPublisher {
     return parsed
   }
 
-  private tokenCacheKey(origin: string, appID: string): string {
-    return `${origin}|${appID}`
+  private tokenCacheKey(origin: string, appID: string, appsecret: string): string {
+    const secretDigest = crypto.createHash(`sha256`).update(appsecret.trim()).digest(`hex`).slice(0, 16)
+    return `${origin}|${appID.trim()}|${secretDigest}`
   }
 
   async getAccessToken(credentials: WeChatMpCredentials, forceRefresh = false): Promise<string> {
-    const origin = resolveWeChatApiOrigin(credentials.proxyOrigin)
-    const cacheKey = this.tokenCacheKey(origin, credentials.appID)
+    const origin = validateWeChatOrigin(credentials.proxyOrigin)
+    const appID = credentials.appID.trim()
+    const appsecret = credentials.appsecret.trim()
+    const cacheKey = this.tokenCacheKey(origin, appID, appsecret)
     const cached = this.tokenCache.get(cacheKey)
     if (!forceRefresh && cached && cached.expiresAt > Date.now())
       return cached.accessToken
 
-    const response = await this.fetchFn(buildWeChatStableTokenUrl(origin), {
-      method: `POST`,
-      headers: {
-        'Content-Type': `application/json`,
-      },
-      body: JSON.stringify(buildWeChatStableTokenBody(credentials.appID, credentials.appsecret)),
-    })
+    const existingInFlight = this.inFlightTokens.get(cacheKey)
+    if (existingInFlight)
+      return existingInFlight
 
-    const data = await this.parseJsonResponse<StableTokenResponse>(response, credentials.appsecret)
-    if (!data.access_token)
-      await this.throwWeChatError(data.errcode, data.errmsg || `Missing access_token`, credentials.appsecret)
+    const fetchPromise = (async () => {
+      const response = await this.fetchWithTimeout(buildWeChatStableTokenUrl(origin), {
+        method: `POST`,
+        headers: {
+          'Content-Type': `application/json`,
+        },
+        body: JSON.stringify(buildWeChatStableTokenBody(appID, appsecret)),
+      })
 
-    const ttlSeconds = Math.max(60, (data.expires_in ?? 7200) - 60)
-    this.tokenCache.set(cacheKey, {
-      accessToken: data.access_token!,
-      expiresAt: Date.now() + ttlSeconds * 1000,
-    })
-    return data.access_token!
+      const data = await this.parseJsonResponse<StableTokenResponse>(response, appsecret)
+      if (!data.access_token)
+        await this.throwWeChatError(data.errcode, data.errmsg || `Missing access_token`, appsecret)
+
+      const ttlSeconds = Math.max(60, (data.expires_in ?? 7200) - 60)
+      this.tokenCache.set(cacheKey, {
+        accessToken: data.access_token!,
+        expiresAt: Date.now() + ttlSeconds * 1000,
+      })
+      return data.access_token!
+    })()
+
+    this.inFlightTokens.set(cacheKey, fetchPromise)
+    try {
+      return await fetchPromise
+    }
+    finally {
+      if (this.inFlightTokens.get(cacheKey) === fetchPromise)
+        this.inFlightTokens.delete(cacheKey)
+    }
   }
 
   private async withTokenRetry<T>(
     credentials: WeChatMpCredentials,
     operation: (token: string, origin: string) => Promise<T>,
   ): Promise<T> {
-    const origin = resolveWeChatApiOrigin(credentials.proxyOrigin)
+    const origin = validateWeChatOrigin(credentials.proxyOrigin)
+    const cacheKey = this.tokenCacheKey(origin, credentials.appID, credentials.appsecret)
     const token = await this.getAccessToken(credentials, false)
     try {
       return await operation(token, origin)
     }
     catch (err) {
       if (err instanceof WeChatApiError && isWeChatTokenExpiredError(err.errcode)) {
-        this.tokenCache.delete(this.tokenCacheKey(origin, credentials.appID))
+        const latest = this.tokenCache.get(cacheKey)
+        // If a sibling worker already refreshed the token, reuse it instead of burning quota again.
+        if (latest && latest.accessToken !== token && latest.expiresAt > Date.now())
+          return await operation(latest.accessToken, origin)
+        if (latest?.accessToken === token)
+          this.tokenCache.delete(cacheKey)
         const refreshed = await this.getAccessToken(credentials, true)
         return await operation(refreshed, origin)
       }
@@ -370,11 +461,16 @@ export class WeChatPublisher {
       return parseDataImageUri(normalized)
 
     if (/^https?:\/\//i.test(normalized)) {
-      const response = await this.fetchFn(normalized)
+      const response = await this.fetchWithTimeout(normalized)
       if (!response.ok)
         throw new Error(`Failed to fetch image (${response.status}): ${normalized}`)
+      const contentLength = Number(response.headers.get(`content-length`))
+      if (Number.isFinite(contentLength) && contentLength > MAX_WECHAT_IMAGE_BYTES)
+        throw new Error(`Remote image exceeds maximum size of 10 MB: ${normalized}`)
       const contentType = response.headers.get(`content-type`)?.split(`;`)[0]?.trim().toLowerCase()
       const arrayBuf = await response.arrayBuffer()
+      if (arrayBuf.byteLength === 0 || arrayBuf.byteLength > MAX_WECHAT_IMAGE_BYTES)
+        throw new Error(`Remote image must be between 1 byte and 10 MB: ${normalized}`)
       let urlExt = ``
       try {
         urlExt = path.extname(new URL(normalized).pathname).toLowerCase()
@@ -421,7 +517,7 @@ export class WeChatPublisher {
   ): Promise<string> {
     const binary = await this.loadImageBinary(source)
     return this.withTokenRetry(credentials, async (token, origin) => {
-      const response = await this.fetchFn(
+      const response = await this.fetchWithTimeout(
         buildWeChatUploadImgUrl(origin, token),
         {
           method: `POST`,
@@ -440,9 +536,12 @@ export class WeChatPublisher {
    * editor image uploads and article publishing share one WeChat access_token.
    */
   async uploadImage(request: WeChatUploadImageRequest): Promise<WeChatUploadImageResult> {
-    const secret = request.credentials?.appsecret ?? ``
+    if (!request || typeof request !== `object`)
+      return { ok: false, error: `Invalid image upload request.` }
+
+    const secret = typeof request.credentials?.appsecret === `string` ? request.credentials.appsecret : ``
     try {
-      const appID = request.credentials?.appID?.trim() ?? ``
+      const appID = typeof request.credentials?.appID === `string` ? request.credentials.appID.trim() : ``
       const appsecret = secret.trim()
       if (!appID || !appsecret) {
         throw new WeChatApiError({
@@ -451,25 +550,39 @@ export class WeChatPublisher {
           message: `WeChat Official Account AppID and AppSecret are required.`,
         })
       }
+      if (typeof request.dataUrl !== `string` || !request.dataUrl.trim())
+        throw new Error(`Image data URI is required.`)
 
+      const rawProxy = typeof request.credentials?.proxyOrigin === `string`
+        ? request.credentials.proxyOrigin.trim()
+        : ``
       const credentials: WeChatMpCredentials = {
         appID,
         appsecret,
-        proxyOrigin: request.credentials.proxyOrigin?.trim() || undefined,
+        proxyOrigin: rawProxy || undefined,
       }
-      const parsed = parseDataImageUri(request.dataUrl)
+      const parsed = parseDataImageUri(request.dataUrl.trim())
+      const rawMime = typeof request.mimeType === `string` ? request.mimeType.trim().toLowerCase() : ``
+      const mimeType = /^image\/[a-z0-9.+-]+$/.test(rawMime) ? rawMime : parsed.mimeType
+      const rawFilename = typeof request.filename === `string`
+        ? path.basename(request.filename.trim()).replace(/[\r\n\0"]/g, ``).slice(0, 128)
+        : ``
       const binary: ImageBinary = {
         buffer: parsed.buffer,
-        mimeType: request.mimeType || parsed.mimeType,
-        filename: request.filename || parsed.filename,
+        mimeType,
+        filename: rawFilename || parsed.filename,
       }
-      const useUploadImg = shouldUseWeChatUploadImg(request.byteSize || binary.buffer.byteLength, binary.mimeType)
+      const declaredSize = typeof request.byteSize === `number` && Number.isFinite(request.byteSize) && request.byteSize > 0
+        ? request.byteSize
+        : 0
+      const effectiveByteSize = Math.max(binary.buffer.byteLength, declaredSize)
+      const useUploadImg = shouldUseWeChatUploadImg(effectiveByteSize, binary.mimeType)
 
       const url = await this.withTokenRetry(credentials, async (token, origin) => {
         const endpoint = useUploadImg
           ? buildWeChatUploadImgUrl(origin, token)
           : buildWeChatAddMaterialUrl(origin, token, `image`)
-        const response = await this.fetchFn(endpoint, {
+        const response = await this.fetchWithTimeout(endpoint, {
           method: `POST`,
           body: this.buildMediaForm(binary),
         })
@@ -497,7 +610,7 @@ export class WeChatPublisher {
   ): Promise<string> {
     const binary = await this.loadImageBinary(coverSource)
     return this.withTokenRetry(credentials, async (token, origin) => {
-      const response = await this.fetchFn(
+      const response = await this.fetchWithTimeout(
         buildWeChatAddMaterialUrl(origin, token, `image`),
         {
           method: `POST`,
@@ -523,7 +636,7 @@ export class WeChatPublisher {
     },
   ): Promise<string> {
     return this.withTokenRetry(credentials, async (token, origin) => {
-      const response = await this.fetchFn(
+      const response = await this.fetchWithTimeout(
         buildWeChatDraftAddUrl(origin, token),
         {
           method: `POST`,
@@ -557,7 +670,7 @@ export class WeChatPublisher {
     mediaId: string,
   ): Promise<string> {
     return this.withTokenRetry(credentials, async (token, origin) => {
-      const response = await this.fetchFn(
+      const response = await this.fetchWithTimeout(
         buildWeChatFreePublishSubmitUrl(origin, token),
         {
           method: `POST`,
@@ -580,7 +693,7 @@ export class WeChatPublisher {
   ): Promise<string | undefined> {
     for (let attempt = 0; attempt < this.maxPollAttempts; attempt += 1) {
       const data = await this.withTokenRetry(credentials, async (token, origin) => {
-        const response = await this.fetchFn(
+        const response = await this.fetchWithTimeout(
           buildWeChatFreePublishGetUrl(origin, token),
           {
             method: `POST`,
@@ -597,7 +710,7 @@ export class WeChatPublisher {
         return data.article_detail?.item?.[0]?.article_url ?? data.article_url
       }
 
-      if (typeof data.publish_status === `number` && data.publish_status >= 2) {
+      if (typeof data.publish_status === `number` && data.publish_status !== 1) {
         throw new WeChatApiError({
           errmsg: `publish_status=${data.publish_status}`,
           errorCodeKey: `publish_failed`,
@@ -617,12 +730,27 @@ export class WeChatPublisher {
   }
 
   async publish(request: WeChatPublishRequest): Promise<WeChatPublishResult> {
-    const publishId = request.publishId || crypto.randomUUID()
-    const secret = request.credentials?.appsecret ?? ``
+    if (!request || typeof request !== `object`) {
+      return {
+        ok: false,
+        mode: `draft`,
+        errorCodeKey: `unknown`,
+        error: `Invalid publish request.`,
+      }
+    }
+
+    const publishId = typeof request.publishId === `string` && request.publishId.trim()
+      ? request.publishId.trim().slice(0, 128)
+      : crypto.randomUUID()
+    const fallbackMode = request.mode === `publish` ? `publish` : `draft`
+    const secret = typeof request.credentials?.appsecret === `string` ? request.credentials.appsecret : ``
     let createdMediaId: string | undefined
 
     try {
-      const appID = request.credentials?.appID?.trim() ?? ``
+      if (request.mode !== `draft` && request.mode !== `publish`)
+        throw new Error(`Invalid publish mode.`)
+
+      const appID = typeof request.credentials?.appID === `string` ? request.credentials.appID.trim() : ``
       const appsecret = secret.trim()
       if (!appID || !appsecret) {
         throw new WeChatApiError({
@@ -632,18 +760,37 @@ export class WeChatPublisher {
         })
       }
 
+      if (typeof request.title !== `string`)
+        throw new TypeError(`Article title must be a string.`)
       const title = request.title.trim().slice(0, 64)
       if (!title)
         throw new Error(`Article title is required.`)
 
+      if (typeof request.coverSource !== `string`)
+        throw new TypeError(`Cover image source must be a string.`)
       const coverSource = request.coverSource.trim()
-      if (!coverSource)
-        throw new Error(`Cover image is required.`)
+      if (!coverSource || coverSource.length > MAX_WECHAT_DATA_URI_CHARS)
+        throw new Error(`Cover image is required and must not exceed 10 MB.`)
 
+      if (typeof request.contentHtml !== `string` || !request.contentHtml.trim())
+        throw new Error(`Article HTML content is required.`)
+      if (request.contentHtml.length > MAX_WECHAT_HTML_CHARS)
+        throw new Error(`Article HTML content exceeds maximum size.`)
+
+      if (request.author !== undefined && typeof request.author !== `string`)
+        throw new TypeError(`Article author must be a string.`)
+      if (request.digest !== undefined && typeof request.digest !== `string`)
+        throw new TypeError(`Article digest must be a string.`)
+      if (typeof request.needOpenComment !== `boolean`)
+        throw new TypeError(`needOpenComment must be a boolean.`)
+
+      const rawProxy = typeof request.credentials?.proxyOrigin === `string`
+        ? request.credentials.proxyOrigin.trim()
+        : ``
       const credentials: WeChatMpCredentials = {
         appID,
         appsecret,
-        proxyOrigin: request.credentials.proxyOrigin?.trim() || undefined,
+        proxyOrigin: rawProxy || undefined,
       }
 
       // 1. Acquire token
@@ -686,7 +833,7 @@ export class WeChatPublisher {
       this.emitProgress({ publishId, stage: `draft` })
       const mediaId = await this.createDraft(credentials, {
         title,
-        author: (request.author ?? ``).trim(),
+        author: (request.author ?? ``).trim().slice(0, 64),
         digest: (request.digest ?? ``).trim().slice(0, 120),
         content: rewrittenHtml,
         thumbMediaId,
@@ -753,7 +900,7 @@ export class WeChatPublisher {
       })
       return {
         ok: false,
-        mode: request.mode,
+        mode: fallbackMode,
         mediaId: createdMediaId,
         errcode: apiErr?.errcode,
         errorCodeKey: apiErr?.errorCodeKey ?? `unknown`,

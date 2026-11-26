@@ -132,7 +132,7 @@ export class QuitGuard {
   }
 
   setLocale(locale: string): void {
-    if (typeof locale === `string` && locale.trim())
+    if (typeof locale === `string` && locale.trim() && locale.length <= 32)
       this.explicitLocale = locale.trim()
   }
 
@@ -161,6 +161,7 @@ export class QuitGuard {
    */
   requestNonInteractiveQuit(): void {
     this.nonInteractive = true
+    this.pendingQuit = null
     if (this.state === `disposing` || this.state === `ready_to_quit`)
       return
     // A native modal sheet may already be blocking normal app.quit() if we were confirming.
@@ -210,6 +211,31 @@ export class QuitGuard {
       })
   }
 
+  private finishQuit(forceAfterDispose: boolean, timedOut: boolean): void {
+    this.state = `ready_to_quit`
+    const pendingQuit = this.pendingQuit
+    this.pendingQuit = null
+
+    if (forceAfterDispose) {
+      this.options.forceExit(0)
+      return
+    }
+    if (pendingQuit) {
+      try {
+        pendingQuit()
+      }
+      catch {
+        this.options.forceExit(0)
+      }
+      return
+    }
+    if (timedOut) {
+      this.options.forceExit(0)
+      return
+    }
+    this.options.quitApp()
+  }
+
   private beginDisposeAndQuit(forceAfterDispose = false): void {
     if (this.state === `disposing` || this.state === `ready_to_quit`)
       return
@@ -218,8 +244,7 @@ export class QuitGuard {
     let timedOut = false
     const timer = setTimeout(() => {
       timedOut = true
-      this.state = `ready_to_quit`
-      this.options.forceExit(0)
+      this.finishQuit(forceAfterDispose, true)
     }, this.disposeTimeoutMs)
     timer.unref?.()
 
@@ -230,13 +255,7 @@ export class QuitGuard {
         clearTimeout(timer)
         if (timedOut)
           return
-        this.state = `ready_to_quit`
-        if (forceAfterDispose)
-          this.options.forceExit(0)
-        else if (this.pendingQuit)
-          this.pendingQuit()
-        else
-          this.options.quitApp()
+        this.finishQuit(forceAfterDispose, false)
       })
   }
 }

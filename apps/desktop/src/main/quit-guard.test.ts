@@ -265,6 +265,28 @@ describe(`quitGuard decision matrix`, () => {
     expect(forceExit).toHaveBeenCalledWith(0)
     expect(quitApp).not.toHaveBeenCalled()
   })
+
+  it(`still invokes requestQuit install action when dispose times out instead of dropping the update`, async () => {
+    const forceExit = vi.fn()
+    const quitApp = vi.fn()
+    const install = vi.fn()
+
+    const guard = new QuitGuard({
+      getActiveSessions: () => [],
+      dispose: () => new Promise(() => {}),
+      confirmQuit: async () => true,
+      quitApp,
+      forceExit,
+      disposeTimeoutMs: 50,
+    })
+
+    guard.requestQuit(install)
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect(guard.currentState).toBe(`ready_to_quit`)
+    expect(install).toHaveBeenCalledTimes(1)
+    expect(forceExit).not.toHaveBeenCalled()
+    expect(quitApp).not.toHaveBeenCalled()
+  })
 })
 
 describe(`acpHost active session tracking`, () => {

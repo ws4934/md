@@ -30,16 +30,22 @@ export class WeChatApiError extends Error {
 
 export function sanitizeWeChatText(text: string, secret?: string): string {
   let clean = text
-  if (secret) {
-    clean = clean.split(secret).join(`[REDACTED]`)
-    const encoded = encodeURIComponent(secret)
-    if (encoded && encoded !== secret)
-      clean = clean.split(encoded).join(`[REDACTED]`)
+  if (typeof secret === `string` && secret) {
+    const candidates = secret.trim() && secret.trim() !== secret
+      ? [secret, secret.trim()]
+      : [secret]
+    for (const candidate of candidates) {
+      clean = clean.split(candidate).join(`[REDACTED]`)
+      const encoded = encodeURIComponent(candidate)
+      if (encoded && encoded !== candidate)
+        clean = clean.split(encoded).join(`[REDACTED]`)
+    }
   }
   clean = clean
     .replace(/([?&]secret=)[^&\s"']+/gi, `$1[REDACTED]`)
     .replace(/([?&]access_token=)[^&\s"']+/gi, `$1[REDACTED]`)
     .replace(/("secret"\s*:\s*")[^"]+(")/gi, `$1[REDACTED]$2`)
+    .replace(/("access_token"\s*:\s*")[^"]+(")/gi, `$1[REDACTED]$2`)
   return clean
 }
 
