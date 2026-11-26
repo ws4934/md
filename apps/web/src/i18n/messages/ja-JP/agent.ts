@@ -195,6 +195,8 @@ export default {
       apiKeySavedPlaceholder: `保存済み（空欄のままにすると維持、入力すると更新）`,
       keySaved: `保存済み`,
       clearKey: `削除`,
+      showKey: `シークレットを表示`,
+      hideKey: `シークレットを隠す`,
       keyRequired: `先に API キーを入力または保存してください`,
       modelsTitle: `利用可能なモデル`,
       enabledCount: `{count} 件有効`,

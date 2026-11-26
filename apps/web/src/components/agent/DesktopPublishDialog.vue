@@ -7,6 +7,7 @@ import type {
   WeChatPublishResult,
   WeChatPublishStage,
 } from '@md/shared/types'
+import type { ManagedPreviewUrl } from './agent-ui-helpers'
 import {
   AlertCircle,
   Archive,
@@ -33,6 +34,7 @@ import { usePostStore } from '@/stores/post'
 import { useRenderStore } from '@/stores/render'
 import { useThemeStore } from '@/stores/theme'
 import { useUIStore } from '@/stores/ui'
+import { createPreviewUrl, trapTabFocus } from './agent-ui-helpers'
 
 const props = defineProps<{
   open: boolean
@@ -47,8 +49,9 @@ const emit = defineEmits<{
 const MP_CONFIG_KEY = `mpConfig`
 const LAST_AUTHOR_KEY = `desktop_wechat_last_author`
 const MP_CONSOLE_URL = `https://mp.weixin.qq.com/`
+const MAX_CACHED_COVERS = 20
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const postStore = usePostStore()
 const editorStore = useEditorStore()
 const renderStore = useRenderStore()
@@ -74,8 +77,13 @@ const needOpenComment = ref(true)
 const coverSource = ref(``)
 const coverPreviewUrl = ref(``)
 const coverIsCustom = ref(false)
-const pickedCoverByPostId = new Map<string, { path: string, dataUrl: string }>()
+const pickedCoverByPostId = new Map<string, { path: string, preview: ManagedPreviewUrl }>()
 const contentImageCount = ref(0)
+const dialogRef = ref<HTMLElement | null>(null)
+const titleInputRef = ref<HTMLInputElement | null>(null)
+let previousFocusedEl: HTMLElement | null = null
+let loadGeneration = 0
+let isUnmounted = false
 
 const phase = ref<`idle` | `running` | `done`>(`idle`)
 const activeMode = ref<WeChatPublishMode>(`draft`)
@@ -115,6 +123,7 @@ const accountBadgeLetter = computed(() => {
 })
 
 const accountSummaryText = computed(() => {
+  void locale.value
   const name = currentAccount.value?.name?.trim()
   if (name) {
     const typeLabel = currentAccount.value?.serviceType === `2`
@@ -133,6 +142,7 @@ const canSubmit = computed(() =>
 )
 
 const localizedErrorMessage = computed(() => {
+  void locale.value
   const err = errorState.value
   if (!err)
     return ``
@@ -160,33 +170,6 @@ const localizedErrorMessage = computed(() => {
   }
 })
 
-const progressSteps = computed(() => {
-  const steps: Array<{ id: WeChatPublishStage, label: string }> = [
-    { id: `token`, label: t(`agent.publish.stages.token`) },
-  ]
-  if (imageProgress.value.total > 0 || contentImageCount.value > 0) {
-    const total = imageProgress.value.total || contentImageCount.value
-    steps.push({
-      id: `images`,
-      label: t(`agent.publish.stages.images`, {
-        current: imageProgress.value.current,
-        total,
-      }),
-    })
-  }
-  steps.push(
-    { id: `cover`, label: t(`agent.publish.stages.cover`) },
-    { id: `draft`, label: t(`agent.publish.stages.draft`) },
-  )
-  if (activeMode.value === `publish`) {
-    steps.push(
-      { id: `publishing`, label: t(`agent.publish.stages.publishing`) },
-      { id: `polling`, label: t(`agent.publish.stages.polling`) },
-    )
-  }
-  return steps
-})
-
 const stageOrder: WeChatPublishStage[] = [`token`, `images`, `cover`, `draft`, `publishing`, `polling`, `done`]
 
 function stepStatus(stageId: WeChatPublishStage): `done` | `active` | `pending` {
@@ -199,8 +182,46 @@ function stepStatus(stageId: WeChatPublishStage): `done` | `active` | `pending` 
   return `pending`
 }
 
+const progressSteps = computed(() => {
+  void locale.value
+  const steps: Array<{ id: WeChatPublishStage, label: string, status: `done` | `active` | `pending` }> = [
+    { id: `token`, label: t(`agent.publish.stages.token`), status: stepStatus(`token`) },
+  ]
+  if (imageProgress.value.total > 0 || contentImageCount.value > 0) {
+    const total = imageProgress.value.total || contentImageCount.value
+    steps.push({
+      id: `images`,
+      label: t(`agent.publish.stages.images`, {
+        current: imageProgress.value.current,
+        total,
+      }),
+      status: stepStatus(`images`),
+    })
+  }
+  steps.push(
+    { id: `cover`, label: t(`agent.publish.stages.cover`), status: stepStatus(`cover`) },
+    { id: `draft`, label: t(`agent.publish.stages.draft`), status: stepStatus(`draft`) },
+  )
+  if (activeMode.value === `publish`) {
+    steps.push(
+      { id: `publishing`, label: t(`agent.publish.stages.publishing`), status: stepStatus(`publishing`) },
+      { id: `polling`, label: t(`agent.publish.stages.polling`), status: stepStatus(`polling`) },
+    )
+  }
+  return steps
+})
+
 async function loadInitialState() {
-  const saved = await store.getJSON<Partial<WeChatMpCredentials>>(MP_CONFIG_KEY, {})
+  const generation = ++loadGeneration
+  editorStore.flushContentToPostStore()
+
+  const [saved, rawLastAuthor] = await Promise.all([
+    store.getJSON<Partial<WeChatMpCredentials>>(MP_CONFIG_KEY, {}),
+    store.get(LAST_AUTHOR_KEY),
+  ])
+  if (isUnmounted || !props.open || generation !== loadGeneration)
+    return
+
   mpCredentials.value = {
     appID: saved?.appID?.trim() ?? ``,
     appsecret: saved?.appsecret?.trim() ?? ``,
@@ -216,14 +237,14 @@ async function loadInitialState() {
   title.value = (draft.title || currentPost.value?.title || ``).trim().slice(0, 64)
   digest.value = draft.desc.trim().slice(0, 120)
 
-  const lastAuthor = (await store.get(LAST_AUTHOR_KEY))?.trim() ?? ``
+  const lastAuthor = rawLastAuthor?.trim() ?? ``
   author.value = lastAuthor || currentAccount.value?.name?.trim() || ``
 
   const postId = currentPost.value?.id ?? ``
   const rememberedCover = postId ? pickedCoverByPostId.get(postId) : undefined
   if (rememberedCover) {
     coverSource.value = rememberedCover.path
-    coverPreviewUrl.value = rememberedCover.dataUrl
+    coverPreviewUrl.value = rememberedCover.preview.url
     coverIsCustom.value = true
   }
   else {
@@ -253,16 +274,40 @@ function openAccountSettings() {
   uiStore.openPreferencesDialog(`wechat`)
 }
 
+let transientCoverRevoke: (() => void) | null = null
+
+function clearTransientCover() {
+  transientCoverRevoke?.()
+  transientCoverRevoke = null
+}
+
 async function pickCoverImage() {
   const picked = await window.mdDesktop?.pickImage()
-  if (!picked)
+  if (!picked || isUnmounted)
     return
+  const preview = createPreviewUrl(picked.dataUrl)
   coverSource.value = picked.path
-  coverPreviewUrl.value = picked.dataUrl
+  coverPreviewUrl.value = preview.url
   coverIsCustom.value = true
+  clearTransientCover()
+
   const postId = currentPost.value?.id
-  if (postId)
-    pickedCoverByPostId.set(postId, { path: picked.path, dataUrl: picked.dataUrl })
+  if (postId) {
+    const prev = pickedCoverByPostId.get(postId)
+    prev?.preview.revoke?.()
+    pickedCoverByPostId.delete(postId)
+    if (pickedCoverByPostId.size >= MAX_CACHED_COVERS) {
+      const oldestKey = pickedCoverByPostId.keys().next().value
+      if (oldestKey !== undefined) {
+        pickedCoverByPostId.get(oldestKey)?.preview.revoke?.()
+        pickedCoverByPostId.delete(oldestKey)
+      }
+    }
+    pickedCoverByPostId.set(postId, { path: picked.path, preview })
+  }
+  else {
+    transientCoverRevoke = preview.revoke
+  }
 }
 
 function handleProgressEvent(event: WeChatPublishProgressEvent) {
@@ -382,15 +427,43 @@ function openExternal(url: string) {
 }
 
 function handleKeydown(event: KeyboardEvent) {
-  if (event.key === `Escape` && props.open && phase.value !== `running`)
+  if (!props.open)
+    return
+  if (event.key === `Tab`) {
+    trapTabFocus(event, dialogRef.value)
+    return
+  }
+  if (event.key === `Escape` && phase.value !== `running`) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (confirmingPublish.value) {
+      confirmingPublish.value = false
+      return
+    }
     closeDialog()
+  }
 }
 
 watch(
   () => props.open,
   (isOpen) => {
-    if (isOpen)
+    if (isOpen) {
+      previousFocusedEl = document.activeElement instanceof HTMLElement ? document.activeElement : null
       void loadInitialState()
+      nextTick(() => {
+        if (titleInputRef.value)
+          titleInputRef.value.focus()
+        else
+          dialogRef.value?.focus()
+      })
+    }
+    else {
+      coverPreviewUrl.value = ``
+      clearTransientCover()
+      if (previousFocusedEl?.isConnected)
+        previousFocusedEl.focus()
+      previousFocusedEl = null
+    }
   },
   { immediate: true },
 )
@@ -401,6 +474,11 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  isUnmounted = true
+  clearTransientCover()
+  for (const entry of pickedCoverByPostId.values())
+    entry.preview.revoke?.()
+  pickedCoverByPostId.clear()
   unsubscribeProgress?.()
   unsubscribeProgress = null
   window.removeEventListener(`keydown`, handleKeydown)
@@ -417,10 +495,12 @@ onUnmounted(() => {
       @mousedown.self="closeDialog"
     >
       <div
+        ref="dialogRef"
+        tabindex="-1"
         role="dialog"
         aria-modal="true"
         :aria-label="t('agent.publish.title')"
-        class="flex w-[680px] max-w-full flex-col overflow-hidden rounded-2xl"
+        class="flex w-[680px] max-w-full flex-col overflow-hidden rounded-2xl outline-none"
         style="
           background-color: var(--dt-surface);
           border: 1px solid var(--dt-line);
@@ -501,12 +581,12 @@ onUnmounted(() => {
                 class="flex items-center gap-2.5 text-[13px]"
               >
                 <Check
-                  v-if="stepStatus(step.id) === 'done'"
+                  v-if="step.status === 'done'"
                   class="size-3.5 shrink-0"
                   style="color: var(--dt-green)"
                 />
                 <Loader2
-                  v-else-if="stepStatus(step.id) === 'active'"
+                  v-else-if="step.status === 'active'"
                   class="size-3.5 shrink-0 animate-spin"
                   style="color: var(--dt-accent)"
                 />
@@ -517,8 +597,8 @@ onUnmounted(() => {
                 />
                 <span
                   :style="{
-                    color: stepStatus(step.id) === 'pending' ? 'var(--dt-ink3)' : 'var(--dt-ink)',
-                    fontWeight: stepStatus(step.id) === 'active' ? 600 : 400,
+                    color: step.status === 'pending' ? 'var(--dt-ink3)' : 'var(--dt-ink)',
+                    fontWeight: step.status === 'active' ? 600 : 400,
                   }"
                 >
                   {{ step.label }}
@@ -609,6 +689,7 @@ onUnmounted(() => {
             <div class="flex w-[200px] shrink-0 flex-col gap-2">
               <button
                 type="button"
+                :aria-label="coverPreviewUrl ? t('agent.publish.changeCover') : t('agent.publish.pickCover')"
                 class="group relative flex h-[85px] w-[200px] cursor-pointer items-center justify-center overflow-hidden rounded-[10px] text-left transition-opacity hover:opacity-95"
                 :style="coverPreviewUrl
                   ? 'border: 1px solid var(--dt-line)'
@@ -630,6 +711,7 @@ onUnmounted(() => {
               <div class="flex gap-2">
                 <button
                   type="button"
+                  :aria-label="coverPreviewUrl ? t('agent.publish.changeCover') : t('agent.publish.pickCover')"
                   class="flex size-[85px] shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-[10px]"
                   :style="coverPreviewUrl
                     ? 'border: 1px solid var(--dt-line)'
@@ -680,6 +762,7 @@ onUnmounted(() => {
                   </span>
                 </div>
                 <input
+                  ref="titleInputRef"
                   v-model="title"
                   type="text"
                   maxlength="64"
@@ -724,6 +807,7 @@ onUnmounted(() => {
                   <button
                     type="button"
                     role="switch"
+                    :aria-label="t('agent.publish.openComments')"
                     :aria-checked="needOpenComment"
                     class="inline-flex h-5 w-[34px] shrink-0 cursor-pointer items-center rounded-[10px] p-0.5 transition-colors"
                     :style="{

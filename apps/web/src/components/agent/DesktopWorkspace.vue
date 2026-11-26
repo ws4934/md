@@ -22,6 +22,7 @@ import { clampGoToLineValue, jumpToLine } from '@/lib/markdown/headingNavigation
 import { useAgentStore } from '@/stores/agent'
 import { useThemeStore } from '@/stores/theme'
 import { useUIStore } from '@/stores/ui'
+import { blurFocusedDescendant } from './agent-ui-helpers'
 import AgentAvatar from './AgentAvatar.vue'
 import AgentPanel from './AgentPanel.vue'
 import DesktopSidebar from './DesktopSidebar.vue'
@@ -121,8 +122,23 @@ const isDraggingDivider = computed(() => activeDragPanels.value.size > 0)
 
 let isSyncingOuter = false
 let isSyncingInner = false
+const layoutRafIds = new Set<number>()
 const pendingWidthSaves: Partial<DesktopLayoutWidths> = {}
 let widthSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleLayoutRaf(fn: () => void) {
+  const id = requestAnimationFrame(() => {
+    layoutRafIds.delete(id)
+    fn()
+  })
+  layoutRafIds.add(id)
+}
+
+function cancelAllLayoutRafs() {
+  for (const id of layoutRafIds)
+    cancelAnimationFrame(id)
+  layoutRafIds.clear()
+}
 
 const mainMinPercent = computed(() => computeMainMinPercent({
   containerWidth: outerContainerWidth.value,
@@ -159,7 +175,7 @@ function scheduleWidthSave(panel: keyof DesktopLayoutWidths, sizePx: number) {
 }
 
 function resizePanelSafely(panelRef: ResizablePanelRef, size: number) {
-  requestAnimationFrame(() => {
+  scheduleLayoutRaf(() => {
     try {
       const panel = panelRef.value
       if (!panel || Math.abs(panel.getSize() - size) < 0.5)
@@ -174,7 +190,7 @@ function resizePanelSafely(panelRef: ResizablePanelRef, size: number) {
 
 function syncOuterLayout() {
   isSyncingOuter = true
-  requestAnimationFrame(() => {
+  scheduleLayoutRaf(() => {
     try {
       sidebarPanelRef.value?.resize(isSidebarOpen.value ? layoutWidths.value.sidebar : 0)
     }
@@ -183,7 +199,7 @@ function syncOuterLayout() {
       agentPanelRef.value?.resize(showAgentPanel.value ? layoutWidths.value.agent : 0)
     }
     catch {}
-    requestAnimationFrame(() => {
+    scheduleLayoutRaf(() => {
       isSyncingOuter = false
     })
   })
@@ -191,7 +207,7 @@ function syncOuterLayout() {
 
 function syncInnerLayout() {
   isSyncingInner = true
-  requestAnimationFrame(() => {
+  scheduleLayoutRaf(() => {
     const mode = viewMode.value
     try {
       if (mode === `edit`) {
@@ -207,7 +223,7 @@ function syncInnerLayout() {
       }
     }
     catch {}
-    requestAnimationFrame(() => {
+    scheduleLayoutRaf(() => {
       isSyncingInner = false
     })
   })
@@ -281,10 +297,14 @@ function resetSplit(panel: keyof DesktopLayoutWidths) {
 }
 
 watch([isSidebarOpen, showAgentPanel], ([sidebarOpen, agentOpen]) => {
-  if (!sidebarOpen)
+  if (!sidebarOpen) {
     clearDraggingPanel(`sidebar`)
-  if (!agentOpen)
+    blurFocusedDescendant(outerContainerRef.value?.querySelector<HTMLElement>(`[data-testid="sidebar-resizable-panel"]`))
+  }
+  if (!agentOpen) {
     clearDraggingPanel(`agent`)
+    blurFocusedDescendant(outerContainerRef.value?.querySelector<HTMLElement>(`[data-testid="agent-resizable-panel"]`))
+  }
   flushPendingWidthSaves()
   syncOuterLayout()
 })
@@ -435,6 +455,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   flushPendingWidthSaves()
+  cancelAllLayoutRafs()
   outerObserver?.disconnect()
   innerObserver?.disconnect()
   if (keyboardResizeTimer) {
@@ -474,6 +495,7 @@ onUnmounted(() => {
         data-testid="sidebar-resizable-panel"
         :data-collapsed="!isSidebarOpen ? 'true' : 'false'"
         :aria-hidden="!isSidebarOpen"
+        :inert="!isSidebarOpen || undefined"
         class="h-full overflow-hidden"
         :class="{ 'desktop-sidebar-panel-transition': !isDraggingDivider }"
         @resize="onSidebarResize"
@@ -536,19 +558,19 @@ onUnmounted(() => {
                     style="background-color: var(--dt-surface); border: 1px solid var(--dt-line)"
                     @submit.prevent="submitGoToLine"
                   >
-                    <span class="text-xs font-medium" style="color: var(--dt-ink2)">
-                      {{ t('footer.goToLine') }}
-                    </span>
-                    <input
-                      ref="goToLineInputRef"
-                      v-model="goToLineInput"
-                      type="text"
-                      inputmode="numeric"
-                      class="h-6 w-20 rounded px-2 text-xs outline-none"
-                      style="background-color: var(--dt-canvas); border: 1px solid var(--dt-line); color: var(--dt-ink); font-family: var(--dt-mono)"
-                      @keydown.escape.prevent="cancelGoToLine"
-                      @blur="isGoToLineActive = false"
-                    >
+                    <label class="flex items-center gap-2 text-xs font-medium" style="color: var(--dt-ink2)">
+                      <span>{{ t('keyboard.goToLine') }}</span>
+                      <input
+                        ref="goToLineInputRef"
+                        v-model="goToLineInput"
+                        type="text"
+                        inputmode="numeric"
+                        class="h-6 w-20 rounded px-2 text-xs font-normal outline-none"
+                        style="background-color: var(--dt-canvas); border: 1px solid var(--dt-line); color: var(--dt-ink); font-family: var(--dt-mono)"
+                        @keydown.escape.prevent="cancelGoToLine"
+                        @blur="isGoToLineActive = false"
+                      >
+                    </label>
                   </form>
 
                   <div class="min-h-0 flex-1 overflow-hidden">
@@ -667,6 +689,7 @@ onUnmounted(() => {
         data-testid="agent-resizable-panel"
         :data-collapsed="!showAgentPanel ? 'true' : 'false'"
         :aria-hidden="!showAgentPanel"
+        :inert="!showAgentPanel || undefined"
         class="h-full overflow-hidden"
         @resize="onAgentResize"
       >

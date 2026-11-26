@@ -99,6 +99,8 @@ function getFlatIndex(groupIdx: number, cmdIdx: number) {
 }
 
 function onKeydown(event: KeyboardEvent) {
+  if (event.isComposing || event.keyCode === 229)
+    return
   if (event.key === `Escape`) {
     event.stopPropagation()
     close()

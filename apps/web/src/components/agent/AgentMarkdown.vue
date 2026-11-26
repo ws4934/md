@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { renderChatMarkdown } from '@md/core/utils'
 import { copyPlain } from '@/lib/browser/clipboard'
+import { isAllowedExternalHref } from './agent-ui-helpers'
 
 const props = defineProps<{
   content: string
@@ -14,7 +15,13 @@ const renderedHtml = computed(() => {
   return renderChatMarkdown(props.content, { copyLabel: t(`agent.chat.copy`) })
 })
 
-const copyTimers = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>()
+const copyTimers = new Map<HTMLButtonElement, ReturnType<typeof setTimeout>>()
+
+onBeforeUnmount(() => {
+  for (const timer of copyTimers.values())
+    clearTimeout(timer)
+  copyTimers.clear()
+})
 
 async function handleClick(event: MouseEvent) {
   const target = event.target as HTMLElement | null
@@ -38,6 +45,7 @@ async function handleClick(event: MouseEvent) {
       copyTimers.set(
         copyBtn,
         setTimeout(() => {
+          copyTimers.delete(copyBtn)
           copyBtn.textContent = t(`agent.chat.copy`)
           delete copyBtn.dataset.copied
         }, 1500),
@@ -50,12 +58,16 @@ async function handleClick(event: MouseEvent) {
   }
 
   const link = target.closest<HTMLAnchorElement>(`a.agent-md-link`)
-  if (link?.href) {
+  if (link) {
     event.preventDefault()
+    const rawHref = link.getAttribute(`href`)
+    if (!isAllowedExternalHref(rawHref))
+      return
+    const safeHref = rawHref!.trim()
     if (window.mdDesktop?.openExternal)
-      void window.mdDesktop.openExternal(link.href)
+      void window.mdDesktop.openExternal(safeHref)
     else
-      window.open(link.href, `_blank`, `noopener,noreferrer`)
+      window.open(safeHref, `_blank`, `noopener,noreferrer`)
   }
 }
 </script>

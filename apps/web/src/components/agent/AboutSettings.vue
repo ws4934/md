@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { DesktopUpdateState } from '@md/shared/types'
 import { CheckCircle2, Download, Info, Loader2, RefreshCw, RotateCw } from '@lucide/vue'
+import { shouldApplyUpdateCheckResult } from './agent-ui-helpers'
 
 const { t, locale } = useI18n()
 
@@ -110,7 +111,7 @@ async function handleCheck() {
 
   try {
     const next = await updatesApi.check()
-    if (!unmounted)
+    if (!unmounted && shouldApplyUpdateCheckResult(updateState.value, next))
       updateState.value = next
   }
   catch (error) {

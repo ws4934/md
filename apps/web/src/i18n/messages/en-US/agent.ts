@@ -195,6 +195,8 @@ export default {
       apiKeySavedPlaceholder: `Saved — leave blank to keep current key, or enter a new one`,
       keySaved: `Saved`,
       clearKey: `Clear`,
+      showKey: `Show secret`,
+      hideKey: `Hide secret`,
       keyRequired: `Please enter or save an API key first`,
       modelsTitle: `Enabled models`,
       enabledCount: `{count} enabled`,

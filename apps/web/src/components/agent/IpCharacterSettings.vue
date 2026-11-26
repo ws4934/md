@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import type { DesktopIpCharacter, DesktopIpLibrary } from '@md/shared/types'
+import type { ManagedPreviewUrl } from './agent-ui-helpers'
 import { Info, Loader2, Pencil, Smile, Star, Trash2 } from '@lucide/vue'
 import { useConfirmStore } from '@/stores/confirm'
+import { createPreviewUrl } from './agent-ui-helpers'
 
 const NAME_MAX = 40
 const DESCRIPTION_MAX = 200
@@ -15,10 +17,10 @@ const library = ref<DesktopIpLibrary>({ defaultId: null, characters: [] })
 const isLoading = ref(false)
 const loadError = ref(``)
 
-// Cached by `${id}:${updatedAt}` to avoid redundant IPC reads across pushes.
-const imageCache = new Map<string, string | null>()
+// Cached by `${id}:${updatedAt}` using compact Blob object URLs so multi-MB base64 strings stay out of reactive state.
+const imageCache = new Map<string, ManagedPreviewUrl | null>()
 const imageRequests = new Map<string, Promise<string | null>>()
-const imageById = ref<Record<string, string | null>>({})
+const imageById = shallowRef<Record<string, string | null>>({})
 
 const editingId = ref<string | null>(null)
 const editName = ref(``)
@@ -29,8 +31,10 @@ const isSaving = ref(false)
 const busyId = ref<string | null>(null)
 
 let unsubscribe: (() => void) | null = null
-let receivedPush = false
+let pushSeq = 0
 let unmounted = false
+
+const isBusy = computed(() => isSaving.value || busyId.value !== null)
 
 const isEditValid = computed(() => {
   const nameLen = editName.value.trim().length
@@ -45,6 +49,10 @@ function imageCacheKey(character: DesktopIpCharacter): string {
   return `${character.id}:${character.updatedAt}`
 }
 
+function revokeCacheEntry(entry: ManagedPreviewUrl | null | undefined) {
+  entry?.revoke?.()
+}
+
 async function syncImages(characters: DesktopIpCharacter[]) {
   const api = window.mdDesktop?.ipCharacters
   if (!api)
@@ -52,16 +60,18 @@ async function syncImages(characters: DesktopIpCharacter[]) {
 
   const activeKeys = new Set(characters.map(imageCacheKey))
 
-  for (const key of Array.from(imageCache.keys())) {
-    if (!activeKeys.has(key))
+  for (const [key, entry] of Array.from(imageCache.entries())) {
+    if (!activeKeys.has(key)) {
+      revokeCacheEntry(entry)
       imageCache.delete(key)
+    }
   }
 
   const nextById: Record<string, string | null> = {}
   for (const character of characters) {
     const key = imageCacheKey(character)
     if (imageCache.has(key))
-      nextById[character.id] = imageCache.get(key) ?? null
+      nextById[character.id] = imageCache.get(key)?.url ?? null
     else if (character.id in imageById.value)
       nextById[character.id] = imageById.value[character.id]
   }
@@ -81,17 +91,18 @@ async function syncImages(characters: DesktopIpCharacter[]) {
 
     const dataUrl = await request
     imageRequests.delete(key)
-    if (unmounted)
+    if (unmounted || imageCache.has(key))
       return
 
     const current = library.value.characters.find(c => c.id === character.id)
     if (!current || imageCacheKey(current) !== key)
       return
 
-    imageCache.set(key, dataUrl)
+    const managed = dataUrl ? createPreviewUrl(dataUrl) : null
+    imageCache.set(key, managed)
     imageById.value = {
       ...imageById.value,
-      [character.id]: dataUrl,
+      [character.id]: managed?.url ?? null,
     }
   }))
 }
@@ -110,20 +121,21 @@ onMounted(async () => {
     return
 
   unsubscribe = api.onChanged((next) => {
-    receivedPush = true
+    pushSeq += 1
     isLoading.value = false
     loadError.value = ``
     applyLibrary(next)
   })
 
+  const seqBefore = pushSeq
   isLoading.value = true
   try {
     const initial = await api.list()
-    if (!unmounted && !receivedPush)
+    if (!unmounted && pushSeq === seqBefore)
       applyLibrary(initial)
   }
   catch (error) {
-    if (!unmounted && !receivedPush)
+    if (!unmounted && pushSeq === seqBefore)
       loadError.value = error instanceof Error ? error.message : String(error)
   }
   finally {
@@ -136,6 +148,10 @@ onUnmounted(() => {
   unmounted = true
   unsubscribe?.()
   unsubscribe = null
+  for (const entry of imageCache.values())
+    revokeCacheEntry(entry)
+  imageCache.clear()
+  imageRequests.clear()
 })
 
 function startEdit(character: DesktopIpCharacter) {
@@ -156,9 +172,10 @@ function cancelEdit() {
 
 async function saveEdit(character: DesktopIpCharacter) {
   const api = window.mdDesktop?.ipCharacters
-  if (!api || isSaving.value || !isEditValid.value)
+  if (!api || isBusy.value || !isEditValid.value)
     return
 
+  const seqBefore = pushSeq
   isSaving.value = true
   editError.value = ``
   try {
@@ -169,7 +186,8 @@ async function saveEdit(character: DesktopIpCharacter) {
     })
     if (!unmounted) {
       cancelEdit()
-      applyLibrary(next)
+      if (pushSeq === seqBefore)
+        applyLibrary(next)
       toast.success(t(`common.saveSuccess`))
     }
   }
@@ -185,13 +203,14 @@ async function saveEdit(character: DesktopIpCharacter) {
 
 async function handleSetDefault(character: DesktopIpCharacter) {
   const api = window.mdDesktop?.ipCharacters
-  if (!api || busyId.value)
+  if (!api || isBusy.value)
     return
 
+  const seqBefore = pushSeq
   busyId.value = character.id
   try {
     const next = await api.setDefault(character.id)
-    if (!unmounted)
+    if (!unmounted && pushSeq === seqBefore)
       applyLibrary(next)
   }
   catch (error) {
@@ -211,16 +230,18 @@ function handleDelete(character: DesktopIpCharacter) {
     destructive: true,
     onConfirm: async () => {
       const api = window.mdDesktop?.ipCharacters
-      if (!api)
+      if (!api || isBusy.value)
         return
 
+      const seqBefore = pushSeq
       busyId.value = character.id
       try {
         const next = await api.remove(character.id)
         if (!unmounted) {
           if (editingId.value === character.id)
             cancelEdit()
-          applyLibrary(next)
+          if (pushSeq === seqBefore)
+            applyLibrary(next)
           toast.success(t(`common.deleteSuccess`))
         }
       }
@@ -360,7 +381,7 @@ function handleDelete(character: DesktopIpCharacter) {
                 v-if="character.id !== library.defaultId"
                 type="button"
                 data-testid="ip-character-set-default"
-                :disabled="busyId === character.id"
+                :disabled="isBusy"
                 class="inline-flex h-7 cursor-pointer items-center gap-1 rounded-lg px-2.5 text-xs font-medium transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
                 style="background-color: var(--dt-canvas); color: var(--dt-ink); border: 1px solid var(--dt-line)"
                 @click="handleSetDefault(character)"
@@ -373,7 +394,7 @@ function handleDelete(character: DesktopIpCharacter) {
                 v-if="editingId !== character.id"
                 type="button"
                 data-testid="ip-character-edit"
-                :disabled="busyId === character.id"
+                :disabled="isBusy"
                 class="inline-flex h-7 cursor-pointer items-center gap-1 rounded-lg px-2.5 text-xs font-medium transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
                 style="background-color: var(--dt-canvas); color: var(--dt-ink2); border: 1px solid var(--dt-line)"
                 @click="startEdit(character)"
@@ -385,7 +406,7 @@ function handleDelete(character: DesktopIpCharacter) {
               <button
                 type="button"
                 data-testid="ip-character-delete"
-                :disabled="busyId === character.id"
+                :disabled="isBusy"
                 class="inline-flex h-7 cursor-pointer items-center gap-1 rounded-lg px-2.5 text-xs font-medium transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
                 style="background-color: var(--dt-canvas); color: var(--dt-red); border: 1px solid var(--dt-line)"
                 @click="handleDelete(character)"

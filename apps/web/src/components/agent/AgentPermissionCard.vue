@@ -13,13 +13,14 @@ const emit = defineEmits<{
   respond: [decision: AcpPermissionDecision]
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const isEditRequest = computed(() =>
   props.request.toolKind === `edit` || props.request.toolKind === `delete` || props.request.toolKind === `move`,
 )
 
 const headingText = computed(() => {
+  void locale.value
   if (props.request.toolKind === `execute`)
     return t(`agent.permission.titleExecute`)
   if (isEditRequest.value)
@@ -54,6 +55,7 @@ const hasAllowOnceOption = computed(
 )
 
 const resolvedLabel = computed(() => {
+  void locale.value
   switch (props.resolvedOutcome) {
     case `allow_once`:
       return t(`agent.permission.statusAllowed`)

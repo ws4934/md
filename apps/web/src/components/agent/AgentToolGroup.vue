@@ -34,6 +34,7 @@ const expandedRowIds = ref<Set<string>>(new Set())
 const imagePreviews = ref<Record<string, string>>({})
 const loadingImages = new Set<string>()
 const createdObjectUrls: string[] = []
+let isUnmounted = false
 
 const isExpanded = computed(() => {
   if (userExpanded.value !== null)
@@ -157,6 +158,8 @@ async function loadImagePreviewIfNeeded(toolId: string, workspacePath: string) {
       sessionId,
       path: workspacePath,
     })
+    if (isUnmounted)
+      return
     const blob = new Blob([img.data as BlobPart], { type: img.mimeType })
     const url = URL.createObjectURL(blob)
     createdObjectUrls.push(url)
@@ -182,6 +185,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  isUnmounted = true
   for (const url of createdObjectUrls)
     URL.revokeObjectURL(url)
 })
@@ -260,6 +264,7 @@ onBeforeUnmount(() => {
           type="button"
           class="group flex min-h-[24px] w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-[12px] transition-colors"
           :class="described.hasDetails ? 'cursor-pointer hover:bg-[var(--dt-canvas)]' : 'cursor-default'"
+          :aria-expanded="described.hasDetails ? isRowExpanded(entry.id) : undefined"
           @click="toggleRow(entry.id, described.hasDetails)"
         >
           <Check

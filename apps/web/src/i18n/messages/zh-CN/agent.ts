@@ -195,6 +195,8 @@ export default {
       apiKeySavedPlaceholder: `已保存，留空则保持不变，输入新值将替换`,
       keySaved: `已保存`,
       clearKey: `清除`,
+      showKey: `显示密钥`,
+      hideKey: `隐藏密钥`,
       keyRequired: `请先输入或保存 API Key`,
       modelsTitle: `可用模型`,
       enabledCount: `已启用 {count} 个模型`,

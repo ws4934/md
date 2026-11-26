@@ -13,7 +13,7 @@ const props = withDefaults(defineProps<{
   disabled: false,
 })
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const agentStore = useAgentStore()
 
 const {
@@ -25,7 +25,10 @@ const {
 const MENU_WIDTH = 316
 const triggerRef = ref<HTMLElement | null>(null)
 const menuRef = ref<HTMLElement | null>(null)
-const permissionOptions = useAcpPermissionOptions(t)
+const permissionOptions = useAcpPermissionOptions((key) => {
+  void locale.value
+  return t(key)
+})
 
 const {
   isOpen,

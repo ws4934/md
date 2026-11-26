@@ -66,6 +66,7 @@ function onInput(event: Event) {
       >
       <button
         type="button"
+        :aria-label="showKey ? t('agent.modelApi.hideKey') : t('agent.modelApi.showKey')"
         class="ml-2 cursor-pointer"
         style="color: var(--dt-ink3)"
         @click="showKey = !showKey"

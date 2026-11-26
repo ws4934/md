@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Post } from '@/types/post'
 import { Ellipsis, PanelLeft, Search, Settings, SquarePen, Trash2 } from '@lucide/vue'
-import { ctrlSign } from '@md/shared/configs'
+import { ctrlSign, shiftSign } from '@md/shared/configs'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,6 +14,7 @@ import { useConfirmStore } from '@/stores/confirm'
 import { useEditorStore } from '@/stores/editor'
 import { usePostStore } from '@/stores/post'
 import { useUIStore } from '@/stores/ui'
+import { isImeComposing } from './agent-ui-helpers'
 
 const { t, locale } = useI18n()
 const postStore = usePostStore()
@@ -27,6 +28,7 @@ const { writingPostIds } = storeToRefs(agentStore)
 
 const isMac = computed(() => window.mdDesktop?.platform === `darwin`)
 const sidebarShortcutHint = `${ctrlSign}\\`
+const commandPaletteShortcutHint = `${ctrlSign}${shiftSign}.`
 
 function toTimestamp(value: Date | string | number): number {
   if (value instanceof Date)
@@ -62,13 +64,39 @@ function selectPost(post: Post) {
 function beginRename(post: Post) {
   renamingId.value = post.id
   renameDraft.value = post.title
+  nextTick(() => {
+    const input = document.querySelector<HTMLInputElement>(`[data-rename-post-id="${CSS.escape(post.id)}"]`)
+    input?.focus()
+    input?.select()
+  })
+}
+
+function cancelRename() {
+  renamingId.value = null
+  renameDraft.value = ``
 }
 
 function commitRename(id: string) {
+  if (renamingId.value !== id)
+    return
   const next = renameDraft.value.trim()
+  renamingId.value = null
   if (next)
     postStore.renamePost(id, next)
-  renamingId.value = null
+}
+
+function onRenameKeydown(event: KeyboardEvent, id: string) {
+  if (isImeComposing(event))
+    return
+  if (event.key === `Enter`) {
+    event.preventDefault()
+    commitRename(id)
+  }
+  else if (event.key === `Escape`) {
+    event.preventDefault()
+    event.stopPropagation()
+    cancelRename()
+  }
 }
 
 function deletePost(post: Post) {
@@ -141,7 +169,7 @@ function formatMeta(post: Post): string {
       >
         <Search class="size-3.5 shrink-0" />
         <span class="flex-1 text-[13px]">{{ t('agent.sidebar.search') }}</span>
-        <span class="text-[11.5px]">{{ isMac ? '⌘K' : 'Ctrl+K' }}</span>
+        <span class="text-[11.5px]">{{ commandPaletteShortcutHint }}</span>
       </button>
     </div>
 
@@ -159,39 +187,71 @@ function formatMeta(post: Post): string {
           writingPostIds.has(post.id),
           locale,
         ]"
-        class="group relative flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-3 py-[9px] transition-colors"
+        class="group relative flex w-full rounded-lg transition-colors"
         :style="{
           backgroundColor: post.id === currentPostId ? 'var(--dt-subtle)' : 'transparent',
         }"
-        @click="selectPost(post)"
       >
-        <input
-          v-if="renamingId === post.id"
-          v-model="renameDraft"
-          type="text"
-          class="w-full rounded bg-transparent text-[13px] font-medium outline-none"
-          style="color: var(--dt-ink)"
-          autofocus
-          @click.stop
-          @keydown.enter="commitRename(post.id)"
-          @keydown.escape="renamingId = null"
-          @blur="commitRename(post.id)"
-        >
-        <div v-else class="flex items-center gap-1">
-          <span
-            class="min-w-0 flex-1 truncate text-[13px]"
-            :style="{
-              color: 'var(--dt-ink)',
-              fontWeight: post.id === currentPostId ? 600 : 500,
-            }"
+        <div v-if="renamingId === post.id" class="flex w-full flex-col gap-0.5 px-3 py-[9px]">
+          <input
+            v-model="renameDraft"
+            :data-rename-post-id="post.id"
+            type="text"
+            class="w-full rounded bg-transparent text-[13px] font-medium outline-none"
+            style="color: var(--dt-ink)"
+            @click.stop
+            @keydown="onRenameKeydown($event, post.id)"
+            @blur="commitRename(post.id)"
           >
-            {{ post.title }}
-          </span>
+          <div class="flex items-center gap-1.5">
+            <template v-if="writingPostIds.has(post.id)">
+              <span class="size-[5px] shrink-0 rounded-full" style="background-color: var(--dt-accent)" />
+              <span class="text-[11.5px]" style="color: var(--dt-accent)">
+                {{ t('agent.panel.writingBadge') }}
+              </span>
+            </template>
+            <span v-else class="text-[11.5px]" style="color: var(--dt-ink3)">
+              {{ formatMeta(post) }}
+            </span>
+          </div>
+        </div>
+
+        <template v-else>
+          <button
+            type="button"
+            :aria-current="post.id === currentPostId ? 'true' : undefined"
+            class="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 rounded-lg px-3 py-[9px] pr-8 text-left"
+            @click="selectPost(post)"
+          >
+            <span
+              class="w-full truncate text-[13px]"
+              :style="{
+                color: 'var(--dt-ink)',
+                fontWeight: post.id === currentPostId ? 600 : 500,
+              }"
+            >
+              {{ post.title }}
+            </span>
+
+            <span class="flex items-center gap-1.5">
+              <template v-if="writingPostIds.has(post.id)">
+                <span class="size-[5px] shrink-0 rounded-full" style="background-color: var(--dt-accent)" />
+                <span class="text-[11.5px]" style="color: var(--dt-accent)">
+                  {{ t('agent.panel.writingBadge') }}
+                </span>
+              </template>
+              <span v-else class="text-[11.5px]" style="color: var(--dt-ink3)">
+                {{ formatMeta(post) }}
+              </span>
+            </span>
+          </button>
+
           <DropdownMenu>
             <DropdownMenuTrigger as-child>
               <button
                 type="button"
-                class="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100"
+                :aria-label="t('common.moreActions')"
+                class="absolute right-2 top-[9px] inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
                 style="color: var(--dt-ink3)"
                 @click.stop
               >
@@ -211,19 +271,7 @@ function formatMeta(post: Post): string {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
-
-        <div class="flex items-center gap-1.5">
-          <template v-if="writingPostIds.has(post.id)">
-            <span class="size-[5px] shrink-0 rounded-full" style="background-color: var(--dt-accent)" />
-            <span class="text-[11.5px]" style="color: var(--dt-accent)">
-              {{ t('agent.panel.writingBadge') }}
-            </span>
-          </template>
-          <span v-else class="text-[11.5px]" style="color: var(--dt-ink3)">
-            {{ formatMeta(post) }}
-          </span>
-        </div>
+        </template>
       </div>
     </div>
 

@@ -49,6 +49,7 @@ const displayPath = computed(() =>
       type="button"
       class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-2 text-left text-[12.5px] transition-opacity hover:opacity-85"
       :disabled="!stats.hasChanges"
+      :aria-expanded="stats.hasChanges ? expanded : undefined"
       @click="stats.hasChanges && (expanded = !expanded)"
     >
       <Check

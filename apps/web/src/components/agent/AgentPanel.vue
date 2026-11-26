@@ -10,11 +10,12 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { groupTimelineItems } from '@/lib/agent/timeline-blocks'
 import { useAgentStore } from '@/stores/agent'
+import { createTimelineBlockStabilizer } from './agent-ui-helpers'
 import AgentAvatar from './AgentAvatar.vue'
 import AgentComposer from './AgentComposer.vue'
 import AgentTimelineItem from './AgentTimelineItem.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const agentStore = useAgentStore()
 
 const {
@@ -33,10 +34,18 @@ const scrollRef = ref<HTMLElement | null>(null)
 const isNearBottom = ref(true)
 let savedScrollTop = 0
 let scrollRaf = 0
+let scrollMeasureRaf = 0
 
-const sessionTitle = computed(() => activeSession.value?.title || t(`agent.panel.defaultTitle`))
+const stabilizeBlocks = createTimelineBlockStabilizer()
+
+const sessionTitle = computed(() => {
+  void locale.value
+  return activeSession.value?.title || t(`agent.panel.defaultTitle`)
+})
 const timelineItems = computed<TimelineItem[]>(() => activeSession.value?.items ?? [])
-const displayBlocks = computed(() => groupTimelineItems(timelineItems.value))
+const displayBlocks = computed(() =>
+  stabilizeBlocks(activeSession.value?.id, groupTimelineItems(timelineItems.value)),
+)
 
 // Show a subtle live activity footer when running and the last block is not already displaying an active spinner.
 const showRunningFooter = computed(() => {
@@ -55,10 +64,15 @@ const showRunningFooter = computed(() => {
 })
 
 function handleTimelineScroll() {
-  const el = scrollRef.value
-  if (!el || !isPanelOpen.value)
+  if (!isPanelOpen.value || scrollMeasureRaf)
     return
-  isNearBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_THRESHOLD_PX
+  scrollMeasureRaf = requestAnimationFrame(() => {
+    scrollMeasureRaf = 0
+    const el = scrollRef.value
+    if (!el || !isPanelOpen.value)
+      return
+    isNearBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_THRESHOLD_PX
+  })
 }
 
 function scrollToBottomNow() {
@@ -82,6 +96,21 @@ function scheduleScrollToBottom() {
       el.scrollTop = el.scrollHeight
   })
 }
+
+watch(
+  () => activeSession.value?.id ?? null,
+  () => {
+    isNearBottom.value = true
+    savedScrollTop = 0
+    if (isPanelOpen.value) {
+      nextTick(() => {
+        const el = scrollRef.value
+        if (el)
+          el.scrollTop = el.scrollHeight
+      })
+    }
+  },
+)
 
 // Track only active tail changes (length + last item text/thought/status) when the panel is open.
 watch(
@@ -114,6 +143,10 @@ watch(isPanelOpen, (open) => {
       cancelAnimationFrame(scrollRaf)
       scrollRaf = 0
     }
+    if (scrollMeasureRaf) {
+      cancelAnimationFrame(scrollMeasureRaf)
+      scrollMeasureRaf = 0
+    }
     return
   }
   nextTick(() => {
@@ -128,6 +161,10 @@ onUnmounted(() => {
   if (scrollRaf) {
     cancelAnimationFrame(scrollRaf)
     scrollRaf = 0
+  }
+  if (scrollMeasureRaf) {
+    cancelAnimationFrame(scrollMeasureRaf)
+    scrollMeasureRaf = 0
   }
 })
 
@@ -155,8 +192,7 @@ function onRespondPermission(requestId: string, decision: AcpPermissionDecision)
       <div class="flex min-w-0 flex-1 items-center gap-2">
         <AgentAvatar
           v-if="selectedAgent"
-          :letter="selectedAgent.avatar.letter"
-          :color="selectedAgent.avatar.color"
+          :avatar="selectedAgent.avatar"
           :size="18"
         />
         <span
@@ -250,7 +286,8 @@ function onRespondPermission(requestId: string, decision: AcpPermissionDecision)
 
           <AgentTimelineItem
             v-for="block in displayBlocks"
-            :key="block.id"
+            :key="`${activeSession?.id ?? ''}:${block.id}`"
+            v-memo="[block, activeSession?.acpSessionId, locale]"
             :block="block"
             :acp-session-id="activeSession?.acpSessionId"
             @respond-permission="onRespondPermission"

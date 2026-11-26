@@ -12,7 +12,7 @@ const emit = defineEmits<{
   openModelApi: []
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const agentStore = useAgentStore()
 
 const { agents, settings, probeByAgent, probingAgents } = storeToRefs(agentStore)
@@ -117,7 +117,10 @@ async function submitCustomAgent() {
 
 const isDefaultPermOpen = ref(false)
 
-const permissionLevelOptions = useAcpPermissionOptions(t)
+const permissionLevelOptions = useAcpPermissionOptions((key) => {
+  void locale.value
+  return t(key)
+})
 
 const selectedDefaultPerm = computed(() =>
   permissionLevelOptions.value.find(o => o.id === settings.value.defaultPermissionLevel)

@@ -5,6 +5,7 @@ import PreferencesSection from '@/components/editor/dialogs/PreferencesSection.v
 import ImageHostSettings from '@/components/editor/dialogs/upload-providers/ImageHostSettings.vue'
 import { useUIStore } from '@/stores/ui'
 import AboutSettings from './AboutSettings.vue'
+import { trapTabFocus } from './agent-ui-helpers'
 import AgentsSettingsTab from './AgentsSettingsTab.vue'
 import ImageGenSettings from './ImageGenSettings.vue'
 import IpCharacterSettings from './IpCharacterSettings.vue'
@@ -33,32 +34,57 @@ const sections = computed(() => {
 
 const current = computed(() => sections.value.find(s => s.id === activeSection.value) ?? sections.value[0])
 
+const pageRef = ref<HTMLElement | null>(null)
+const backBtnRef = ref<HTMLButtonElement | null>(null)
+let previousFocusedEl: HTMLElement | null = null
+
 function close() {
   uiStore.isShowPreferencesDialog = false
   activeSection.value = `general`
 }
 
 function onKeydown(event: KeyboardEvent) {
+  if (event.key === `Tab`) {
+    trapTabFocus(event, pageRef.value)
+    return
+  }
   // Leave Escape to any dialog / popover opened from inside the page.
   if (event.key !== `Escape` || event.defaultPrevented || document.querySelector(`[role="dialog"], [data-reka-popper-content-wrapper]`))
     return
+  event.preventDefault()
   close()
 }
 
-onMounted(() => window.addEventListener(`keydown`, onKeydown))
-onUnmounted(() => window.removeEventListener(`keydown`, onKeydown))
+onMounted(() => {
+  previousFocusedEl = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  window.addEventListener(`keydown`, onKeydown)
+  nextTick(() => {
+    if (pageRef.value && !pageRef.value.contains(document.activeElement))
+      backBtnRef.value?.focus()
+  })
+})
+
+onUnmounted(() => {
+  window.removeEventListener(`keydown`, onKeydown)
+  if (previousFocusedEl?.isConnected)
+    previousFocusedEl.focus()
+  previousFocusedEl = null
+})
 </script>
 
 <template>
   <div
+    ref="pageRef"
+    tabindex="-1"
     data-testid="desktop-settings-page"
-    class="fixed inset-0 z-40 flex"
+    class="fixed inset-0 z-40 flex outline-none"
     style="background-color: var(--dt-canvas); color: var(--dt-ink)"
   >
     <nav class="flex w-[232px] shrink-0 flex-col select-none" style="background-color: var(--dt-sidebar)">
       <div class="desktop-drag-region h-[52px] shrink-0" />
       <div class="px-2.5 pb-3">
         <button
+          ref="backBtnRef"
           type="button"
           data-testid="settings-back"
           class="desktop-no-drag flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 text-[13px] transition-opacity hover:opacity-80"
@@ -76,6 +102,7 @@ onUnmounted(() => window.removeEventListener(`keydown`, onKeydown))
           :key="section.id"
           type="button"
           :data-testid="`settings-nav-${section.id}`"
+          :aria-current="section.id === current.id ? 'page' : undefined"
           class="flex h-8 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[13.5px] transition-colors"
           :style="section.id === current.id
             ? { backgroundColor: 'var(--dt-surface)', color: 'var(--dt-ink)', fontWeight: 600, boxShadow: '0 1px 2px rgba(0, 0, 0, 0.06)' }

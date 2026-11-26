@@ -15,7 +15,7 @@ defineProps<{
   >
     <div
       v-for="(line, idx) in lines"
-      :key="idx"
+      :key="`${idx}-${line.kind}-${line.text.slice(0, 32)}`"
       class="agent-diff-row flex items-start gap-2 px-2.5 py-px"
       :style="{
         backgroundColor: line.kind === 'add'

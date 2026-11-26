@@ -11,14 +11,31 @@ const { t } = useI18n()
 
 const credForm = ref<WeChatMpCredentials>({ appID: ``, appsecret: ``, proxyOrigin: `` })
 const showSecret = ref(false)
+let isUnmounted = false
+let hasUserEdited = false
+
+function markUserEdited() {
+  hasUserEdited = true
+}
 
 onMounted(async () => {
-  const saved = await store.getJSON<Partial<WeChatMpCredentials>>(MP_CONFIG_KEY, {})
-  credForm.value = {
-    appID: saved?.appID?.trim() ?? ``,
-    appsecret: saved?.appsecret?.trim() ?? ``,
-    proxyOrigin: saved?.proxyOrigin?.trim() ?? ``,
+  try {
+    const saved = await store.getJSON<Partial<WeChatMpCredentials>>(MP_CONFIG_KEY, {})
+    if (isUnmounted || hasUserEdited)
+      return
+    credForm.value = {
+      appID: saved?.appID?.trim() ?? ``,
+      appsecret: saved?.appsecret?.trim() ?? ``,
+      proxyOrigin: saved?.proxyOrigin?.trim() ?? ``,
+    }
   }
+  catch {
+    // Ignore storage read failure on teardown.
+  }
+})
+
+onUnmounted(() => {
+  isUnmounted = true
 })
 
 function openDevDocs() {
@@ -60,25 +77,29 @@ async function saveCredentials() {
           :placeholder="t('upload.placeholders.appId')"
           class="h-9 w-full rounded-lg px-3 text-[13.5px] outline-none"
           style="background-color: var(--dt-surface); border: 1px solid var(--dt-line); color: var(--dt-ink)"
+          @input="markUserEdited"
         >
       </label>
 
-      <label class="flex flex-col gap-1.5">
-        <span class="text-xs font-medium" style="color: var(--dt-ink2)">AppSecret</span>
+      <div class="flex flex-col gap-1.5">
+        <label for="wechat-mp-appsecret" class="text-xs font-medium" style="color: var(--dt-ink2)">AppSecret</label>
         <div
           class="flex h-9 w-full items-center rounded-lg px-3"
           style="background-color: var(--dt-surface); border: 1px solid var(--dt-line)"
         >
           <input
+            id="wechat-mp-appsecret"
             v-model="credForm.appsecret"
             :type="showSecret ? 'text' : 'password'"
             autocomplete="off"
             :placeholder="t('upload.placeholders.appSecret')"
             class="min-w-0 flex-1 bg-transparent text-[13.5px] outline-none"
             style="color: var(--dt-ink)"
+            @input="markUserEdited"
           >
           <button
             type="button"
+            :aria-label="showSecret ? t('agent.modelApi.hideKey') : t('agent.modelApi.showKey')"
             class="ml-2 cursor-pointer"
             style="color: var(--dt-ink3)"
             @click="showSecret = !showSecret"
@@ -87,7 +108,7 @@ async function saveCredentials() {
             <Eye v-else class="size-4" />
           </button>
         </div>
-      </label>
+      </div>
 
       <label class="flex flex-col gap-1.5">
         <span class="text-xs font-medium" style="color: var(--dt-ink2)">
@@ -100,6 +121,7 @@ async function saveCredentials() {
           :placeholder="t('agent.publish.proxyOptionalPlaceholder')"
           class="h-9 w-full rounded-lg px-3 text-[13.5px] outline-none"
           style="background-color: var(--dt-surface); border: 1px solid var(--dt-line); color: var(--dt-ink)"
+          @input="markUserEdited"
         >
       </label>
     </div>

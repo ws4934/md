@@ -110,6 +110,7 @@ onBeforeUnmount(() => {
         class="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded transition-colors hover:bg-[var(--dt-subtle)]"
         :class="summary.whitelistIp ? '' : 'ml-auto'"
         style="color: var(--dt-ink3)"
+        :aria-label="expanded ? t('common.collapse') : t('common.expand')"
         :aria-expanded="expanded"
         @click="expanded = !expanded"
       >
@@ -154,7 +155,7 @@ onBeforeUnmount(() => {
         font-family: var(--dt-mono);
       "
     >
-      <div v-for="(msg, idx) in summary.messages" :key="idx">
+      <div v-for="(msg, idx) in summary.messages" :key="`${idx}-${msg.slice(0, 32)}`">
         {{ msg }}
       </div>
     </div>

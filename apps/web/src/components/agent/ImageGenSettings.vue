@@ -5,6 +5,7 @@ import { imageServiceOptions } from '@md/shared/configs/ai-service-options'
 import { DEFAULT_IMAGE_GEN_QUALITIES, DEFAULT_IMAGE_GEN_SIZES } from '@md/shared/types'
 import PanelSelect from '@/components/shared/panel-dialog/PanelSelect.vue'
 import { Label } from '@/components/ui/label'
+import { createPreviewUrl } from './agent-ui-helpers'
 import AiSecretKeyInput from './AiSecretKeyInput.vue'
 
 const { t, locale } = useI18n()
@@ -24,6 +25,15 @@ const isSaving = ref(false)
 const isTesting = ref(false)
 const testError = ref(``)
 const testPreviewUrl = ref(``)
+let revokeTestPreview: (() => void) | null = null
+let isUnmounted = false
+let hasUserEdited = false
+
+function clearTestPreview() {
+  revokeTestPreview?.()
+  revokeTestPreview = null
+  testPreviewUrl.value = ``
+}
 
 const presetOptions = computed(() => {
   void locale.value
@@ -68,11 +78,23 @@ function applyLoadedConfig(cfg: DesktopImageGenConfig) {
 onMounted(async () => {
   if (!window.mdDesktop?.ai)
     return
-  const configs = await window.mdDesktop.ai.getConfigs()
-  applyLoadedConfig(configs.imageGen)
+  try {
+    const configs = await window.mdDesktop.ai.getConfigs()
+    if (!isUnmounted && !hasUserEdited)
+      applyLoadedConfig(configs.imageGen)
+  }
+  catch {
+    // Ignore when bridge config read fails on teardown.
+  }
+})
+
+onBeforeUnmount(() => {
+  isUnmounted = true
+  clearTestPreview()
 })
 
 function onPresetChange(nextPreset: string) {
+  hasUserEdited = true
   const prevPreset = imagePresets.find(p => p.value === providerPreset.value)
   providerPreset.value = nextPreset
   const found = imagePresets.find(p => p.value === nextPreset)
@@ -84,18 +106,21 @@ function onPresetChange(nextPreset: string) {
 }
 
 function onBaseUrlInput() {
+  hasUserEdited = true
   const normalized = baseUrl.value.trim().replace(/\/+$/, ``)
   const matched = imagePresets.find(p => p.endpoint && p.endpoint.replace(/\/+$/, ``) === normalized)
   providerPreset.value = matched ? matched.value : `custom`
 }
 
 function onApiKeyUpdate(next: string) {
+  hasUserEdited = true
   apiKeyInput.value = next
   if (next.trim())
     clearSavedKey.value = false
 }
 
 function markClearSavedKey() {
+  hasUserEdited = true
   apiKeyInput.value = ``
   clearSavedKey.value = true
 }
@@ -137,7 +162,7 @@ async function runTestGeneration() {
 
   isTesting.value = true
   testError.value = ``
-  testPreviewUrl.value = ``
+  clearTestPreview()
   try {
     const result = await window.mdDesktop.ai.testImageGen({
       baseUrl: baseUrl.value.trim(),
@@ -146,15 +171,20 @@ async function runTestGeneration() {
       size: size.value,
       quality: quality.value,
     })
+    if (isUnmounted)
+      return
     if (!result.ok || !result.dataUrl) {
       testError.value = result.error || t(`agent.imageGen.testFailed`)
       return
     }
-    testPreviewUrl.value = result.dataUrl
+    const managed = createPreviewUrl(result.dataUrl)
+    revokeTestPreview = managed.revoke
+    testPreviewUrl.value = managed.url
     toast.success(t(`agent.imageGen.testSuccess`))
   }
   finally {
-    isTesting.value = false
+    if (!isUnmounted)
+      isTesting.value = false
   }
 }
 </script>
@@ -297,7 +327,7 @@ async function runTestGeneration() {
       </div>
       <img
         :src="testPreviewUrl"
-        alt="Generated preview"
+        :alt="t('agent.imageGen.testPreviewTitle')"
         class="max-h-[260px] w-auto self-start rounded-lg object-contain"
         style="border: 1px solid var(--dt-line)"
       >

@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import type { AcpSlashCommand, DesktopPickedFile } from '@md/shared/types'
 import { ArrowUp, Paperclip, X } from '@lucide/vue'
+import { useId } from 'vue'
 import { scrollActiveOptionIntoView } from '@/lib/agent/floating-menu'
 import { useAgentStore } from '@/stores/agent'
+import { commandToken, createSlashMenuController } from './agent-ui-helpers'
 import AgentModelPicker from './AgentModelPicker.vue'
 import AgentPermissionPicker from './AgentPermissionPicker.vue'
 import AgentThinkingPicker from './AgentThinkingPicker.vue'
@@ -72,41 +74,8 @@ onBeforeUnmount(() => {
 
 const canSend = computed(() => !props.disabled && text.value.trim().length > 0)
 
+const commandListboxId = useId()
 const commandMenuRef = ref<HTMLElement | null>(null)
-const commandIndex = ref(0)
-const commandMenuDismissed = ref(false)
-
-// Slash menu only while the input is exactly `/query` (no whitespace yet); prefix matches sort first.
-// Codex lists skills as `$name` (typed as-is); other agents list bare names typed with `/`.
-function commandToken(command: AcpSlashCommand): string {
-  return command.name.startsWith(`$`) ? command.name : `/${command.name}`
-}
-
-const matchedCommands = computed(() => {
-  const query = /^\/(\S*)$/.exec(text.value)?.[1].toLowerCase()
-  if (query === undefined || props.disabled)
-    return []
-  const key = (c: AcpSlashCommand) => c.name.replace(/^\$/, ``).toLowerCase()
-  return agentStore.availableCommands
-    .filter(c => key(c).includes(query))
-    .sort((a, b) => Number(!key(a).startsWith(query)) - Number(!key(b).startsWith(query)))
-})
-
-const isCommandMenuOpen = computed(() => !commandMenuDismissed.value && matchedCommands.value.length > 0)
-
-watch(matchedCommands, () => {
-  commandIndex.value = 0
-  commandMenuDismissed.value = false
-})
-
-watch(commandIndex, () => nextTick(() => scrollActiveOptionIntoView(commandMenuRef.value)))
-
-// A missing or timed-out probe leaves the draft `/` list empty or partial; opening the menu asks again.
-watch(() => /^\/\S*$/.test(text.value), (isSlashQuery) => {
-  const agent = agentStore.selectedAgent
-  if (isSlashQuery && agent?.installed && agentStore.needsProbe(agent.id))
-    void agentStore.probeAgent(agent.id)
-})
 
 function insertCommand(command: AcpSlashCommand) {
   text.value = `${commandToken(command)} `
@@ -130,34 +99,31 @@ function submit() {
   attachments.value = []
 }
 
-function handleKeydown(event: KeyboardEvent) {
-  if (event.isComposing || event.keyCode === 229)
-    return
-  // Modified keys (e.g. Shift+Enter newline, Shift+Tab focus) keep their default behavior.
-  if (isCommandMenuOpen.value && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
-    const count = matchedCommands.value.length
-    if (event.key === `ArrowDown` || event.key === `ArrowUp`) {
-      event.preventDefault()
-      commandIndex.value = (commandIndex.value + (event.key === `ArrowDown` ? 1 : -1) + count) % count
-      return
-    }
-    if (event.key === `Enter` || event.key === `Tab`) {
-      event.preventDefault()
-      insertCommand(matchedCommands.value[commandIndex.value])
-      return
-    }
-    if (event.key === `Escape`) {
-      event.preventDefault()
-      commandMenuDismissed.value = true
-      return
-    }
-  }
-  if (event.key === `Enter` && !event.shiftKey) {
-    event.preventDefault()
-    if (!props.running)
-      submit()
-  }
-}
+const {
+  commandIndex,
+  slashQuery,
+  matchedCommands,
+  isCommandMenuOpen,
+  onFocus: handleTextareaFocus,
+  onBlur: handleTextareaBlur,
+  handleKeydown,
+} = createSlashMenuController({
+  text,
+  availableCommands: () => agentStore.availableCommands,
+  disabled: () => props.disabled,
+  running: () => props.running,
+  onInsertCommand: insertCommand,
+  onSubmit: submit,
+})
+
+watch(commandIndex, () => nextTick(() => scrollActiveOptionIntoView(commandMenuRef.value)))
+
+// A missing or timed-out probe leaves the draft `/` list empty or partial; opening the menu asks again.
+watch(() => slashQuery.value !== null, (isSlashQuery) => {
+  const agent = agentStore.selectedAgent
+  if (isSlashQuery && agent?.installed && agentStore.needsProbe(agent.id))
+    void agentStore.probeAgent(agent.id)
+})
 
 async function pickAttachments() {
   if (props.disabled || !window.mdDesktop)
@@ -197,8 +163,10 @@ defineExpose({ focus })
   >
     <div
       v-if="isCommandMenuOpen"
+      :id="commandListboxId"
       ref="commandMenuRef"
       role="listbox"
+      :aria-label="t('keyboard.slashCommand')"
       class="absolute inset-x-0 z-50 flex max-h-60 flex-col gap-0.5 overflow-y-auto rounded-xl p-1.5"
       :class="menuPlacement === 'up' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'"
       style="
@@ -210,12 +178,14 @@ defineExpose({ focus })
     >
       <div
         v-for="(command, index) in matchedCommands"
+        :id="`${commandListboxId}-opt-${index}`"
         :key="command.name"
         role="option"
         :aria-selected="index === commandIndex"
         :data-active="index === commandIndex ? 'true' : undefined"
         class="flex min-h-8 w-full shrink-0 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px]"
         :style="{ backgroundColor: index === commandIndex ? 'var(--dt-subtle)' : 'transparent' }"
+        @mouseenter="commandIndex = index"
         @click="insertCommand(command)"
       >
         <span class="max-w-[60%] shrink-0 truncate font-medium" style="color: var(--dt-ink)">{{ commandToken(command) }}</span>
@@ -250,12 +220,15 @@ defineExpose({ focus })
       :disabled="disabled"
       :rows="size === 'hero' ? 3 : 2"
       :placeholder="placeholder ?? t('agent.composer.placeholder')"
+      :aria-label="placeholder ?? t('agent.composer.placeholder')"
+      :aria-controls="isCommandMenuOpen ? commandListboxId : undefined"
+      :aria-activedescendant="isCommandMenuOpen ? `${commandListboxId}-opt-${commandIndex}` : undefined"
       class="w-full resize-none border-0 bg-transparent px-1 pt-0.5 outline-none placeholder:opacity-70 disabled:cursor-not-allowed"
       :class="size === 'hero' ? 'min-h-[64px] text-[15px] leading-[25px]' : 'min-h-[44px] text-[13.5px] leading-[22px]'"
       style="color: var(--dt-ink)"
       @keydown="handleKeydown"
-      @focus="commandMenuDismissed = false"
-      @blur="commandMenuDismissed = true"
+      @focus="handleTextareaFocus"
+      @blur="handleTextareaBlur"
     />
 
     <div ref="toolbarRef" class="agent-composer-toolbar">

@@ -6,6 +6,7 @@ import { API_MODEL_AGENT_ID, DEFAULT_PROTOCOL_BASE_URLS } from '@md/shared/types
 import PanelSelect from '@/components/shared/panel-dialog/PanelSelect.vue'
 import { Label } from '@/components/ui/label'
 import { useAgentStore } from '@/stores/agent'
+import { isImeComposing } from './agent-ui-helpers'
 import AiSecretKeyInput from './AiSecretKeyInput.vue'
 
 const { t, locale } = useI18n()
@@ -92,17 +93,31 @@ function applyLoadedConfig(cfg: DesktopModelApiConfig) {
   defaultModel.value = cfg.defaultModel || cfg.enabledModels[0] || ``
 }
 
+let isUnmounted = false
+let hasUserEdited = false
+
 onMounted(async () => {
   if (!window.mdDesktop?.ai)
     return
-  const configs = await window.mdDesktop.ai.getConfigs()
-  applyLoadedConfig(configs.modelApi)
+  try {
+    const configs = await window.mdDesktop.ai.getConfigs()
+    if (!isUnmounted && !hasUserEdited)
+      applyLoadedConfig(configs.modelApi)
+  }
+  catch {
+    // Ignore when bridge config read fails on teardown.
+  }
+})
+
+onUnmounted(() => {
+  isUnmounted = true
 })
 
 function onProtocolChange(next: string) {
   const nextProtocol = next as DesktopAiProtocol
   if (nextProtocol === protocol.value)
     return
+  hasUserEdited = true
   const prevDefault = DEFAULT_PROTOCOL_BASE_URLS[protocol.value]
   const prevPresetEndpoint = openAiPresets.find(p => p.value === providerPreset.value)?.endpoint.replace(/\/+$/, ``)
   const normalizedCurrent = baseUrl.value.trim().replace(/\/+$/, ``)
@@ -116,6 +131,7 @@ function onProtocolChange(next: string) {
 }
 
 function onPresetChange(nextPreset: string) {
+  hasUserEdited = true
   providerPreset.value = nextPreset
   const found = openAiPresets.find(p => p.value === nextPreset)
   if (found && found.endpoint)
@@ -124,6 +140,7 @@ function onPresetChange(nextPreset: string) {
 }
 
 function onBaseUrlInput() {
+  hasUserEdited = true
   if (protocol.value !== `openai-compatible`)
     return
   const normalized = baseUrl.value.trim().replace(/\/+$/, ``)
@@ -132,17 +149,20 @@ function onBaseUrlInput() {
 }
 
 function onApiKeyUpdate(next: string) {
+  hasUserEdited = true
   apiKeyInput.value = next
   if (next.trim())
     clearSavedKey.value = false
 }
 
 function markClearSavedKey() {
+  hasUserEdited = true
   apiKeyInput.value = ``
   clearSavedKey.value = true
 }
 
 function toggleModel(modelId: string) {
+  hasUserEdited = true
   if (enabledSet.value.has(modelId)) {
     enabledModels.value = enabledModels.value.filter(id => id !== modelId)
     if (defaultModel.value === modelId)
@@ -159,6 +179,7 @@ function addManualModel() {
   const id = customModelInput.value.trim()
   if (!id)
     return
+  hasUserEdited = true
   if (!availableModels.value.includes(id))
     availableModels.value = [id, ...availableModels.value]
   if (!enabledSet.value.has(id))
@@ -166,6 +187,15 @@ function addManualModel() {
   if (!defaultModel.value)
     defaultModel.value = id
   customModelInput.value = ``
+}
+
+function onManualModelKeydown(event: KeyboardEvent) {
+  if (isImeComposing(event))
+    return
+  if (event.key === `Enter`) {
+    event.preventDefault()
+    addManualModel()
+  }
 }
 
 async function fetchModels() {
@@ -387,7 +417,7 @@ async function saveConfig() {
               color: var(--dt-ink);
               font-family: var(--dt-mono);
             "
-            @keydown.enter.prevent="addManualModel"
+            @keydown="onManualModelKeydown"
           >
           <button
             type="button"

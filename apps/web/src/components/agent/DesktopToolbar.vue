@@ -4,12 +4,13 @@ import { ctrlSign } from '@md/shared/configs'
 import { useAgentStore } from '@/stores/agent'
 import { usePostStore } from '@/stores/post'
 import { useUIStore } from '@/stores/ui'
+import { isImeComposing } from './agent-ui-helpers'
 
 const emit = defineEmits<{
   openPublish: []
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const postStore = usePostStore()
 const uiStore = useUIStore()
 const agentStore = useAgentStore()
@@ -25,26 +26,65 @@ const showCollapsedActivityDot = computed(
 )
 
 const isEditingTitle = ref(false)
+const editingPostId = ref<string | null>(null)
 const titleDraft = ref(``)
+const titleInputRef = ref<HTMLInputElement | null>(null)
 
-const viewOptions = computed(() => [
-  { id: `edit` as const, label: t(`agent.toolbar.edit`) },
-  { id: `split` as const, label: t(`agent.toolbar.split`) },
-  { id: `preview` as const, label: t(`agent.toolbar.preview`) },
-])
+const viewOptions = computed(() => {
+  void locale.value
+  return [
+    { id: `edit` as const, label: t(`agent.toolbar.edit`) },
+    { id: `split` as const, label: t(`agent.toolbar.split`) },
+    { id: `preview` as const, label: t(`agent.toolbar.preview`) },
+  ]
+})
 
 function startTitleEdit() {
   if (!currentPost.value)
     return
+  editingPostId.value = currentPost.value.id
   titleDraft.value = currentPost.value.title
   isEditingTitle.value = true
+  nextTick(() => {
+    titleInputRef.value?.focus()
+    titleInputRef.value?.select()
+  })
+}
+
+function cancelTitleEdit() {
+  editingPostId.value = null
+  isEditingTitle.value = false
 }
 
 function commitTitleEdit() {
-  if (currentPost.value && titleDraft.value.trim())
-    postStore.renamePost(currentPost.value.id, titleDraft.value.trim())
+  if (!isEditingTitle.value)
+    return
+  const targetId = editingPostId.value
+  const nextTitle = titleDraft.value.trim()
+  editingPostId.value = null
   isEditingTitle.value = false
+  if (targetId && nextTitle && postStore.getPostById(targetId))
+    postStore.renamePost(targetId, nextTitle)
 }
+
+function onTitleKeydown(event: KeyboardEvent) {
+  if (isImeComposing(event))
+    return
+  if (event.key === `Enter`) {
+    event.preventDefault()
+    commitTitleEdit()
+  }
+  else if (event.key === `Escape`) {
+    event.preventDefault()
+    event.stopPropagation()
+    cancelTitleEdit()
+  }
+}
+
+watch(() => currentPost.value?.id ?? null, (id) => {
+  if (isEditingTitle.value && id !== editingPostId.value)
+    cancelTitleEdit()
+})
 </script>
 
 <template>
@@ -71,13 +111,13 @@ function commitTitleEdit() {
 
       <input
         v-if="isEditingTitle"
+        ref="titleInputRef"
         v-model="titleDraft"
         type="text"
+        :aria-label="t('agent.sidebar.rename')"
         class="w-full min-w-0 rounded bg-transparent text-[13px] font-semibold outline-none"
         style="color: var(--dt-ink)"
-        autofocus
-        @keydown.enter="commitTitleEdit"
-        @keydown.escape="isEditingTitle = false"
+        @keydown="onTitleKeydown"
         @blur="commitTitleEdit"
       >
       <button
@@ -101,6 +141,7 @@ function commitTitleEdit() {
           v-for="opt in viewOptions"
           :key="opt.id"
           type="button"
+          :aria-pressed="viewMode === opt.id"
           class="inline-flex h-[26px] cursor-pointer items-center rounded-[6px] px-3 text-[12.5px] font-medium transition-all"
           :style="{
             backgroundColor: viewMode === opt.id ? 'var(--dt-surface)' : 'transparent',
@@ -119,6 +160,7 @@ function commitTitleEdit() {
         type="button"
         :title="t('agent.toolbar.theme')"
         :aria-label="t('agent.toolbar.theme')"
+        :aria-pressed="isOpenRightSlider"
         class="inline-flex size-[30px] cursor-pointer items-center justify-center rounded-lg transition-colors"
         :style="{
           backgroundColor: isOpenRightSlider ? 'var(--dt-subtle)' : 'transparent',
@@ -134,6 +176,7 @@ function commitTitleEdit() {
         data-testid="desktop-agent-panel-toggle"
         :title="`${t('agent.panel.togglePanel')} (${toggleShortcutHint})`"
         :aria-label="t('agent.panel.togglePanel')"
+        :aria-expanded="isPanelOpen"
         class="relative inline-flex size-[30px] cursor-pointer items-center justify-center rounded-lg transition-colors"
         :style="{
           backgroundColor: isPanelOpen ? 'var(--dt-accent-soft)' : 'transparent',

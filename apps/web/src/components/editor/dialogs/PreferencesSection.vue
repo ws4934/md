@@ -13,7 +13,7 @@ defineProps<{
   section: `general` | `editor` | `preview`
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const localeStore = useLocaleStore()
 const uiStore = useUIStore()
 const themeStore = useThemeStore()
@@ -33,23 +33,30 @@ const {
 
 const { isCountStatus } = storeToRefs(themeStore)
 
-const viewModeOptions = computed(() => [
-  { value: `edit`, label: t(`preferences.viewModeOption.edit`) },
-  { value: `split`, label: t(`preferences.viewModeOption.split`) },
-  { value: `preview`, label: t(`preferences.viewModeOption.preview`) },
-] as const)
+const viewModeOptions = computed(() => {
+  void locale.value
+  return [
+    { value: `edit`, label: t(`preferences.viewModeOption.edit`) },
+    { value: `split`, label: t(`preferences.viewModeOption.split`) },
+    { value: `preview`, label: t(`preferences.viewModeOption.preview`) },
+  ] as const
+})
 
-const previewDeviceOptions = computed(() => [
-  { value: `desktop`, label: t(`preferences.previewDeviceOption.desktop`) },
-  { value: `mobile`, label: t(`preferences.previewDeviceOption.mobile`) },
-] as const)
+const previewDeviceOptions = computed(() => {
+  void locale.value
+  return [
+    { value: `desktop`, label: t(`preferences.previewDeviceOption.desktop`) },
+    { value: `mobile`, label: t(`preferences.previewDeviceOption.mobile`) },
+  ] as const
+})
 
-const localeOptions = computed(() =>
-  LOCALE_OPTIONS.map(option => ({
+const localeOptions = computed(() => {
+  void locale.value
+  return LOCALE_OPTIONS.map(option => ({
     value: option.value,
     label: t(option.labelKey),
-  })),
-)
+  }))
+})
 
 function setCountStatus(value: boolean) {
   isCountStatus.value = value
