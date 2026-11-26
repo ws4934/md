@@ -60,33 +60,54 @@ description: >-
 
 ## 配图风格
 
-封面和文中插图统一用手绘扁平插画：一个人物或动物占满画面，用表情和动作把标题里的处境演出来。
+一篇文章的封面和插图要像同一个人画的：同一个 IP 主角、同一套画风、同一个背景色。
 
-- **画风**：手绘卡通，深色描边粗且略带抖动，色块平涂，带一点蜡笔或颗粒纸的质感；造型圆钝简化，像绘本或报刊漫画
-- **配色**：颜色少而饱和，芥末黄、橘色、草绿、砖红为主；背景是一整块纯色，或者干脆留白
-- **主体**：只画一个主角（人、动物或物件），居中，占画面大半
+### 固定 IP：阿土
+
+账号所有配图都由阿土出演，用表情和动作把标题里的处境演出来。读者记住了这个形象，也就记住了账号。
+
+- **形象**：直立行走的中华田园犬，胖乎乎的梨形身材，约 2.5 头身；奶白色的毛，左眼一圈圆形棕斑；三角耳，耳尖往下折；黑豆眼，上眼皮总耷拉着，像永远没睡醒；小嘴，卷尾巴
+- **服装**：永远穿同一件洗旧的砖红色卫衣
 - **情绪**：无奈、躺平、累、发呆，带点自嘲和幽默，不苦大仇深
+- **配角**：家人、同事、老板需要出场时，用同样画风的简化造型，比阿土小、颜色淡，不抢戏
+
+一个账号只用一个 IP。想换形象，只改这一节和提示词模板里的 `Character` 一行。
+
+### 画风
+
+- **线条**：手绘卡通，深色描边粗且略带抖动，色块平涂，带一点蜡笔或颗粒纸的质感；造型圆钝简化，像绘本或报刊漫画
+- **配色**：颜色少而饱和，芥末黄、橘色、草绿、砖红为主
+- **背景**：一整块纯色。一篇文章只定一个背景色（芥末黄、米色、浅草绿任选其一），封面和插图共用
+- **构图**：阿土居中，占画面大半
 - **不放字**：标题在图下方，画面里不出现文字和数字
 
-先找标题里的情绪，再挑一个日常场景把它演出来：
+### 标题怎么变成画面
+
+先找标题里的情绪，再让阿土在一个日常场景里演出来。文中插图同理，按小标题换场景，阿土和背景色不变。
 
 | 标题                                 | 画面                                                         |
 | ------------------------------------ | ------------------------------------------------------------ |
-| 《亏掉 20 万太容易了》               | 穿橘色毛衣的胖男人托着腮，眼睛半睁，一脸认命，米色背景       |
-| 《家庭存款的十个等级，你到哪一级了》 | 白猫瘫在绿沙发上，肚皮上搁着手机，旁边一包薯片、一杯柠檬水   |
-| 《钱，难挣到什么程度了》             | 白色长脖子的鸭子垂着头，橘色的嘴耷拉着，芥末黄背景           |
-| 《新型返贫三件套，一件都不沾》       | 一辆红色小汽车里挤满了小动物，白底                           |
+| 《亏掉 20 万太容易了》               | 阿土托着腮坐在桌前，眼睛半睁，一脸认命，桌上一只摔裂的存钱罐 |
+| 《家庭存款的十个等级，你到哪一级了》 | 阿土瘫在沙发上，肚皮上搁着手机，旁边一包薯片                 |
+| 《钱，难挣到什么程度了》             | 阿土垂着头蹲在马路牙子上，手心里攥着两枚硬币                 |
+| 《新型返贫三件套，一件都不沾》       | 阿土挤在一辆塞满家当的小汽车里，耳朵被车顶压弯了             |
 
-规格：封面横版 2.35:1（如 900×383），主体放中间，转发时裁成 1:1 缩略图也能看清；文中插图用 4:3 或 1:1，风格与封面一致。
+规格：封面横版 2.35:1（如 900×383），阿土放中间，转发时裁成 1:1 缩略图也能看清；文中插图统一 4:3。
 
-生图提示词模板（`{}` 处换成画面描述）：
+### 一篇文章的图怎么保持一致
+
+1. 每张图都用下面的模板：`Character`、`Style` 两行原样照抄，一个词都不改；`Background` 整篇用同一个颜色；只改 `Scene` 和 `Composition`
+2. 先出封面，定稿后把封面当参考图（图生图、角色参考或风格参考）再出插图
+3. 一篇文章的图用同一个工具、同一个模型一次出完，中途不换
+
+### 提示词模板
 
 ```text
-Flat hand-drawn cartoon illustration for a WeChat article cover, wide 2.35:1 composition.
-Subject: {one character and what it is doing, e.g. a chubby man in an orange sweater resting his cheek on his hand, half-closed resigned eyes}.
-Style: thick, slightly wobbly dark outlines, flat color fills with subtle crayon and grainy paper texture, simple rounded shapes, picture-book editorial cartoon, humorous and relatable mood.
-Palette: a few saturated colors such as mustard yellow, orange, grass green and brick red, on a single solid-color background.
-The subject is centered and fills most of the frame, leaving room for a square crop. No text, letters, numbers or watermark.
+Character: a chubby anthropomorphic Chinese rural dog standing upright on short legs, about 2.5 heads tall, pear-shaped body, cream-white fur with a round brown patch around the left eye, short triangular ears with folded tips, small black dot eyes under heavy droopy eyelids, tiny mouth, short curled tail, wearing a faded brick-red hoodie.
+Style: flat hand-drawn cartoon illustration, thick slightly wobbly dark outlines, flat color fills with subtle crayon and grainy paper texture, simple rounded shapes, picture-book editorial cartoon, humorous and relatable mood, a few saturated colors such as mustard yellow, orange, grass green and brick red.
+Scene: {what the dog is doing, e.g. sitting at a table with its cheek resting on one paw, half-closed resigned eyes, a cracked piggy bank on the table}.
+Background: one solid {mustard yellow | beige | light grass green} background.
+Composition: {wide 2.35:1 cover, leave room for a square crop | 4:3 inline illustration}, the dog centered and filling most of the frame. No text, letters, numbers or watermark.
 ```
 
 描述画风特征即可，不点名具体画师，也不照搬参考图里的角色。
