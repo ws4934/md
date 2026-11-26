@@ -18,6 +18,7 @@
 | `@md/web`        | `apps/web`            | 主应用，Vue 3 + 浏览器扩展（WXT: Chrome/Firefox）                                                     |
 | `doocs-md`       | `apps/vscode`         | VS Code 扩展（webpack 构建，marketplace ID: `doocs.doocs-md`）                                        |
 | `@md/utools`     | `apps/utools`         | uTools 插件打包                                                                                       |
+| `@md/desktop`    | `apps/desktop`        | Electron 桌面端（本地 ACP Agent、electron-builder 打包、electron-updater 自动更新）                   |
 | `@md/core`       | `packages/core`       | 核心 Markdown 渲染引擎（marked + 自定义扩展）                                                         |
 | `@md/shared`     | `packages/shared`     | 共享工具函数、配置、类型、编辑器配置                                                                  |
 | `@md/config`     | `packages/config`     | TypeScript 配置基础文件                                                                               |
@@ -66,6 +67,19 @@ pnpm vscode watch     # webpack 监听
 pnpm vscode build     # 生产 webpack 构建
 pnpm vscode package   # vsce 打包
 ```
+
+### 桌面端 (`@md/desktop`)
+
+```bash
+pnpm desktop dev      # 构建主进程并启动 Vite + Electron 开发模式
+pnpm desktop build    # 构建渲染进程（web desktop 模式）与主进程 bundle
+pnpm desktop dist     # build 后用 electron-builder 打当前平台的安装包到 apps/desktop/release
+pnpm desktop test     # vitest
+```
+
+- 主进程、preload 和内置 agent 全部由 esbuild 打成单文件，运行时依赖都放在 `devDependencies`，安装包里不带 `node_modules`
+- 发版：更新 `apps/desktop/package.json` 的 `version`，推送 `desktop-v<version>` tag，由 `.github/workflows/release-desktop.yml` 构建 macOS（arm64/x64）、Windows、Linux（AppImage）并发布 `desktop-v<version>` release；带 `-` 的预发布 tag 不更新正式更新源
+- 自动更新：electron-updater 的 generic 源指向滚动 release `desktop-latest`（只存放 `latest*.yml`，其中下载地址是指向版本 release 的绝对 URL）。未签名的 macOS 包只提示并打开下载页；配置 `CSC_LINK` 等签名 secrets 后 CI 会签名公证并启用 macOS 自动安装
 
 ### CLI & MCP
 

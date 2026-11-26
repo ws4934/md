@@ -1,0 +1,199 @@
+name: Release Desktop
+
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+
+permissions:
+  contents: read
+
+# Serialize desktop releases so an older run can never overwrite a newer `desktop-latest` feed.
+concurrency:
+  group: release-desktop
+  cancel-in-progress: false
+
+defaults:
+  run:
+    # bash on Windows too: PowerShell splits `-c.publish.url=...` at the dots.
+    shell: bash
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check tag matches package version
+        run: |
+          expected="desktop-v$(jq -r .version apps/desktop/package.json)"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match apps/desktop/package.json (expected $expected)"
+            exit 1
+          fi
+
+  build:
+    needs: check
+    strategy:
+      matrix:
+        include:
+          - os: macos-15
+            platform: mac
+            arch: arm64
+          - os: macos-15-intel
+            platform: mac
+            arch: x64
+          - os: windows-latest
+            platform: win
+            arch: x64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/setup@v3
+        with:
+          version: 12.21.0
+          runtime: node@22
+          cache: true
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm --filter @md/desktop run build
+
+      - name: Package
+        working-directory: apps/desktop
+        env:
+          FEED_URL: https://github.com/${{ github.repository }}/releases/download/desktop-latest
+          # Mac only: electron-builder would otherwise try CSC_LINK for Windows signing too.
+          CSC_LINK: ${{ matrix.platform == 'mac' && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'mac' && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.platform == 'mac' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_TEAM_ID || '' }}
+        run: |
+          args=(--${{ matrix.platform }} --${{ matrix.arch }} --publish never "-c.publish.url=$FEED_URL")
+          if [ -n "$CSC_LINK" ]; then
+            # Signed (and notarized when APPLE_* are set): Squirrel.Mac can install updates itself.
+            args+=(-c.extraMetadata.mdAutoInstallUpdates=true)
+          else
+            # electron-builder treats an empty CSC_LINK as set, so drop the empty values entirely.
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            if [ "${{ matrix.platform }}" = "mac" ]; then
+              # Ad-hoc sign so macOS lets users allow the app in Privacy & Security instead of reporting it damaged.
+              args+=(-c.mac.identity=-)
+            fi
+          fi
+          pnpm exec electron-builder "${args[@]}"
+
+      # Both mac runners write `latest-mac.yml`; the release job merges them.
+      - name: Rename mac feed per arch
+        if: matrix.platform == 'mac'
+        run: mv apps/desktop/release/latest-mac.yml apps/desktop/release/latest-mac-${{ matrix.arch }}.yml
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/latest*.yml
+          if-no-files-found: error
+          retention-days: 5
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/setup@v3
+        with:
+          version: 12.21.0
+          runtime: node@22
+          cache: true
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-*
+          path: apps/desktop/release
+          merge-multiple: true
+
+      - name: Prepare update feed
+        run: |
+          pnpm exec tsx scripts/release-feed.ts release "https://github.com/$GH_REPO/releases/download/$TAG"
+          rm release/latest-mac-*.yml
+          ls -l release
+
+      - name: Check prerelease tag
+        id: tag
+        run: |
+          # Semver prereleases carry a hyphen after `desktop-v` and must not reach the stable update feed.
+          if [[ "${TAG#desktop-v}" == *-* ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Re-runs upload with --clobber instead of failing on the existing release.
+      - name: Publish versioned release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IS_PRERELEASE: ${{ steps.tag.outputs.is_prerelease }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            release_flag=--latest=false
+            if [ "$IS_PRERELEASE" = "true" ]; then
+              release_flag=--prerelease
+            fi
+            gh release create "$TAG" release/* --verify-tag "$release_flag" --title "$TAG" --notes ""
+          fi
+
+      # electron-updater's generic provider reads the rolling `desktop-latest` release; its feeds point at "$TAG".
+      - name: Update desktop-latest feed
+        if: steps.tag.outputs.is_prerelease != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view desktop-latest > /dev/null 2>&1; then
+            gh release upload desktop-latest release/latest*.yml --clobber
+          else
+            gh release create desktop-latest release/latest*.yml --prerelease --latest=false --target "$GITHUB_SHA" \
+              --title "Desktop update feed" --notes "Update metadata for the desktop app. Installers are on the desktop-v* releases."
+          fi
