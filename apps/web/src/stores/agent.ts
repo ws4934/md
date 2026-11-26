@@ -9,6 +9,7 @@ import type {
   AcpPlanEntry,
   AcpProbeResult,
   AcpSettings,
+  AcpSlashCommand,
   AcpThinkingOption,
   AcpToolCallItem,
 } from '@md/shared/types'
@@ -296,6 +297,13 @@ export const useAgentStore = defineStore(`agent`, () => {
   })
 
   const customExtraModes = computed<AcpModeInfo[]>(() => getCustomExtraModes(availableModes.value))
+
+  const availableCommands = computed<AcpSlashCommand[]>(() => {
+    const agent = selectedAgent.value
+    if (!agent)
+      return []
+    return probeByAgent.value[agent.id]?.commands ?? []
+  })
 
   const activeCustomMode = computed<AcpModeInfo | null>(() => {
     if (currentPermissionLevel.value !== `ask`)
@@ -691,6 +699,13 @@ export const useAgentStore = defineStore(`agent`, () => {
         const targetSession = findSessionByAcpId(event.sessionId)
         applySyncedArticleContent(event.postId, event.content)
         void uploadSyncedWorkspaceImages(event.sessionId, event.postId, event.content, targetSession)
+        break
+      }
+      case `commands_updated`: {
+        const session = findSessionByAcpId(event.sessionId)
+        const probe = session ? probeByAgent.value[session.agentId] : undefined
+        if (probe)
+          probeByAgent.value = { ...probeByAgent.value, [probe.agentId]: { ...probe, commands: event.commands } }
         break
       }
       case `model_changed`: {
@@ -1446,6 +1461,7 @@ export const useAgentStore = defineStore(`agent`, () => {
     currentPermissionLevel,
     currentModeId,
     availableModes,
+    availableCommands,
     customExtraModes,
     activeCustomMode,
     currentActivityLabel,

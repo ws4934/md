@@ -67,7 +67,19 @@ export interface AcpHostOptions {
   ) => Record<string, string> | undefined | Promise<Record<string, string> | undefined>
   resolveSessionMcpServers?: (agentId: string, workspaceDir: string) => McpServer[] | Promise<McpServer[]>
   isImageGenConfigured?: () => boolean | Promise<boolean>
+  /** Directory of bundled `<name>/SKILL.md` skills copied into every agent workspace and the probe cwd. */
+  skillsDir?: string
   onEvent?: (event: AcpHostEvent) => void
+}
+
+/**
+ * Agent CLIs load project skills natively from their cwd: Claude Code reads `.claude/skills`,
+ * Codex / OpenCode / Gemini CLI read `.agents/skills`.
+ */
+async function installBundledSkills(skillsDir: string, dir: string): Promise<void> {
+  await Promise.all([`.claude/skills`, `.agents/skills`].map(target =>
+    fs.cp(skillsDir, path.join(dir, target), { recursive: true }),
+  ))
 }
 
 const MAX_WORKSPACE_IMAGE_BYTES = 10 * 1024 * 1024
@@ -112,10 +124,18 @@ export class AcpHost {
   private readonly resolveAgentRuntimeEnv?: AcpHostOptions[`resolveAgentRuntimeEnv`]
   private readonly resolveSessionMcpServers?: AcpHostOptions[`resolveSessionMcpServers`]
   private readonly isImageGenConfigured?: AcpHostOptions[`isImageGenConfigured`]
+  private readonly skillsDir?: string
+  /** Probes run where bundled skills are visible so draft slash commands match real sessions. */
+  private readonly probeCwd: Promise<string | undefined>
   private readonly onEvent?: (event: AcpHostEvent) => void
 
   constructor(options: AcpHostOptions) {
     this.workspacesRoot = path.join(options.dataDir, `acp-workspaces`)
+    this.skillsDir = options.skillsDir
+    const probeDir = path.join(options.dataDir, `acp-probe-workspace`)
+    this.probeCwd = options.skillsDir
+      ? installBundledSkills(options.skillsDir, probeDir).then(() => probeDir, () => undefined)
+      : Promise.resolve(undefined)
     this.pathOverride = options.pathOverride
     this.resolveAgentAvailability = options.resolveAgentAvailability
     this.resolveDirectProbe = options.resolveDirectProbe
@@ -240,6 +260,7 @@ export class AcpHost {
         command: launch.command,
         args: launch.args,
         env: mergedEnv,
+        cwd: await this.probeCwd,
         pathOverride: this.pathOverride,
       },
       options,
@@ -259,6 +280,11 @@ export class AcpHost {
     this.activeWorkspaceDirs.add(workspaceDir)
     await fs.mkdir(workspaceDir, { recursive: true })
     await fs.writeFile(articlePath, params.content, `utf8`)
+    if (this.skillsDir) {
+      // Skills are optional; a broken bundle must not block the session.
+      await installBundledSkills(this.skillsDir, workspaceDir)
+        .catch(error => console.warn(`[acp] failed to install bundled skills:`, error))
+    }
 
     let mergedEnv = launch.env
     let mcpServers: McpServer[] = []

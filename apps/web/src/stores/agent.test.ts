@@ -281,6 +281,21 @@ describe(`useAgentStore thinking level state`, () => {
     expect(agentStore.selectedThinkingLevel).toBe(`low`)
   })
 
+  it(`refreshes available slash commands from commands_updated`, async () => {
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+    await agentStore.init()
+    await agentStore.probeAgent(`antigravity`)
+    await agentStore.sendPrompt(`Write outline`)
+
+    eventListener?.({
+      type: `commands_updated`,
+      sessionId: `sess-1`,
+      commands: [{ name: `wechat-minsheng`, description: `Skill` }],
+    })
+    expect(agentStore.availableCommands.map(c => c.name)).toEqual([`wechat-minsheng`])
+  })
+
   it(`hides thinking options on Claude Haiku and restores remembered level when switching back to Sonnet`, async () => {
     const claudeProbe: AcpProbeResult = {
       agentId: `claude`,

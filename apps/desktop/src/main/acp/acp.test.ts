@@ -1646,6 +1646,39 @@ describe(`buildPromptText`, () => {
   })
 })
 
+describe(`bundled skills`, () => {
+  it(`installs bundled skills into session workspaces and the probe cwd`, async () => {
+    const dataDir = await makeTempDir(`md-acp-skills-`)
+    const skillsDir = await makeTempDir(`md-acp-skills-src-`)
+    await fs.mkdir(path.join(skillsDir, `demo-skill`))
+    await fs.writeFile(path.join(skillsDir, `demo-skill`, `SKILL.md`), `---\nname: demo-skill\n---\n`)
+    const host = new AcpHost({
+      dataDir,
+      skillsDir,
+      extraBuiltinAgents: [{
+        id: `fake-skills`,
+        name: `Fake Skills`,
+        command: process.execPath,
+        args: [FAKE_AGENT_SCRIPT],
+        env: { FAKE_AGENT_EMIT_COMMANDS: `1` },
+        detectBinaries: [process.execPath],
+        builtin: true,
+        avatar: { letter: `S`, color: `#5B5BD6` },
+      }],
+    })
+    openHosts.push(host)
+
+    const probe = await host.probeAgent(`fake-skills`)
+    expect(probe.commands.map(c => c.name)).toContain(`demo-skill`)
+
+    await host.startSession({ agentId: `fake-skills`, postId: `p`, postTitle: `T`, content: `` })
+    const [workspaceId] = await fs.readdir(path.join(dataDir, `acp-workspaces`))
+    const workspaceDir = path.join(dataDir, `acp-workspaces`, workspaceId)
+    for (const dir of [`.claude/skills`, `.agents/skills`])
+      expect(await fs.readFile(path.join(workspaceDir, dir, `demo-skill`, `SKILL.md`), `utf8`)).toContain(`name: demo-skill`)
+  })
+})
+
 describe(`readWorkspaceImage`, () => {
   it(`reads images inside the session workspace and refuses anything else`, async () => {
     const dataDir = await makeTempDir(`md-acp-ws-image-`)

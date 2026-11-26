@@ -12,7 +12,8 @@
       "!**/*.map"
     ],
     "asarUnpack": [
-      "dist/agents/*.js"
+      "dist/agents/*.js",
+      "dist/skills/**"
     ]
   },
   "scripts": {

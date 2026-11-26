@@ -649,12 +649,15 @@ async function handleRequest(msg) {
       })
 
       if (emitCommands) {
-        setTimeout(() => {
+        setTimeout(async () => {
+          // Mirror Claude Code: project skills under `<cwd>/.claude/skills` are advertised as commands.
+          const skills = await fs.readdir(path.join(currentCwd, `.claude/skills`)).catch(() => [])
           sendUpdate({
             sessionUpdate: `available_commands_update`,
             availableCommands: [
               { name: `outline`, description: `Generate an article outline` },
               { name: `polish`, description: `Polish tone and clarity`, input: { hint: `style` } },
+              ...skills.map(name => ({ name, description: `Skill` })),
             ],
           })
         }, 40)

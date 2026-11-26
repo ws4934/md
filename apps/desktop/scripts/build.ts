@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -6,10 +7,18 @@ import { build } from 'esbuild'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, `..`)
 
+// Repo skills (`.agents/skills/<name>`) shipped to desktop agents; dev-only skills stay out.
+const BUNDLED_SKILLS = [`wechat-minsheng`]
+
 const ESM_CJS_SHIM_BANNER = `import { createRequire as __mdCreateRequire } from 'node:module'; const require = __mdCreateRequire(import.meta.url);`
 
 export async function buildDesktopBundles(): Promise<void> {
   await Promise.all([
+    ...BUNDLED_SKILLS.map(name => fs.cp(
+      path.resolve(rootDir, `../../.agents/skills`, name),
+      path.join(rootDir, `dist/skills`, name),
+      { recursive: true },
+    )),
     build({
       entryPoints: [path.join(rootDir, `src/main/index.ts`)],
       outfile: path.join(rootDir, `dist/main/index.js`),

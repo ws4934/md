@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import type { DesktopPickedFile } from '@md/shared/types'
+import type { AcpSlashCommand, DesktopPickedFile } from '@md/shared/types'
 import { ArrowUp, Paperclip, X } from '@lucide/vue'
+import { scrollActiveOptionIntoView } from '@/lib/agent/floating-menu'
+import { useAgentStore } from '@/stores/agent'
 import AgentModelPicker from './AgentModelPicker.vue'
 import AgentPermissionPicker from './AgentPermissionPicker.vue'
 import AgentThinkingPicker from './AgentThinkingPicker.vue'
@@ -24,6 +26,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const agentStore = useAgentStore()
 
 const text = ref(``)
 const attachments = ref<DesktopPickedFile[]>([])
@@ -69,6 +72,40 @@ onBeforeUnmount(() => {
 
 const canSend = computed(() => !props.disabled && text.value.trim().length > 0)
 
+const commandMenuRef = ref<HTMLElement | null>(null)
+const commandIndex = ref(0)
+const commandMenuDismissed = ref(false)
+
+// Slash menu only while the input is exactly `/query` (no whitespace yet); prefix matches sort first.
+const matchedCommands = computed(() => {
+  const query = /^\/(\S*)$/.exec(text.value)?.[1].toLowerCase()
+  if (query === undefined || props.disabled)
+    return []
+  return agentStore.availableCommands
+    .filter(c => c.name.toLowerCase().includes(query))
+    .sort((a, b) => Number(!a.name.toLowerCase().startsWith(query)) - Number(!b.name.toLowerCase().startsWith(query)))
+})
+
+const isCommandMenuOpen = computed(() => !commandMenuDismissed.value && matchedCommands.value.length > 0)
+
+watch(matchedCommands, () => {
+  commandIndex.value = 0
+  commandMenuDismissed.value = false
+})
+
+watch(commandIndex, () => nextTick(() => scrollActiveOptionIntoView(commandMenuRef.value)))
+
+function insertCommand(command: AcpSlashCommand) {
+  text.value = `/${command.name} `
+  nextTick(() => {
+    const el = textareaRef.value
+    if (!el)
+      return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  })
+}
+
 function submit() {
   if (!canSend.value)
     return
@@ -83,6 +120,24 @@ function submit() {
 function handleKeydown(event: KeyboardEvent) {
   if (event.isComposing || event.keyCode === 229)
     return
+  if (isCommandMenuOpen.value) {
+    const count = matchedCommands.value.length
+    if (event.key === `ArrowDown` || event.key === `ArrowUp`) {
+      event.preventDefault()
+      commandIndex.value = (commandIndex.value + (event.key === `ArrowDown` ? 1 : -1) + count) % count
+      return
+    }
+    if (event.key === `Enter` || event.key === `Tab`) {
+      event.preventDefault()
+      insertCommand(matchedCommands.value[commandIndex.value])
+      return
+    }
+    if (event.key === `Escape`) {
+      event.preventDefault()
+      commandMenuDismissed.value = true
+      return
+    }
+  }
   if (event.key === `Enter` && !event.shiftKey) {
     event.preventDefault()
     if (!props.running)
@@ -118,7 +173,7 @@ defineExpose({ focus })
 
 <template>
   <div
-    class="agent-composer-card flex w-full flex-col gap-2"
+    class="agent-composer-card relative flex w-full flex-col gap-2"
     :class="size === 'hero' ? 'rounded-2xl p-3.5' : 'rounded-[14px] p-2.5'"
     style="
       background-color: var(--dt-surface);
@@ -126,6 +181,36 @@ defineExpose({ focus })
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
     "
   >
+    <div
+      v-if="isCommandMenuOpen"
+      ref="commandMenuRef"
+      role="listbox"
+      class="absolute inset-x-0 z-50 flex max-h-60 flex-col gap-0.5 overflow-y-auto rounded-xl p-1.5"
+      :class="menuPlacement === 'up' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'"
+      style="
+        background-color: var(--dt-surface);
+        border: 1px solid var(--dt-line);
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
+      "
+      @mousedown.prevent
+    >
+      <div
+        v-for="(command, index) in matchedCommands"
+        :key="command.name"
+        role="option"
+        :aria-selected="index === commandIndex"
+        :data-active="index === commandIndex ? 'true' : undefined"
+        class="flex min-h-8 w-full shrink-0 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px]"
+        :style="{ backgroundColor: index === commandIndex ? 'var(--dt-subtle)' : 'transparent' }"
+        @click="insertCommand(command)"
+      >
+        <span class="max-w-[60%] shrink-0 truncate font-medium" style="color: var(--dt-ink)">/{{ command.name }}</span>
+        <span v-if="command.description" class="min-w-0 truncate text-[11.5px]" style="color: var(--dt-ink3)">
+          {{ command.description }}
+        </span>
+      </div>
+    </div>
+
     <div v-if="attachments.length > 0" class="flex flex-wrap gap-1.5 px-1">
       <span
         v-for="file in attachments"
@@ -155,6 +240,8 @@ defineExpose({ focus })
       :class="size === 'hero' ? 'min-h-[64px] text-[15px] leading-[25px]' : 'min-h-[44px] text-[13.5px] leading-[22px]'"
       style="color: var(--dt-ink)"
       @keydown="handleKeydown"
+      @focus="commandMenuDismissed = false"
+      @blur="commandMenuDismissed = true"
     />
 
     <div ref="toolbarRef" class="agent-composer-toolbar">

@@ -23,7 +23,7 @@ import { AcpHost } from './acp/host'
 import { AiConfigStore } from './ai/config-store'
 import { ImageGenBridge } from './ai/image-bridge'
 import { generateDesktopImage } from './ai/image-service'
-import { resolveUnpackedAgentScript } from './ai/paths'
+import { resolveUnpackedAgentScript, resolveUnpackedSkillsDir } from './ai/paths'
 import { fetchRemoteModels } from './ai/remote-models'
 import { redactSecret } from './ai/sanitize'
 import { APP_HOST, APP_SCHEME, isSafeExternalUrl, resolveAppProtocolTarget } from './app-protocol'
@@ -337,6 +337,7 @@ app.whenReady().then(() => {
   })
   acpHost = new AcpHost({
     dataDir: userDataDir,
+    skillsDir: resolveUnpackedSkillsDir(__dirname),
     extraBuiltinAgents: buildExtraBuiltinAgents(),
     resolveAgentAvailability: async (agentId) => {
       if (agentId !== API_MODEL_AGENT_ID)
