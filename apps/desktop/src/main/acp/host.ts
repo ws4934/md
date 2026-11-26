@@ -74,7 +74,7 @@ export interface AcpHostOptions {
 
 /**
  * Agent CLIs load project skills natively from their cwd: Claude Code reads `.claude/skills`,
- * Codex / OpenCode / Gemini CLI read `.agents/skills`.
+ * Codex / OpenCode / Gemini CLI / Antigravity CLI read `.agents/skills`.
  */
 async function installBundledSkills(skillsDir: string, dir: string): Promise<void> {
   await Promise.all([`.claude/skills`, `.agents/skills`].map(target =>
