@@ -70,3 +70,4 @@ apps/utools/dist
 apps/utools/release
 apps/desktop/release
 .local
+.vitest
