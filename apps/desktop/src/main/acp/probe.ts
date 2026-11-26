@@ -40,6 +40,26 @@ export interface ProbeAgentOptions {
   initializeTimeoutMs?: number
   sessionNewTimeoutMs?: number
   closeTimeoutMs?: number
+  signal?: AbortSignal
+}
+
+function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted)
+    return Promise.resolve()
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const onAbort = () => {
+      if (timer !== undefined)
+        clearTimeout(timer)
+      resolve()
+    }
+    timer = setTimeout(() => {
+      signal?.removeEventListener(`abort`, onAbort)
+      resolve()
+    }, ms)
+    timer.unref?.()
+    signal?.addEventListener(`abort`, onAbort, { once: true })
+  })
 }
 
 async function waitForAvailableCommands(
@@ -47,20 +67,20 @@ async function waitForAvailableCommands(
   quietMs: number,
   firstWaitMs: number,
   settleMaxMs: number,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const sleep = () => new Promise(resolve => setTimeout(resolve, COMMAND_POLL_MS))
   const startedAt = Date.now()
   while (session.commandsUpdatedAt === null) {
-    if (Date.now() - startedAt >= firstWaitMs)
+    if (session.isClosed || signal?.aborted || Date.now() - startedAt >= firstWaitMs)
       return
-    await sleep()
+    await sleepAbortable(COMMAND_POLL_MS, signal)
   }
   // Commands may arrive in several batches; settle once the stream goes quiet.
   const settleStartedAt = Date.now()
   while (Date.now() - settleStartedAt < settleMaxMs) {
-    if (Date.now() - (session.commandsUpdatedAt ?? 0) >= quietMs)
+    if (session.isClosed || signal?.aborted || Date.now() - (session.commandsUpdatedAt ?? 0) >= quietMs)
       return
-    await sleep()
+    await sleepAbortable(COMMAND_POLL_MS, signal)
   }
 }
 
@@ -69,9 +89,19 @@ async function waitForAvailableCommands(
  * modes, configOptions, and slash commands, then cleanly shuts it down.
  */
 export async function probeAcpAgent(options: ProbeAgentOptions): Promise<AcpProbeResult> {
+  if (options.signal?.aborted)
+    throw new Error(`ACP probe aborted`)
+
   const quietMs = options.commandQuietMs ?? COMMAND_QUIET_WINDOW_MS
   const workspace = options.workspace ? await options.workspace.create() : null
   const workspaceDir = workspace?.dir ?? null
+
+  if (options.signal?.aborted) {
+    if (workspaceDir)
+      await options.workspace!.dispose(workspaceDir)
+    throw new Error(`ACP probe aborted`)
+  }
+
   const session = new AcpSession({
     agentId: options.agentId,
     command: options.command,
@@ -90,9 +120,24 @@ export async function probeAcpAgent(options: ProbeAgentOptions): Promise<AcpProb
     },
   })
 
+  const onAbort = () => {
+    void session.close()
+  }
+  options.signal?.addEventListener(`abort`, onAbort, { once: true })
+
   try {
     await session.initializeNewSession()
-    await waitForAvailableCommands(session, quietMs, quietMs * FIRST_COMMANDS_WAIT_FACTOR, Math.max(quietMs * 2, MAX_COMMAND_WAIT_MS))
+    if (options.signal?.aborted)
+      throw new Error(`ACP probe aborted`)
+    await waitForAvailableCommands(
+      session,
+      quietMs,
+      quietMs * FIRST_COMMANDS_WAIT_FACTOR,
+      Math.max(quietMs * 2, MAX_COMMAND_WAIT_MS),
+      options.signal,
+    )
+    if (options.signal?.aborted)
+      throw new Error(`ACP probe aborted`)
 
     return {
       agentId: options.agentId,
@@ -108,9 +153,14 @@ export async function probeAcpAgent(options: ProbeAgentOptions): Promise<AcpProb
     }
   }
   finally {
-    await session.close()
-    if (workspaceDir)
-      await options.workspace!.dispose(workspaceDir)
+    options.signal?.removeEventListener(`abort`, onAbort)
+    try {
+      await session.close()
+    }
+    finally {
+      if (workspaceDir)
+        await options.workspace!.dispose(workspaceDir)
+    }
   }
 }
 
@@ -121,14 +171,24 @@ export interface ProbeCacheOptions {
   appVersion?: string
 }
 
+interface InFlightProbe {
+  promise: Promise<AcpProbeResult>
+  abort: AbortController
+}
+
 export class ProbeCache {
   private readonly cachePath?: string
   private readonly ttlMs: number
   private readonly appVersion?: string
   private cache = new Map<string, AcpProbeResult>()
-  private inFlight = new Map<string, Promise<AcpProbeResult>>()
+  private inFlight = new Map<string, InFlightProbe>()
   private loaded = false
   private loadPromise: Promise<void> | null = null
+  private invalidatedAllBeforeLoad = false
+  private invalidatedBeforeLoad = new Set<string>()
+  private globalEpoch = 0
+  private agentEpochs = new Map<string, number>()
+  private disposed = false
   private persistChain: Promise<void> = Promise.resolve()
 
   constructor(options: ProbeCacheOptions = {}) {
@@ -144,14 +204,40 @@ export class ProbeCache {
     return Date.now() - entry.probedAt < ttlMs
   }
 
-  private async ensureLoaded(): Promise<void> {
+  private getEpochKey(agentId: string): string {
+    return `${this.globalEpoch}:${this.agentEpochs.get(agentId) ?? 0}`
+  }
+
+  private bumpEpoch(agentId?: string): void {
+    if (agentId) {
+      this.agentEpochs.set(agentId, (this.agentEpochs.get(agentId) ?? 0) + 1)
+      const active = this.inFlight.get(agentId)
+      if (active) {
+        this.inFlight.delete(agentId)
+        active.abort.abort()
+      }
+      return
+    }
+
+    this.globalEpoch += 1
+    const activeEntries = [...this.inFlight.values()]
+    this.inFlight.clear()
+    for (const active of activeEntries)
+      active.abort.abort()
+  }
+
+  async ensureLoaded(): Promise<void> {
     if (this.loaded || !this.cachePath) {
       this.loaded = true
       return
     }
     this.loadPromise ??= (async () => {
       try {
+        if (this.invalidatedAllBeforeLoad)
+          return
         const raw = await fs.readFile(this.cachePath!, `utf8`)
+        if (this.invalidatedAllBeforeLoad)
+          return
         const parsed = JSON.parse(raw) as Partial<PersistedProbeCache>
         if (
           parsed
@@ -162,6 +248,8 @@ export class ProbeCache {
           && typeof parsed.entries === `object`
         ) {
           for (const [agentId, entry] of Object.entries(parsed.entries)) {
+            if (this.invalidatedBeforeLoad.has(agentId))
+              continue
             if (entry && typeof entry === `object` && this.isFresh(entry) && !this.cache.has(agentId))
               this.cache.set(agentId, entry)
           }
@@ -171,6 +259,7 @@ export class ProbeCache {
         // Missing or unreadable probe cache is non-fatal.
       }
       finally {
+        this.invalidatedBeforeLoad.clear()
         this.loaded = true
       }
     })()
@@ -178,10 +267,12 @@ export class ProbeCache {
   }
 
   private schedulePersist(): void {
-    if (!this.cachePath)
+    if (!this.cachePath || this.disposed)
       return
     const targetPath = this.cachePath
     this.persistChain = this.persistChain.then(async () => {
+      // Hydrate surviving entries from disk first so early seed/invalidate calls never wipe other agents.
+      await this.ensureLoaded()
       const entries: Record<string, AcpProbeResult> = {}
       for (const [agentId, entry] of this.cache.entries()) {
         if (this.isFresh(entry))
@@ -194,8 +285,14 @@ export class ProbeCache {
       }
       await fs.mkdir(path.dirname(targetPath), { recursive: true })
       const tmpPath = `${targetPath}.${randomUUID()}.tmp`
-      await fs.writeFile(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, `utf8`)
-      await fs.rename(tmpPath, targetPath)
+      try {
+        await fs.writeFile(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, `utf8`)
+        await fs.rename(tmpPath, targetPath)
+      }
+      catch (error) {
+        await fs.rm(tmpPath, { force: true }).catch(() => undefined)
+        throw error
+      }
     }).catch(() => undefined)
   }
 
@@ -209,8 +306,9 @@ export class ProbeCache {
    * subsequent agent picker opens avoid spawning a redundant probe process.
    */
   seed(result: AcpProbeResult): void {
-    if (result.error)
+    if (result.error || this.disposed)
       return
+    this.invalidatedBeforeLoad.delete(result.agentId)
     const prev = this.cache.get(result.agentId)
     const models = result.models.length > 0 ? result.models : (prev?.models ?? [])
     const thinkingOptions = hasVariantModels(models)
@@ -238,15 +336,36 @@ export class ProbeCache {
   }
 
   invalidate(agentId?: string): void {
-    if (agentId)
+    if (agentId) {
+      if (!this.loaded)
+        this.invalidatedBeforeLoad.add(agentId)
       this.cache.delete(agentId)
-    else
+      this.bumpEpoch(agentId)
+    }
+    else {
+      if (!this.loaded) {
+        this.invalidatedAllBeforeLoad = true
+        this.invalidatedBeforeLoad.clear()
+        this.loaded = true
+      }
       this.cache.clear()
+      this.bumpEpoch()
+    }
     this.schedulePersist()
   }
 
   async flush(): Promise<void> {
     await this.persistChain
+  }
+
+  async dispose(): Promise<void> {
+    this.disposed = true
+    const activeEntries = [...this.inFlight.values()]
+    this.inFlight.clear()
+    for (const active of activeEntries)
+      active.abort.abort()
+    await Promise.allSettled(activeEntries.map(active => active.promise))
+    await this.flush()
   }
 
   async probe(
@@ -255,20 +374,48 @@ export class ProbeCache {
   ): Promise<AcpProbeResult> {
     await this.ensureLoaded()
 
+    if (this.disposed) {
+      return {
+        agentId: options.agentId,
+        models: [],
+        currentModelId: null,
+        modes: [],
+        currentModeId: null,
+        commands: [],
+        probedAt: Date.now(),
+        error: `ACP host is disposed`,
+      }
+    }
+
     if (!cacheOptions.force) {
       const existing = this.cache.get(options.agentId)
       if (this.isFresh(existing))
         return existing
+
+      const pending = this.inFlight.get(options.agentId)
+      if (pending)
+        return pending.promise
+    }
+    else {
+      // Supersede any stale pre-force probe so callers never coalesce onto outdated auth/config state.
+      this.bumpEpoch(options.agentId)
     }
 
-    const pending = this.inFlight.get(options.agentId)
-    if (pending)
-      return pending
+    const abort = new AbortController()
+    const onExternalAbort = () => abort.abort()
+    if (options.signal?.aborted)
+      abort.abort()
+    else
+      options.signal?.addEventListener(`abort`, onExternalAbort, { once: true })
 
-    const task = probeAcpAgent(options)
+    const startEpoch = this.getEpochKey(options.agentId)
+    let entry!: InFlightProbe
+    const promise = probeAcpAgent({ ...options, signal: abort.signal })
       .then((result) => {
-        this.cache.set(options.agentId, result)
-        this.schedulePersist()
+        if (!this.disposed && !abort.signal.aborted && this.getEpochKey(options.agentId) === startEpoch) {
+          this.cache.set(options.agentId, result)
+          this.schedulePersist()
+        }
         return result
       })
       .catch((error) => {
@@ -285,10 +432,13 @@ export class ProbeCache {
         return failed
       })
       .finally(() => {
-        this.inFlight.delete(options.agentId)
+        options.signal?.removeEventListener(`abort`, onExternalAbort)
+        if (this.inFlight.get(options.agentId) === entry)
+          this.inFlight.delete(options.agentId)
       })
 
-    this.inFlight.set(options.agentId, task)
-    return task
+    entry = { promise, abort }
+    this.inFlight.set(options.agentId, entry)
+    return promise
   }
 }

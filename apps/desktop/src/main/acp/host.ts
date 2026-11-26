@@ -48,6 +48,11 @@ interface ManagedSession {
   articlePath: string
   lastSyncedContent: string
   syncChain: Promise<void>
+  ipSnapshotChain: Promise<void>
+  activeTurnPromise: Promise<void> | null
+  cleanupPromise: Promise<void> | null
+  promptInFlight: boolean
+  closing: boolean
   writingRulesSent: boolean
   imageGenEnabled: boolean
   permissionState: {
@@ -132,7 +137,12 @@ export function fingerprintBundledSkills(skillsDir: string | undefined): string 
 
 /** Codex lists skills as `$name`; other agents list slash commands as bare names typed with `/`. */
 function commandToken(command: AcpSlashCommand): string {
-  return command.name.startsWith(`$`) ? command.name : `/${command.name}`
+  return command.name.startsWith(`$`) || command.name.startsWith(`/`) ? command.name : `/${command.name}`
+}
+
+function isPathInside(root: string, target: string): boolean {
+  const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`
+  return target.startsWith(prefix)
 }
 
 function isCommandTurn(text: string, commands: AcpSlashCommand[]): boolean {
@@ -455,11 +465,14 @@ export class AcpHost {
           // Client-side bypass holds while the agent stays on the native mode it entered bypass on.
           const onClientBypassMode = isClientBypass && event.modeId === permissionState.clientBypassModeId
           if (!permissionState.applyingHostMode && !onClientBypassMode) {
+            const prevLevel = permissionState.level
             const mappedLevel = mapAcpModeIdToPermissionLevel(event.modeId)
             // Agent-originated mode updates may keep or restrict permissions, never escalate.
             permissionState.level = clampAgentModePermissionLevel(permissionState.level, mappedLevel)
             if (permissionState.level !== `bypass`)
               permissionState.clientBypassModeId = null
+            if (permissionState.level !== prevLevel && (permissionState.level === `ask` || permissionState.level === `plan`))
+              sessionRef.current?.clearAlwaysAllowedPermissions()
           }
           this.onEvent?.({
             ...event,
@@ -472,8 +485,7 @@ export class AcpHost {
           const managed = this.sessions.get(event.sessionId)
           if (managed) {
             this.sessions.delete(event.sessionId)
-            this.activeWorkspaceDirs.delete(managed.workspaceDir)
-            void fs.rm(managed.workspaceDir, { recursive: true, force: true }).catch(() => undefined)
+            void this.cleanupSessionWorkspace(managed)
           }
         }
 
@@ -481,7 +493,7 @@ export class AcpHost {
         // Read the article file back into the editor after an edit-kind tool completes.
         if (event.type === `tool_call` && event.tool.status === `completed` && isEditToolKind(event.tool.toolKind)) {
           const managed = this.sessions.get(event.sessionId)
-          if (managed)
+          if (managed && !managed.closing)
             void this.syncArticleFromDisk(managed)
         }
       },
@@ -509,6 +521,11 @@ export class AcpHost {
       articlePath,
       lastSyncedContent: params.content,
       syncChain: Promise.resolve(),
+      ipSnapshotChain: Promise.resolve(),
+      activeTurnPromise: null,
+      cleanupPromise: null,
+      promptInFlight: false,
+      closing: false,
       writingRulesSent: false,
       imageGenEnabled,
       permissionState,
@@ -607,18 +624,31 @@ export class AcpHost {
     return mapAcpModeIdToPermissionLevel(currentModeId) === permissionLevel ? currentModeId : null
   }
 
+  private cleanupSessionWorkspace(managed: ManagedSession): Promise<void> {
+    managed.cleanupPromise ??= (async () => {
+      await managed.activeTurnPromise?.catch(() => undefined)
+      await managed.syncChain.catch(() => undefined)
+      await managed.ipSnapshotChain.catch(() => undefined)
+      this.activeWorkspaceDirs.delete(managed.workspaceDir)
+      await fs.rm(managed.workspaceDir, { recursive: true, force: true }).catch(() => undefined)
+    })()
+    return managed.cleanupPromise
+  }
+
   /**
    * Reads `<workspace>/article.md` and emits `article_synced` only when disk content changed.
    * Serialized per session so rapid edit completions never emit out-of-order snapshots.
    */
   private syncArticleFromDisk(managed: ManagedSession): Promise<void> {
     managed.syncChain = managed.syncChain.then(async () => {
+      if (managed.closing)
+        return
       const sessionId = managed.session.sessionId
       if (!sessionId)
         return
       try {
         const diskContent = await fs.readFile(managed.articlePath, `utf8`)
-        if (diskContent === managed.lastSyncedContent)
+        if (managed.closing || diskContent === managed.lastSyncedContent)
           return
         managed.lastSyncedContent = diskContent
         this.onEvent?.({
@@ -637,36 +667,58 @@ export class AcpHost {
 
   async prompt(params: AcpPromptParams): Promise<{ stopReason?: string }> {
     const managed = this.sessions.get(params.sessionId)
-    if (!managed)
+    if (!managed || managed.closing || managed.session.isClosed)
       throw new Error(`Unknown ACP session: ${params.sessionId}`)
+    if (managed.promptInFlight || managed.session.isTurnActive)
+      throw new Error(`ACP turn is already in progress for session: ${params.sessionId}`)
 
-    // Write the current editor content to the session's article file before each turn.
-    await fs.writeFile(managed.articlePath, params.content, `utf8`)
-    managed.lastSyncedContent = params.content
-
-    // Until the session announces its own commands, the probe's list (what the draft menu offered) decides.
-    const commands = managed.session.commandsUpdatedAt !== null
-      ? managed.session.commands
-      : (this.probeCache.get(managed.session.agentId)?.commands ?? [])
-    const { blocks, deliversRules } = buildTurn(managed, params, commands)
+    managed.promptInFlight = true
+    let finishTurn!: () => void
+    managed.activeTurnPromise = new Promise<void>((resolve) => {
+      finishTurn = resolve
+    })
 
     try {
-      const result = await managed.session.prompt(blocks)
-      if (deliversRules)
-        managed.writingRulesSent = true
-      return result
-    }
-    finally {
-      // Read the article file back once more at turn end in case edits bypassed a tool_call update.
-      await this.syncArticleFromDisk(managed)
-      if (this.ipCharacters) {
-        try {
-          await this.ipCharacters.applyWorkspaceSelection(managed.workspaceDir)
-        }
-        catch (error) {
-          console.warn(`[acp] failed to apply IP character selection:`, error)
+      // Write the current editor content to the session's article file before each turn.
+      await fs.writeFile(managed.articlePath, params.content, `utf8`)
+      managed.lastSyncedContent = params.content
+
+      // Until the session announces its own commands, the probe's list (what the draft menu offered) decides.
+      let commands: AcpSlashCommand[]
+      if (managed.session.commandsUpdatedAt !== null) {
+        commands = managed.session.commands
+      }
+      else {
+        await this.probeCache.ensureLoaded()
+        commands = this.probeCache.get(managed.session.agentId)?.commands ?? []
+      }
+      const { blocks, deliversRules } = buildTurn(managed, params, commands)
+
+      try {
+        const result = await managed.session.prompt(blocks)
+        if (deliversRules && !managed.closing)
+          managed.writingRulesSent = true
+        return result
+      }
+      finally {
+        if (!managed.closing) {
+          // Read the article file back once more at turn end in case edits bypassed a tool_call update.
+          await this.syncArticleFromDisk(managed)
+          if (this.ipCharacters) {
+            try {
+              await this.ipCharacters.applyWorkspaceSelection(managed.workspaceDir)
+            }
+            catch (error) {
+              console.warn(`[acp] failed to apply IP character selection:`, error)
+            }
+          }
         }
       }
+    }
+    finally {
+      managed.promptInFlight = false
+      managed.activeTurnPromise = null
+      finishTurn()
     }
   }
 
@@ -674,16 +726,23 @@ export class AcpHost {
     if (!this.ipCharacters)
       return
     const store = this.ipCharacters
-    const workspaceDirs = [...this.sessions.values()].map(managed => managed.workspaceDir)
+    const managedList = [...this.sessions.values()].filter(m => !m.closing && !m.session.isClosed)
     await Promise.all(
-      workspaceDirs.map(async (workspaceDir) => {
-        try {
-          await fs.access(workspaceDir)
-          await store.writeWorkspaceSnapshot(workspaceDir)
-        }
-        catch (error) {
-          console.warn(`[acp] failed to refresh IP character snapshot:`, error)
-        }
+      managedList.map((managed) => {
+        managed.ipSnapshotChain = managed.ipSnapshotChain.then(async () => {
+          if (managed.closing || managed.session.isClosed)
+            return
+          try {
+            await fs.access(managed.workspaceDir)
+            if (managed.closing || managed.session.isClosed)
+              return
+            await store.writeWorkspaceSnapshot(managed.workspaceDir)
+          }
+          catch (error) {
+            console.warn(`[acp] failed to refresh IP character snapshot:`, error)
+          }
+        })
+        return managed.ipSnapshotChain
       }),
     )
   }
@@ -775,6 +834,8 @@ export class AcpHost {
           && mapPermissionLevelToAcpModeId(`bypass`, managed.session.modes) === null
           ? managed.session.currentModeId
           : null
+      if (managed.permissionState.level === `ask` || managed.permissionState.level === `plan`)
+        managed.session.clearAlwaysAllowedPermissions()
 
       return {
         permissionLevel: managed.permissionState.level,
@@ -791,8 +852,16 @@ export class AcpHost {
       // Default unknown custom modes to `ask` so switching away from `bypass` stays safe.
       managed.permissionState.level = mapped ?? `ask`
       managed.permissionState.clientBypassModeId = null
-      if (managed.session.modes.some(m => m.id === params.modeId))
+      if (managed.session.modes.some(m => m.id === params.modeId)) {
         targetModeId = params.modeId
+      }
+      else if (managed.permissionState.level !== `bypass`) {
+        targetModeId = resolveNativeModeIdForLevel(
+          managed.permissionState.level,
+          managed.session.modes,
+          managed.session.currentModeId,
+        )
+      }
 
       if (targetModeId && targetModeId !== managed.session.currentModeId) {
         managed.permissionState.applyingHostMode = true
@@ -808,6 +877,9 @@ export class AcpHost {
           managed.permissionState.applyingHostMode = false
         }
       }
+
+      if (managed.permissionState.level === `ask` || managed.permissionState.level === `plan`)
+        managed.session.clearAlwaysAllowedPermissions()
     }
 
     return {
@@ -831,8 +903,11 @@ export class AcpHost {
   /** Reads an image file the agent wrote inside its own workspace; anything outside it is refused. */
   async readWorkspaceImage(params: { sessionId: string, path: string }): Promise<AcpWorkspaceImage> {
     const managed = this.sessions.get(params.sessionId)
-    if (!managed)
+    if (!managed || managed.closing)
       throw new Error(`Unknown ACP session: ${params.sessionId}`)
+    if (typeof params.path !== `string` || !params.path.trim() || params.path.includes(`\0`))
+      throw new Error(`Image is outside the session workspace: ${params.path}`)
+
     let relPath = params.path
     try {
       relPath = decodeURI(relPath)
@@ -840,34 +915,66 @@ export class AcpHost {
     catch {
       // Keep the raw path when it is not valid percent-encoding.
     }
-    const mimeType = WORKSPACE_IMAGE_MIME[path.extname(relPath).toLowerCase()]
+    if (
+      relPath.includes(`\0`)
+      || path.isAbsolute(relPath)
+      || relPath.startsWith(`/`)
+      || relPath.startsWith(`\\`)
+      || /^[a-z]:/i.test(relPath)
+      || relPath.split(/[\\/]/).includes(`..`)
+    ) {
+      throw new Error(`Image is outside the session workspace: ${params.path}`)
+    }
+
+    const requestedMime = WORKSPACE_IMAGE_MIME[path.extname(relPath).toLowerCase()]
+    if (!requestedMime)
+      throw new Error(`Unsupported image type: ${params.path}`)
+
+    // Validate before and after realpath so UNC/external paths are never probed and symlinks cannot escape.
+    const root = await fs.realpath(managed.workspaceDir)
+    const candidate = path.resolve(root, relPath)
+    if (!isPathInside(root, candidate))
+      throw new Error(`Image is outside the session workspace: ${params.path}`)
+
+    const target = await fs.realpath(candidate)
+    if (!isPathInside(root, target))
+      throw new Error(`Image is outside the session workspace: ${params.path}`)
+
+    const mimeType = WORKSPACE_IMAGE_MIME[path.extname(target).toLowerCase()]
     if (!mimeType)
       throw new Error(`Unsupported image type: ${params.path}`)
-    // realpath both sides so symlinks cannot point outside the workspace.
-    const root = await fs.realpath(managed.workspaceDir)
-    const target = await fs.realpath(path.resolve(managed.workspaceDir, relPath))
-    if (!target.startsWith(`${root}${path.sep}`))
-      throw new Error(`Image is outside the session workspace: ${params.path}`)
-    const stat = await fs.stat(target)
-    if (!stat.isFile() || stat.size > MAX_WORKSPACE_IMAGE_BYTES)
-      throw new Error(`Image is not a file or exceeds ${MAX_WORKSPACE_IMAGE_BYTES / 1024 / 1024} MB: ${params.path}`)
-    return { data: new Uint8Array(await fs.readFile(target)), mimeType, filename: path.basename(target) }
+
+    const fh = await fs.open(target, `r`)
+    try {
+      const stat = await fh.stat()
+      if (!stat.isFile() || stat.size > MAX_WORKSPACE_IMAGE_BYTES)
+        throw new Error(`Image is not a file or exceeds ${MAX_WORKSPACE_IMAGE_BYTES / 1024 / 1024} MB: ${params.path}`)
+      const data = await fh.readFile()
+      return { data: new Uint8Array(data), mimeType, filename: path.basename(target) }
+    }
+    finally {
+      await fh.close()
+    }
   }
 
   async closeSession(sessionId: string): Promise<void> {
     const managed = this.sessions.get(sessionId)
     if (!managed)
       return
+    managed.closing = true
     this.sessions.delete(sessionId)
-    this.activeWorkspaceDirs.delete(managed.workspaceDir)
-    await managed.session.close()
-    await fs.rm(managed.workspaceDir, { recursive: true, force: true }).catch(() => undefined)
+    try {
+      await managed.session.close()
+    }
+    finally {
+      await this.cleanupSessionWorkspace(managed)
+    }
   }
 
   getActiveSessions(): AcpActiveSessionSummary[] {
     const active: AcpActiveSessionSummary[] = []
     for (const [sessionId, managed] of this.sessions.entries()) {
-      if (!managed.session.isActive)
+      if (managed.closing || !managed.session.isActive)
         continue
       active.push({
         sessionId,
@@ -886,6 +993,6 @@ export class AcpHost {
   async dispose(): Promise<void> {
     await this.registry.cancelAllInstalls()
     await Promise.all([...this.sessions.keys()].map(id => this.closeSession(id)))
-    await this.probeCache.flush()
+    await this.probeCache.dispose()
   }
 }

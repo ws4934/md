@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
+import { PassThrough, Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import {
   clampAgentModePermissionLevel,
@@ -18,6 +19,7 @@ import { AcpEventBatcher } from './event-batcher'
 import { AcpHost, buildPromptText, fingerprintBundledSkills } from './host'
 import { createSafeNdJsonStream } from './ndjson-stream'
 import { probeAcpAgent, ProbeCache } from './probe'
+import { buildAgentEnv, buildWindowsCmdLine, quoteWindowsArg } from './process'
 import { AcpRegistry } from './registry'
 import { AcpSession, appendUtf8RingChunk, decodeUtf8Ring, DEFAULT_CLIENT_CAPABILITIES } from './session'
 import { buildPermissionResponse, mergeToolCallSnapshot, resolveCurrentModelFromConfigOptions, selectAutoAcceptOption } from './translator'
@@ -1923,5 +1925,492 @@ describe(`readWorkspaceImage`, () => {
     await expect(host.readWorkspaceImage({ sessionId, path: path.join(outside, `secret.png`) })).rejects.toThrow(/outside/)
     await expect(host.readWorkspaceImage({ sessionId, path: `../../secret.png` })).rejects.toThrow()
     await expect(host.readWorkspaceImage({ sessionId, path: `notes.txt` })).rejects.toThrow(/Unsupported/)
+
+    // Intra-workspace symlink disguising article.md as `.png` must be rejected by resolved target extension.
+    await fs.symlink(path.join(workspaceDir, `article.md`), path.join(workspaceDir, `images`, `sneaky.png`))
+    await expect(host.readWorkspaceImage({ sessionId, path: `images/sneaky.png` })).rejects.toThrow(/Unsupported/)
+    await expect(host.readWorkspaceImage({ sessionId, path: `\\\\evil.example\\share\\x.png` })).rejects.toThrow(/outside/)
+    await expect(host.readWorkspaceImage({ sessionId, path: `C:images/my chart.png` })).rejects.toThrow(/outside/)
+    await expect(host.readWorkspaceImage({ sessionId, path: `images/bad\0.png` })).rejects.toThrow(/outside/)
   })
+})
+
+describe(`regression guards: process quoting, stream cancel, translator, probe coalescing, and session lifecycle`, () => {
+  it(`quotes Windows arguments with closing quotes, escaped backslashes, and control-char rejection`, async () => {
+    expect(quoteWindowsArg(``)).toBe(`""`)
+    expect(quoteWindowsArg(`--experimental-acp`)).toBe(`--experimental-acp`)
+    expect(quoteWindowsArg(`C:\\Program Files\\nodejs\\npm.cmd`)).toBe(`"C:\\Program Files\\nodejs\\npm.cmd"`)
+    expect(quoteWindowsArg(`C:\\Users\\Me\\My Dir\\`)).toBe(`"C:\\Users\\Me\\My Dir\\\\"`)
+    expect(quoteWindowsArg(`say "hi"`)).toBe(`"say \\"hi\\""`)
+    expect(() => quoteWindowsArg(`bad\nwhoami`)).toThrow(/control character/i)
+    expect(() => quoteWindowsArg(`bad\0arg`)).toThrow(/control character/i)
+    expect(buildWindowsCmdLine(`C:\\Program Files\\nodejs\\npx.cmd`, [`-y`, `@scope/my pkg`]))
+      .toBe(`""C:\\Program Files\\nodejs\\npx.cmd" -y "@scope/my pkg""`)
+
+    const prevPath = process.env.Path
+    process.env.Path = `/stale/win/path`
+    try {
+      const env = await buildAgentEnv(undefined, `/fresh/override/path`)
+      expect(env.PATH).toBe(`/fresh/override/path`)
+      expect(`Path` in env).toBe(false)
+    }
+    finally {
+      if (prevPath === undefined)
+        delete process.env.Path
+      else
+        process.env.Path = prevPath
+    }
+  })
+
+  it(`cancels createSafeNdJsonStream cleanly without unhandled controller errors and discards oversized multi-chunk lines`, async () => {
+    const encoder = new TextEncoder()
+    const passThrough = new PassThrough()
+    const nonJson: string[] = []
+    const stream = createSafeNdJsonStream(
+      new WritableStream<Uint8Array>(),
+      Readable.toWeb(passThrough) as unknown as ReadableStream<Uint8Array>,
+      { onNonJsonLine: line => nonJson.push(line) },
+    )
+
+    const reader = stream.readable.getReader()
+    passThrough.write(`{"jsonrpc":"2.0","id":"01","result":{"leadZero":true}}\n`)
+    const first = await reader.read()
+    expect(first.value).toEqual({ jsonrpc: `2.0`, id: `01`, result: { leadZero: true } })
+
+    await reader.cancel(`shutdown`)
+    expect(passThrough.destroyed).toBe(true)
+    passThrough.end()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(nonJson).toEqual([])
+
+    // Oversized non-JSON line spanning two chunks must discard its tail before `\n` rather than parsing the tail as JSON.
+    const skippedOversized: string[] = []
+    const bigHead = `x`.repeat(16 * 1024 * 1024 + 32)
+    const multiChunkInput = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(bigHead))
+        controller.enqueue(encoder.encode(`{"jsonrpc":"2.0","id":99,"result":{"injected":true}}\n{"jsonrpc":"2.0","id":"0","result":{"valid":true}}\n`))
+        controller.close()
+      },
+    })
+    const stream2 = createSafeNdJsonStream(new WritableStream<Uint8Array>(), multiChunkInput, {
+      onNonJsonLine: line => skippedOversized.push(line),
+    })
+    const reader2 = stream2.readable.getReader()
+    const validMsg = await reader2.read()
+    const doneMsg = await reader2.read()
+    expect(skippedOversized).toHaveLength(1)
+    expect(validMsg.value).toEqual({ jsonrpc: `2.0`, id: 0, result: { valid: true } })
+    expect(doneMsg.done).toBe(true)
+  })
+
+  it(`ignores empty chunks and emits immediately after AcpEventBatcher.dispose()`, () => {
+    const emitted: AcpHostEvent[] = []
+    const batcher = new AcpEventBatcher({ batchMs: 100, onEmit: ev => emitted.push(ev) })
+    batcher.push({ type: `message_chunk`, sessionId: `s1`, text: `` })
+    expect(emitted).toEqual([])
+    batcher.dispose()
+    batcher.push({ type: `message_chunk`, sessionId: `s1`, text: `late` })
+    expect(emitted).toEqual([{ type: `message_chunk`, sessionId: `s1`, text: `late` }])
+  })
+
+  it(`extracts snake_case edit inputs and preserves diffs across status/text updates in mergeToolCallSnapshot`, () => {
+    const snakeEdit = mergeToolCallSnapshot(undefined, {
+      toolCallId: `tc-snake`,
+      title: `Edit file`,
+      kind: `edit`,
+      status: `pending`,
+      rawInput: {
+        file_path: `article.md`,
+        old_string: `before`,
+        new_string: `after`,
+      },
+    })
+    expect(snakeEdit.filePath).toBe(`article.md`)
+    expect(snakeEdit.unifiedDiff).toBe(`-before\n+after`)
+
+    // Plain status/error text in `content` must not overwrite the previously captured diff.
+    const completedWithText = mergeToolCallSnapshot(snakeEdit, {
+      toolCallId: `tc-snake`,
+      status: `completed`,
+      content: [{ type: `content`, content: { type: `text`, text: `Successfully updated article.md` } }],
+    })
+    expect(completedWithText.unifiedDiff).toBe(`-before\n+after`)
+    expect(completedWithText.diffStats).toEqual({ added: 1, removed: 1, hasChanges: true })
+
+    // Status-only update on a `delete` tool must preserve its previous diff instead of resetting to empty.
+    const delInitial = mergeToolCallSnapshot(undefined, {
+      toolCallId: `tc-del`,
+      title: `Delete draft`,
+      kind: `delete`,
+      status: `pending`,
+      content: [{ type: `diff`, path: `old.md`, oldText: `gone line`, newText: `` }],
+    })
+    expect(delInitial.unifiedDiff).toBe(`-gone line`)
+    const delCompleted = mergeToolCallSnapshot(delInitial, {
+      toolCallId: `tc-del`,
+      status: `completed`,
+    })
+    expect(delCompleted.unifiedDiff).toBe(`-gone line`)
+    expect(delCompleted.diffStats).toEqual({ added: 0, removed: 1, hasChanges: true })
+  })
+
+  it(`preserves cold-disk ProbeCache entries across early seed/invalidate, supersedes stale in-flight probes, and cleans probe workspaces on dispose`, async () => {
+    const dir = await makeTempDir(`md-acp-probe-race-`)
+    const cachePath = path.join(dir, `probe-cache.json`)
+
+    // 1. Seed two agents and persist to disk.
+    const writer = new ProbeCache({ cachePath, appVersion: `2.0.0` })
+    writer.seed({
+      agentId: `agent-a`,
+      models: [{ id: `ma`, name: `MA` }],
+      currentModelId: `ma`,
+      modes: [],
+      currentModeId: null,
+      commands: [{ name: `cmd-a` }],
+      commandsAnnounced: true,
+      probedAt: Date.now(),
+    })
+    writer.seed({
+      agentId: `agent-b`,
+      models: [{ id: `mb`, name: `MB` }],
+      currentModelId: `mb`,
+      modes: [],
+      currentModeId: null,
+      commands: [{ name: `cmd-b` }],
+      commandsAnnounced: true,
+      probedAt: Date.now(),
+    })
+    await writer.flush()
+
+    // 2. Cold ProbeCache: invalidate `agent-b` and seed `agent-c` BEFORE `probe()` loads disk cache.
+    const cold = new ProbeCache({ cachePath, appVersion: `2.0.0` })
+    cold.invalidate(`agent-b`)
+    cold.seed({
+      agentId: `agent-c`,
+      models: [{ id: `mc`, name: `MC` }],
+      currentModelId: `mc`,
+      modes: [],
+      currentModeId: null,
+      commands: [{ name: `cmd-c` }],
+      commandsAnnounced: true,
+      probedAt: Date.now(),
+    })
+    await cold.flush()
+
+    const reloaded = new ProbeCache({ cachePath, appVersion: `2.0.0` })
+    const hitA = await reloaded.probe({ agentId: `agent-a`, command: `/nonexistent`, args: [] })
+    const hitC = await reloaded.probe({ agentId: `agent-c`, command: `/nonexistent`, args: [] })
+    const missB = await reloaded.probe({ agentId: `agent-b`, command: `/nonexistent`, args: [] })
+    expect(hitA.models[0]?.id).toBe(`ma`)
+    expect(hitC.models[0]?.id).toBe(`mc`)
+    expect(missB.error).toBeTruthy()
+
+    // 3. In-flight probe invalidated mid-run must not coalesce onto or overwrite a subsequent forced probe.
+    const liveCache = new ProbeCache()
+    const slowHangingProbe = liveCache.probe({
+      agentId: `flaky-agent`,
+      command: process.execPath,
+      args: [FAKE_AGENT_SCRIPT],
+      cwd: dir,
+      env: { FAKE_AGENT_HANG_METHOD: `session/new` },
+      sessionNewTimeoutMs: 5_000,
+      closeTimeoutMs: 200,
+    })
+    await new Promise(resolve => setTimeout(resolve, 60))
+    liveCache.invalidate(`flaky-agent`)
+
+    const freshProbe = await liveCache.probe(
+      {
+        agentId: `flaky-agent`,
+        command: process.execPath,
+        args: [FAKE_AGENT_SCRIPT],
+        cwd: dir,
+        commandQuietMs: 30,
+      },
+      { force: true },
+    )
+    expect(freshProbe.error).toBeUndefined()
+    expect(freshProbe.models.length).toBeGreaterThan(0)
+    await slowHangingProbe
+    expect(liveCache.get(`flaky-agent`)?.models.length).toBeGreaterThan(0)
+    await liveCache.dispose()
+
+    // 4. Disposing AcpHost while a probe is in flight aborts the probe and deletes `probe-*` workspace.
+    const hostDir = await makeTempDir(`md-acp-probe-dispose-`)
+    const host = new AcpHost({
+      dataDir: hostDir,
+      extraBuiltinAgents: [{
+        id: `slow-probe`,
+        name: `Slow Probe`,
+        command: process.execPath,
+        args: [FAKE_AGENT_SCRIPT],
+        env: { FAKE_AGENT_HANG_METHOD: `session/new` },
+        detectBinaries: [process.execPath],
+        builtin: true,
+        avatar: { letter: `S`, color: `#5B5BD6` },
+      }],
+    })
+    const pendingHostProbe = host.probeAgent(`slow-probe`)
+    await new Promise(resolve => setTimeout(resolve, 80))
+    const startedDispose = Date.now()
+    await host.dispose()
+    expect(Date.now() - startedDispose).toBeLessThan(3_000)
+    await pendingHostProbe
+    const leftover = await fs.readdir(path.join(hostDir, `acp-workspaces`)).catch(() => [])
+    expect(leftover).toEqual([])
+  })
+
+  it(`prevents custom agents from shadowing reserved built-in IDs and avoids post-exit install_progress regressions`, async () => {
+    const dir = await makeTempDir(`md-acp-reg-sec-`)
+    const settingsPath = path.join(dir, `acp-settings.json`)
+    await fs.writeFile(
+      settingsPath,
+      JSON.stringify({
+        defaultAgentId: `claude`,
+        defaultPermissionLevel: `ask`,
+        customAgents: [
+          { id: `api-model`, name: `Spoof API`, command: `/bin/evil`, args: [], builtin: false, avatar: { letter: `S`, color: `#000` } },
+          { id: `claude`, name: `Spoof Claude`, command: `/bin/evil`, args: [], builtin: false, avatar: { letter: `C`, color: `#000` } },
+          { id: `custom-valid`, name: `Valid Custom`, command: process.execPath, args: [], builtin: false, avatar: { letter: `V`, color: `#5B5BD6` } },
+        ],
+        commandOverrides: {
+          claude: { command: process.execPath, args: [`--override`] },
+        },
+      }),
+      `utf8`,
+    )
+
+    const registry = new AcpRegistry({ settingsPath, pathOverride: process.env.PATH })
+    const loaded = await registry.getSettings()
+    expect(loaded.customAgents.map(a => a.id)).toEqual([`custom-valid`])
+
+    // Clearing an override with empty command deletes it; invalid defaultPermissionLevel is ignored.
+    const updated = await registry.updateSettings({
+      defaultPermissionLevel: `invalid-level` as AcpPermissionLevel,
+      commandOverrides: { claude: { command: `   `, args: [] } },
+      customAgents: [
+        ...loaded.customAgents,
+        { id: `api-model`, name: `Spoof 2`, command: `/bin/evil`, args: [], builtin: false, avatar: { letter: `S`, color: `#000` } },
+      ],
+    })
+    expect(updated.defaultPermissionLevel).toBe(`ask`)
+    expect(updated.commandOverrides.claude).toBeUndefined()
+    expect(updated.customAgents.map(a => a.id)).toEqual([`custom-valid`])
+  })
+
+  it(`guards concurrent prompts, cancels active turns, closes cleanly mid-turn, orders mid-turn crashes, revokes allow_always on mode tightening, and deduplicates mode_changed`, async () => {
+    const dataDir = await makeTempDir(`md-acp-lifecycle-`)
+    const events: AcpHostEvent[] = []
+    const host = new AcpHost({
+      dataDir,
+      extraBuiltinAgents: [
+        {
+          id: `fake-slow`,
+          name: `Fake Slow`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_SLOW_PROMPT_MS: `4000`,
+            FAKE_AGENT_MODES_STYLE: `claude`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `S`, color: `#5B5BD6` },
+        },
+        {
+          id: `fake-hang-prompt`,
+          name: `Fake Hang Prompt`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_HANG_METHOD: `session/prompt`,
+            FAKE_AGENT_IGNORE_CANCEL: `1`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `H`, color: `#5B5BD6` },
+        },
+        {
+          id: `fake-crash-prompt`,
+          name: `Fake Crash Prompt`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: { FAKE_AGENT_CRASH_IN_PROMPT: `1` },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `C`, color: `#5B5BD6` },
+        },
+        {
+          id: `fake-always-perm`,
+          name: `Fake Always Perm`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0`,
+            FAKE_AGENT_REQUIRE_PERMISSION: `1`,
+            FAKE_AGENT_MODES_STYLE: `claude`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `P`, color: `#5B5BD6` },
+        },
+      ],
+      onEvent: ev => events.push(ev),
+    })
+    openHosts.push(host)
+
+    // 1. Concurrent prompt rejection + cancelTurn during active turn + deduplicated mode_changed.
+    const slowSess = await host.startSession({
+      agentId: `fake-slow`,
+      permissionLevel: `auto_edits`,
+      postId: `p-slow`,
+      postTitle: `Slow`,
+      content: `# Base`,
+    })
+    const initialModeEvents = events.filter(
+      e => e.type === `mode_changed` && e.sessionId === slowSess.sessionId,
+    )
+    expect(initialModeEvents).toHaveLength(1)
+
+    const turn1 = host.prompt({
+      sessionId: slowSess.sessionId,
+      text: `Long work`,
+      content: `# Base`,
+      postTitle: `Slow`,
+    })
+    await expect(
+      host.prompt({
+        sessionId: slowSess.sessionId,
+        text: `Concurrent prompt`,
+        content: `# Clobber`,
+        postTitle: `Slow`,
+      }),
+    ).rejects.toThrow(/already in progress/i)
+
+    await new Promise(resolve => setTimeout(resolve, 60))
+    await host.cancelTurn(slowSess.sessionId)
+    const cancelledRes = await turn1
+    expect(cancelledRes.stopReason).toBe(`cancelled`)
+
+    // 2. Intentional closeSession while a turn is hung resolves prompt as `cancelled` without `turn_error` and cleans workspace.
+    events.length = 0
+    const hungSess = await host.startSession({
+      agentId: `fake-hang-prompt`,
+      postId: `p-hung`,
+      postTitle: `Hung`,
+      content: `# Hung`,
+    })
+    const hungTurn = host.prompt({
+      sessionId: hungSess.sessionId,
+      text: `Will hang`,
+      content: `# Hung`,
+      postTitle: `Hung`,
+    })
+    await new Promise(resolve => setTimeout(resolve, 60))
+    const closeResult = await Promise.all([
+      hungTurn,
+      host.closeSession(hungSess.sessionId),
+      host.closeSession(hungSess.sessionId),
+    ])
+    expect(closeResult[0]).toEqual({ stopReason: `cancelled` })
+    expect(events.some(e => e.type === `turn_error` && e.sessionId === hungSess.sessionId)).toBe(false)
+    expect(events.some(e => e.type === `session_closed` && e.sessionId === hungSess.sessionId)).toBe(true)
+
+    // 3. Unexpected child crash mid-turn emits `turn_error` BEFORE `session_closed` and finishes fast without dead-pipe timeouts.
+    events.length = 0
+    const crashSess = await host.startSession({
+      agentId: `fake-crash-prompt`,
+      postId: `p-crash`,
+      postTitle: `Crash`,
+      content: `# Crash`,
+    })
+    const crashStart = Date.now()
+    await expect(
+      host.prompt({
+        sessionId: crashSess.sessionId,
+        text: `Trigger crash`,
+        content: `# Crash`,
+        postTitle: `Crash`,
+      }),
+    ).rejects.toThrow(/simulated crash mid-turn/)
+    for (let i = 0; i < 40; i++) {
+      if (events.some(e => e.type === `session_closed` && e.sessionId === crashSess.sessionId))
+        break
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+    expect(Date.now() - crashStart).toBeLessThan(1_500)
+    const crashEventTypes = events
+      .filter(e => `sessionId` in e && e.sessionId === crashSess.sessionId)
+      .map(e => e.type)
+    const errIdx = crashEventTypes.indexOf(`turn_error`)
+    const closedIdx = crashEventTypes.indexOf(`session_closed`)
+    expect(errIdx).toBeGreaterThanOrEqual(0)
+    expect(closedIdx).toBeGreaterThan(errIdx)
+
+    // 4. Granting `allow_always` in `ask` mode is revoked once the user tightens permission mode to `plan` or `ask`.
+    const permDataDir = await makeTempDir(`md-acp-perm-host-`)
+    let askedCount = 0
+    const permHost = new AcpHost({
+      dataDir: permDataDir,
+      ipCharacters: {
+        writeWorkspaceSnapshot: async (wsDir: string) => {
+          await fs.mkdir(path.join(wsDir, `ip`), { recursive: true })
+          await fs.writeFile(path.join(wsDir, `ip`, `library.json`), `{}`, `utf8`)
+        },
+        applyWorkspaceSelection: async () => false,
+      } as never,
+      extraBuiltinAgents: [{
+        id: `fake-always-perm`,
+        name: `Fake Always Perm`,
+        command: process.execPath,
+        args: [FAKE_AGENT_SCRIPT],
+        env: {
+          FAKE_AGENT_REQUIRE_EDIT_PERMISSION: `0`,
+          FAKE_AGENT_REQUIRE_PERMISSION: `1`,
+          FAKE_AGENT_MODES_STYLE: `claude`,
+        },
+        detectBinaries: [process.execPath],
+        builtin: true,
+        avatar: { letter: `P`, color: `#5B5BD6` },
+      }],
+      onEvent: (ev) => {
+        if (ev.type === `permission_requested`) {
+          askedCount += 1
+          permHost.respondPermission({
+            sessionId: ev.sessionId,
+            requestId: ev.request.requestId,
+            decision: `allow_always`,
+          })
+        }
+      },
+    })
+    openHosts.push(permHost)
+
+    const permSess = await permHost.startSession({
+      agentId: `fake-always-perm`,
+      permissionLevel: `ask`,
+      postId: `p-perm`,
+      postTitle: `Perm`,
+      content: `# Perm`,
+    })
+    await permHost.prompt({ sessionId: permSess.sessionId, text: `Run 1`, content: `# Perm`, postTitle: `Perm` })
+    expect(askedCount).toBe(1)
+    // Second turn in same mode uses `allow_always` without prompting again.
+    await permHost.prompt({ sessionId: permSess.sessionId, text: `Run 2`, content: `# Perm`, postTitle: `Perm` })
+    expect(askedCount).toBe(1)
+    // Switching to `plan` revokes cached `allow_always` so execute prompts again instead of auto-running.
+    await permHost.setPermissionMode({ sessionId: permSess.sessionId, permissionLevel: `plan` })
+    await permHost.prompt({ sessionId: permSess.sessionId, text: `Run 3 in plan`, content: `# Perm`, postTitle: `Perm` })
+    expect(askedCount).toBe(2)
+
+    // 5. Concurrent refreshIpSnapshots + closeSession never recreates `<workspace>/ip/library.json`.
+    await Promise.all([
+      permHost.refreshIpSnapshots(),
+      permHost.closeSession(permSess.sessionId),
+      permHost.refreshIpSnapshots(),
+    ])
+    const remainingPermWorkspaces = await fs.readdir(path.join(permDataDir, `acp-workspaces`)).catch(() => [])
+    expect(remainingPermWorkspaces).toEqual([])
+  }, 25_000)
 })

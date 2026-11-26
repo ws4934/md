@@ -15,7 +15,7 @@ function normalizeIncomingMessage(raw: Record<string, unknown>): AnyMessage {
     `id` in raw
     && !(`method` in raw)
     && typeof raw.id === `string`
-    && /^\d+$/.test(raw.id)
+    && /^(?:0|[1-9]\d*)$/.test(raw.id)
   ) {
     const numericId = Number(raw.id)
     if (Number.isSafeInteger(numericId))
@@ -26,6 +26,10 @@ function normalizeIncomingMessage(raw: Record<string, unknown>): AnyMessage {
 
 const MAX_NON_JSON_LINE_CHARS = 16 * 1024 * 1024
 const MAX_JSON_LINE_CHARS = 64 * 1024 * 1024
+
+function lineCharLimit(text: string): number {
+  return text.trimStart().startsWith(`{`) ? MAX_JSON_LINE_CHARS : MAX_NON_JSON_LINE_CHARS
+}
 
 /**
  * Wraps child stdio byte streams as an ACP NDJSON Stream, skipping and logging
@@ -39,75 +43,152 @@ export function createSafeNdJsonStream(
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
 
+  let cancelled = false
+  let activeReader: ReadableStreamDefaultReader<Uint8Array> | null = null
+
   const processLine = (
     rawLine: string,
     controller: ReadableStreamDefaultController<AnyMessage>,
   ) => {
+    if (cancelled)
+      return
     const line = rawLine.trim()
     if (!line)
       return
 
+    const limit = lineCharLimit(line)
+    if (line.length > limit) {
+      options.onNonJsonLine?.(
+        line.slice(0, 200),
+        new Error(`Dropped stdout line exceeding ${limit} characters`),
+      )
+      return
+    }
+
+    let parsed: unknown
     try {
-      const parsed: unknown = JSON.parse(line)
-      if (!isPlainObject(parsed)) {
-        options.onNonJsonLine?.(line, new Error(`Expected JSON-RPC object`))
-        return
-      }
-      controller.enqueue(normalizeIncomingMessage(parsed))
+      parsed = JSON.parse(line)
     }
     catch (error) {
       options.onNonJsonLine?.(line, error)
+      return
     }
+
+    if (!isPlainObject(parsed)) {
+      options.onNonJsonLine?.(line, new Error(`Expected JSON-RPC object`))
+      return
+    }
+
+    if (!cancelled)
+      controller.enqueue(normalizeIncomingMessage(parsed))
   }
 
   const readable = new ReadableStream<AnyMessage>({
     async start(controller) {
       let buffer = ``
+      let discardingUntilNewline = false
       const reader = input.getReader()
+      activeReader = reader
       try {
         while (true) {
+          if (cancelled)
+            break
           const { value, done } = await reader.read()
-          if (done)
+          if (done || cancelled)
             break
           if (!value)
             continue
 
-          buffer += decoder.decode(value, { stream: true })
+          let chunk = decoder.decode(value, { stream: true })
 
-          if (!buffer.includes(`\n`)) {
-            // Cap unbounded single-line accumulation (e.g. `\r` progress bars or runaway banners).
-            const trimmedStart = buffer.trimStart()
-            const looksLikeJson = trimmedStart.startsWith(`{`)
-            const limit = looksLikeJson ? MAX_JSON_LINE_CHARS : MAX_NON_JSON_LINE_CHARS
+          if (discardingUntilNewline) {
+            const newlineIdx = chunk.indexOf(`\n`)
+            if (newlineIdx === -1)
+              continue
+            chunk = chunk.slice(newlineIdx + 1)
+            discardingUntilNewline = false
+          }
+
+          buffer += chunk
+
+          if (buffer.includes(`\n`)) {
+            const lines = buffer.split(`\n`)
+            buffer = lines.pop() ?? ``
+
+            for (const line of lines)
+              processLine(line, controller)
+          }
+
+          // Cap unbounded single-line accumulation (e.g. `\r` progress bars or runaway banners).
+          if (buffer.length > 0) {
+            const limit = lineCharLimit(buffer)
             if (buffer.length > limit) {
               options.onNonJsonLine?.(
                 buffer.slice(0, 200),
                 new Error(`Dropped stdout line exceeding ${limit} characters without newline`),
               )
               buffer = ``
+              discardingUntilNewline = true
             }
-            continue
           }
-
-          const lines = buffer.split(`\n`)
-          buffer = lines.pop() ?? ``
-
-          for (const line of lines)
-            processLine(line, controller)
         }
 
-        const trailing = buffer + decoder.decode()
-        if (trailing.trim())
-          processLine(trailing, controller)
+        if (!cancelled) {
+          const trailing = discardingUntilNewline ? `` : buffer + decoder.decode()
+          if (trailing.trim())
+            processLine(trailing, controller)
+        }
       }
       catch (error) {
-        controller.error(error)
+        if (!cancelled) {
+          try {
+            controller.error(error)
+          }
+          catch {
+            // Stream was already closed or cancelled concurrently.
+          }
+        }
         return
       }
       finally {
-        reader.releaseLock()
+        if (activeReader === reader)
+          activeReader = null
+        try {
+          reader.releaseLock()
+        }
+        catch {
+          // Ignore already-released reader.
+        }
       }
-      controller.close()
+      if (!cancelled) {
+        try {
+          controller.close()
+        }
+        catch {
+          // Stream was already closed or cancelled concurrently.
+        }
+      }
+    },
+    async cancel(reason) {
+      cancelled = true
+      const reader = activeReader
+      activeReader = null
+      if (!reader)
+        return
+      try {
+        await reader.cancel(reason)
+      }
+      catch {
+        // Ignore underlying stream cancel errors during teardown.
+      }
+      finally {
+        try {
+          reader.releaseLock()
+        }
+        catch {
+          // Ignore already-released reader.
+        }
+      }
     },
   })
 

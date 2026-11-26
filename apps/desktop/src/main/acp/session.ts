@@ -28,7 +28,7 @@ import type { ChildProcess, ChildProcessWithoutNullStreams } from 'node:child_pr
 import type { ExtendedNewSessionResponse } from './translator'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
-import fsSync from 'node:fs'
+import fs from 'node:fs/promises'
 import path from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { client as createAcpClient, PROTOCOL_VERSION, RequestError } from '@agentclientprotocol/sdk/unstable'
@@ -169,6 +169,9 @@ const DEFAULT_TIMEOUTS: Required<AcpSessionTimeouts> = {
 
 const DEFAULT_TERMINAL_MAX_BYTES = 256 * 1024
 const MAX_TRACKED_TOOL_CALLS = 500
+const MAX_EARLY_UPDATES = 1_000
+const MAX_STDERR_CHARS = 4_096
+const MAX_TERMINALS = 64
 
 export const DEFAULT_CLIENT_CAPABILITIES = {
   // Let the CLI read and write disk directly, matching Paseo's ACP defaults.
@@ -203,6 +206,7 @@ export class AcpSession {
   private authMethods: Array<{ id: string, name: string }> = []
   private _initializeMeta: Record<string, unknown> | null = null
   private stderrChunks: string[] = []
+  private stderrTotalChars = 0
   private processFailureGuard: { promise: Promise<never>, dispose: () => void } | null = null
 
   private _sessionId: string | null = null
@@ -229,6 +233,8 @@ export class AcpSession {
 
   private activeTurn = false
   private closed = false
+  private closedIntentionally = false
+  private closePromise: Promise<void> | null = null
 
   constructor(options: AcpSessionOptions) {
     this.agentId = options.agentId
@@ -339,7 +345,8 @@ export class AcpSession {
       }
     }
     catch (error) {
-      const normalized = this.enrichAuthError(error)
+      const preferred = await this.preferProcessFailure(error)
+      const normalized = this.enrichAuthError(preferred)
       await this.close()
       throw normalized
     }
@@ -365,7 +372,8 @@ export class AcpSession {
       this.replayEarlyUpdates()
     }
     catch (error) {
-      const normalized = this.enrichAuthError(error)
+      const preferred = await this.preferProcessFailure(error)
+      const normalized = this.enrichAuthError(preferred)
       await this.close()
       throw normalized
     }
@@ -374,6 +382,8 @@ export class AcpSession {
   async prompt(blocks: ContentBlock[]): Promise<{ stopReason?: string }> {
     if (!this.connection || !this._sessionId || this.closed)
       throw new Error(`ACP session is not active`)
+    if (this.activeTurn)
+      throw new Error(`ACP turn is already in progress`)
 
     this.activeTurn = true
     this.emit({ type: `turn_started`, sessionId: this._sessionId })
@@ -396,8 +406,17 @@ export class AcpSession {
       return { stopReason: result?.stopReason }
     }
     catch (error) {
+      const preferred = await this.preferProcessFailure(error)
       this.activeTurn = false
-      const normalized = this.enrichAuthError(error)
+      if (this.closedIntentionally) {
+        this.emit({
+          type: `turn_finished`,
+          sessionId: this._sessionId,
+          stopReason: `cancelled`,
+        })
+        return { stopReason: `cancelled` }
+      }
+      const normalized = this.enrichAuthError(preferred)
       const message = normalized instanceof Error ? normalized.message : String(normalized)
       this.emit({
         type: `turn_error`,
@@ -708,12 +727,14 @@ export class AcpSession {
           this.timeouts.sessionNewMs,
           `ACP session/set_mode timed out`,
         )
-        this._currentModeId = modeId
-        this.emit({
-          type: `mode_changed`,
-          sessionId: this._sessionId,
-          modeId: this._currentModeId,
-        })
+        if (this._currentModeId !== modeId) {
+          this._currentModeId = modeId
+          this.emit({
+            type: `mode_changed`,
+            sessionId: this._sessionId,
+            modeId: this._currentModeId,
+          })
+        }
         return { modeId: this._currentModeId }
       }
       catch (error) {
@@ -737,25 +758,21 @@ export class AcpSession {
     )
 
     if (response?.configOptions) {
-      this._configOptions = response.configOptions
-      const derived = deriveModesFromSessionResponse({
-        sessionId: this._sessionId,
-        configOptions: response.configOptions,
-      })
-      if (derived.modes.length > 0)
-        this._modes = derived.modes
-      this._currentModeId = derived.currentModeId ?? modeId
+      this.syncFromConfigOptions(response.configOptions)
     }
-    else {
+    if (this._currentModeId !== modeId) {
       this._currentModeId = modeId
+      this.emit({
+        type: `mode_changed`,
+        sessionId: this._sessionId,
+        modeId: this._currentModeId,
+      })
     }
-
-    this.emit({
-      type: `mode_changed`,
-      sessionId: this._sessionId,
-      modeId: this._currentModeId,
-    })
     return { modeId: this._currentModeId }
+  }
+
+  clearAlwaysAllowedPermissions(): void {
+    this.alwaysAllowedKinds.clear()
   }
 
   respondPermission(requestId: string, decision: AcpPermissionDecision, optionId?: string): void {
@@ -780,16 +797,25 @@ export class AcpSession {
     }
   }
 
-  async close(): Promise<void> {
-    if (this.closed)
-      return
+  close(): Promise<void> {
+    this.closedIntentionally = true
+    return this.beginClose()
+  }
+
+  private beginClose(): Promise<void> {
+    this.closePromise ??= this.performClose()
+    return this.closePromise
+  }
+
+  private async performClose(): Promise<void> {
     this.closed = true
 
     this.cancelAllPendingPermissions()
     this.processFailureGuard?.dispose()
     this.processFailureGuard = null
 
-    if (this.connection && this._sessionId) {
+    const childAlive = Boolean(this.child && this.child.exitCode === null && this.child.signalCode === null)
+    if (this.connection && this._sessionId && childAlive) {
       if (this.activeTurn) {
         try {
           await withTimeout(
@@ -817,11 +843,17 @@ export class AcpSession {
       }
     }
 
-    const terminalKills = [...this.terminals.values()]
-      .filter(term => term.running)
-      .map(term => terminateProcessTree(term.child, { gracefulTimeoutMs: 1_000, forceTimeoutMs: 1_000 }))
-    await Promise.all(terminalKills)
+    const terminalEntries = [...this.terminals.values()]
     this.terminals.clear()
+    await Promise.allSettled(
+      terminalEntries
+        .filter(term => term.running)
+        .map(term => terminateProcessTree(term.child, { gracefulTimeoutMs: 1_000, forceTimeoutMs: 1_000 })),
+    )
+    for (const term of terminalEntries) {
+      term.chunks.length = 0
+      term.totalBytes = 0
+    }
 
     if (this.connection) {
       try {
@@ -836,6 +868,12 @@ export class AcpSession {
     if (this.child) {
       const child = this.child
       this.child = null
+      try {
+        child.stdin.end()
+      }
+      catch {
+        // Ignore broken or already-closed stdin pipe.
+      }
       await terminateProcessTree(child, { gracefulTimeoutMs: 1_500, forceTimeoutMs: 1_500 })
     }
 
@@ -845,25 +883,44 @@ export class AcpSession {
 
   private async connectAndInitialize(): Promise<void> {
     const env = await buildAgentEnv(this.options.env, this.options.pathOverride)
+    if (this.closed)
+      throw new Error(`ACP session closed during initialization`)
+
     const child = spawnAgentProcess(this.options.command, this.options.args, {
       cwd: this.options.cwd,
       env,
     })
+    if (this.closed) {
+      await terminateProcessTree(child, { gracefulTimeoutMs: 500, forceTimeoutMs: 500 })
+      throw new Error(`ACP session closed during initialization`)
+    }
     this.child = child
     this.stderrChunks = []
+    this.stderrTotalChars = 0
 
     child.stderr.on(`data`, (chunk: Buffer | string) => {
-      this.stderrChunks.push(chunk.toString())
-      if (this.stderrChunks.length > 200)
-        this.stderrChunks.shift()
+      const text = chunk.toString()
+      const piece = text.length > MAX_STDERR_CHARS ? text.slice(-MAX_STDERR_CHARS) : text
+      this.stderrChunks.push(piece)
+      this.stderrTotalChars += piece.length
+      while (this.stderrTotalChars > MAX_STDERR_CHARS && this.stderrChunks.length > 1) {
+        const dropped = this.stderrChunks.shift()!
+        this.stderrTotalChars -= dropped.length
+      }
     })
 
-    this.processFailureGuard = createChildFailureGuard(child, this.stderrChunks)
+    const failureGuard = createChildFailureGuard(child, this.stderrChunks)
+    this.processFailureGuard = failureGuard
 
-    // Clean up session state and emit `session_closed` if the CLI exits unexpectedly while idle.
-    child.once(`exit`, () => {
-      if (!this.closed && this._sessionId)
-        void this.close()
+    // Clean up session state and emit `session_closed` if the CLI exits unexpectedly.
+    // Trigger after `failureGuard` settles (+ microtask) so an active `prompt()` emits `turn_error` first.
+    failureGuard.promise.catch(() => {
+      if (!this.closed && this._sessionId) {
+        queueMicrotask(() => {
+          if (!this.closed && this._sessionId)
+            void this.beginClose()
+        })
+      }
     })
 
     const stream = createSafeNdJsonStream(
@@ -920,6 +977,28 @@ export class AcpSession {
     this.agentCapabilities = initResponse.agentCapabilities ?? null
     this.authMethods = (initResponse.authMethods ?? []).map(m => ({ id: m.id, name: m.name || m.id }))
     this._initializeMeta = (initResponse._meta as Record<string, unknown> | null | undefined) ?? null
+  }
+
+  private async preferProcessFailure(error: unknown): Promise<unknown> {
+    if (this.closedIntentionally || !this.processFailureGuard)
+      return error
+    const rawMessage = error instanceof Error ? error.message : String(error)
+    if (!/ACP connection closed/i.test(rawMessage))
+      return error
+    // Stdout EOF often wins the race against SIGCHLD `exit` by ~1ms when a CLI crashes; wait briefly for exit/stderr.
+    try {
+      await Promise.race([
+        this.processFailureGuard.promise,
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 100)
+          timer.unref?.()
+        }),
+      ])
+      return error
+    }
+    catch (exitError) {
+      return exitError
+    }
   }
 
   private enrichAuthError(error: unknown): unknown {
@@ -1100,6 +1179,8 @@ export class AcpSession {
   private handleSessionUpdate(params: SessionNotification): void {
     if (!this._sessionId) {
       // Buffer updates arriving before session/new returns so none are lost.
+      if (this.earlyUpdates.length >= MAX_EARLY_UPDATES)
+        this.earlyUpdates.shift()
       this.earlyUpdates.push(params)
       return
     }
@@ -1188,12 +1269,14 @@ export class AcpSession {
         break
       }
       case `current_mode_update`: {
-        this._currentModeId = update.currentModeId
-        this.emit({
-          type: `mode_changed`,
-          sessionId: this._sessionId,
-          modeId: this._currentModeId,
-        })
+        if (this._currentModeId !== update.currentModeId) {
+          this._currentModeId = update.currentModeId
+          this.emit({
+            type: `mode_changed`,
+            sessionId: this._sessionId,
+            modeId: this._currentModeId,
+          })
+        }
         break
       }
     }
@@ -1202,6 +1285,9 @@ export class AcpSession {
   private async handlePermissionRequest(
     params: RequestPermissionRequest,
   ): Promise<RequestPermissionResponse> {
+    if (this.closed)
+      return { outcome: { outcome: `cancelled` } }
+
     const requestId = randomUUID()
     const toolSnapshot = this.toolCalls.get(params.toolCall.toolCallId)
     const mapped = mapPermissionRequest(requestId, this._sessionId ?? params.sessionId, params, toolSnapshot)
@@ -1255,11 +1341,11 @@ export class AcpSession {
     this.pendingPermissions.clear()
   }
 
-  private resolveTerminalCwd(requestedCwd?: string | null): string {
+  private async resolveTerminalCwd(requestedCwd?: string | null): Promise<string> {
     const fallbackRoot = path.resolve(this.options.cwd)
     let canonicalRoot = fallbackRoot
     try {
-      canonicalRoot = fsSync.realpathSync.native(fallbackRoot)
+      canonicalRoot = await fs.realpath(fallbackRoot)
     }
     catch {
       return fallbackRoot
@@ -1270,7 +1356,7 @@ export class AcpSession {
 
     const candidate = path.resolve(fallbackRoot, requestedCwd)
     try {
-      const canonicalCandidate = fsSync.realpathSync.native(candidate)
+      const canonicalCandidate = await fs.realpath(candidate)
       if (
         canonicalCandidate === canonicalRoot
         || canonicalCandidate.startsWith(`${canonicalRoot}${path.sep}`)
@@ -1286,10 +1372,18 @@ export class AcpSession {
   }
 
   private async handleCreateTerminal(params: CreateTerminalRequest): Promise<{ terminalId: string }> {
+    if (this.closed)
+      throw RequestError.internalError({ details: `ACP session is closed` })
+
     const terminalId = randomUUID()
     const extraEnv = Object.fromEntries((params.env ?? []).map(entry => [entry.name, entry.value]))
-    const env = await buildAgentEnv({ ...this.options.env, ...extraEnv }, this.options.pathOverride)
-    const cwd = this.resolveTerminalCwd(params.cwd)
+    const [env, cwd] = await Promise.all([
+      buildAgentEnv({ ...this.options.env, ...extraEnv }, this.options.pathOverride),
+      this.resolveTerminalCwd(params.cwd),
+    ])
+
+    if (this.closed)
+      throw RequestError.internalError({ details: `ACP session is closed` })
 
     const child = spawnAgentProcess(params.command, params.args ?? [], { cwd, env })
 
@@ -1313,20 +1407,37 @@ export class AcpSession {
     const appendOutput = (chunk: Buffer | string) => {
       appendUtf8RingChunk(entry, chunk, entry.outputByteLimit)
     }
+    const detachStreams = () => {
+      child.stdout.off(`data`, appendOutput)
+      child.stderr.off(`data`, appendOutput)
+    }
 
     child.stdout.on(`data`, appendOutput)
     child.stderr.on(`data`, appendOutput)
     child.once(`error`, (error) => {
       appendOutput(`${error.message}\n`)
+      detachStreams()
       entry.running = false
       entry.exitStatus = { exitCode: -1, signal: null }
       resolveExit(entry.exitStatus)
     })
     child.once(`exit`, (code, signal) => {
+      detachStreams()
       entry.running = false
       entry.exitStatus = { exitCode: code, signal }
       resolveExit(entry.exitStatus)
     })
+
+    if (this.terminals.size >= MAX_TERMINALS) {
+      for (const [id, existing] of this.terminals.entries()) {
+        if (!existing.running) {
+          existing.chunks.length = 0
+          existing.totalBytes = 0
+          this.terminals.delete(id)
+          break
+        }
+      }
+    }
 
     this.terminals.set(terminalId, entry)
     return { terminalId }
@@ -1364,6 +1475,8 @@ export class AcpSession {
     const entry = this.getTerminal(params.terminalId)
     if (entry.running)
       await terminateProcessTree(entry.child, { gracefulTimeoutMs: 1_000, forceTimeoutMs: 1_000 })
+    entry.chunks.length = 0
+    entry.totalBytes = 0
     this.terminals.delete(params.terminalId)
     return {}
   }

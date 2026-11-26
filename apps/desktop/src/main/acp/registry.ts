@@ -12,7 +12,12 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { API_MODEL_AGENT_ID } from '@md/shared/types'
-import { createDefaultAcpSettings, DEFAULT_ACP_SETTINGS, migrateLegacyPermissionSettings } from '@md/shared/utils/acp-permissions'
+import {
+  createDefaultAcpSettings,
+  DEFAULT_ACP_SETTINGS,
+  isAcpPermissionLevel,
+  migrateLegacyPermissionSettings,
+} from '@md/shared/utils/acp-permissions'
 import { buildAgentEnv, resolveBinaryOnPath, resolveLoginShellPath, spawnAgentProcess, terminateProcessTree } from './process'
 
 export const BUILTIN_AGENTS: AcpAgentConfig[] = [
@@ -127,6 +132,50 @@ export class AcpRegistry {
     this.onEvent = options.onEvent
   }
 
+  private getReservedBuiltinIds(): Set<string> {
+    return new Set([
+      ...BUILTIN_AGENTS.map(a => a.id),
+      ...this.extraBuiltinAgents.map(a => a.id),
+      API_MODEL_AGENT_ID,
+    ])
+  }
+
+  private sanitizeCustomAgents(raw: unknown): AcpAgentConfig[] {
+    if (!Array.isArray(raw))
+      return []
+    const reserved = this.getReservedBuiltinIds()
+    const seen = new Set<string>()
+    const valid: AcpAgentConfig[] = []
+    for (const item of raw) {
+      if (!item || typeof item !== `object` || Array.isArray(item))
+        continue
+      const entry = item as Partial<AcpAgentConfig>
+      const id = typeof entry.id === `string` ? entry.id.trim() : ``
+      const name = typeof entry.name === `string` ? entry.name.trim() : ``
+      const command = typeof entry.command === `string` ? entry.command.trim() : ``
+      // Never allow custom agents to collide with built-in IDs (especially `api-model` which gets runtime secrets).
+      if (!id || !name || !command || reserved.has(id) || seen.has(id))
+        continue
+      seen.add(id)
+      const args = Array.isArray(entry.args) ? entry.args.filter((a): a is string => typeof a === `string`) : []
+      const letter = typeof entry.avatar?.letter === `string` && entry.avatar.letter ? entry.avatar.letter : (name[0]?.toUpperCase() || `A`)
+      const color = typeof entry.avatar?.color === `string` && entry.avatar.color ? entry.avatar.color : CUSTOM_AVATAR_COLORS[0]
+      valid.push({
+        id,
+        name,
+        command,
+        args,
+        ...(entry.env && typeof entry.env === `object` && !Array.isArray(entry.env) ? { env: { ...entry.env } } : {}),
+        detectBinaries: Array.isArray(entry.detectBinaries) && entry.detectBinaries.length > 0
+          ? entry.detectBinaries.filter((b): b is string => typeof b === `string`)
+          : [command],
+        builtin: false,
+        avatar: { letter, color },
+      })
+    }
+    return valid
+  }
+
   async ensureLoaded(): Promise<void> {
     if (this.loaded)
       return
@@ -145,7 +194,7 @@ export class AcpRegistry {
           defaultPermissionLevel: level,
           lastModelByAgent: { ...(parsed.lastModelByAgent ?? {}) },
           lastThinkingLevelByAgent: { ...(parsed.lastThinkingLevelByAgent ?? {}) },
-          customAgents: Array.isArray(parsed.customAgents) ? parsed.customAgents : [],
+          customAgents: this.sanitizeCustomAgents(parsed.customAgents),
           commandOverrides: { ...(parsed.commandOverrides ?? {}) },
         }
         // Built-in API agent receives decrypted keys in runtime env; never allow overriding its command.
@@ -167,8 +216,14 @@ export class AcpRegistry {
     const snapshot = `${JSON.stringify(this.settings, null, 2)}\n`
     await fs.mkdir(path.dirname(this.settingsPath), { recursive: true })
     const tmpPath = `${this.settingsPath}.${randomUUID()}.tmp`
-    await fs.writeFile(tmpPath, snapshot, `utf8`)
-    await fs.rename(tmpPath, this.settingsPath)
+    try {
+      await fs.writeFile(tmpPath, snapshot, `utf8`)
+      await fs.rename(tmpPath, this.settingsPath)
+    }
+    catch (error) {
+      await fs.rm(tmpPath, { force: true }).catch(() => undefined)
+      throw error
+    }
   }
 
   private persist(): Promise<void> {
@@ -184,14 +239,27 @@ export class AcpRegistry {
 
   async updateSettings(patch: Partial<AcpSettings>): Promise<AcpSettings> {
     await this.ensureLoaded()
-    const mergedOverrides = patch.commandOverrides
-      ? { ...this.settings.commandOverrides, ...patch.commandOverrides }
-      : this.settings.commandOverrides
+    const mergedOverrides = { ...this.settings.commandOverrides }
+    if (patch.commandOverrides) {
+      for (const [agentId, override] of Object.entries(patch.commandOverrides)) {
+        if (!override || typeof override.command !== `string` || !override.command.trim())
+          delete mergedOverrides[agentId]
+        else
+          mergedOverrides[agentId] = override
+      }
+    }
     delete mergedOverrides[API_MODEL_AGENT_ID]
 
     this.settings = {
-      ...this.settings,
-      ...patch,
+      defaultAgentId: typeof patch.defaultAgentId === `string` && patch.defaultAgentId.trim()
+        ? patch.defaultAgentId.trim()
+        : this.settings.defaultAgentId,
+      defaultPermissionLevel: isAcpPermissionLevel(patch.defaultPermissionLevel)
+        ? patch.defaultPermissionLevel
+        : this.settings.defaultPermissionLevel,
+      customAgents: patch.customAgents !== undefined
+        ? this.sanitizeCustomAgents(patch.customAgents)
+        : this.settings.customAgents,
       lastModelByAgent: patch.lastModelByAgent
         ? { ...this.settings.lastModelByAgent, ...patch.lastModelByAgent }
         : this.settings.lastModelByAgent,
@@ -334,6 +402,23 @@ export class AcpRegistry {
     return statuses
   }
 
+  private async applyDynamicAvailability(): Promise<void> {
+    if (!this.resolveAgentAvailability)
+      return
+    const configs = this.getAllConfigs()
+    await Promise.all(
+      configs.map(async (config) => {
+        const availabilityOverride = await this.resolveAgentAvailability?.(config.id) ?? null
+        if (availabilityOverride !== null) {
+          this.detectionCache.set(config.id, {
+            installed: availabilityOverride,
+            resolvedPath: availabilityOverride ? config.command : undefined,
+          })
+        }
+      }),
+    )
+  }
+
   /**
    * Re-evaluates dynamic availability overrides (e.g. built-in API agent config)
    * without re-scanning PATH or spawning a login shell.
@@ -343,21 +428,7 @@ export class AcpRegistry {
     if (this.detectionCache.size === 0)
       return this.detectAgents({ forceShell: false })
 
-    if (this.resolveAgentAvailability) {
-      const configs = this.getAllConfigs()
-      await Promise.all(
-        configs.map(async (config) => {
-          const availabilityOverride = await this.resolveAgentAvailability?.(config.id) ?? null
-          if (availabilityOverride !== null) {
-            this.detectionCache.set(config.id, {
-              installed: availabilityOverride,
-              resolvedPath: availabilityOverride ? config.command : undefined,
-            })
-          }
-        }),
-      )
-    }
-
+    await this.applyDynamicAvailability()
     const statuses = this.buildStatuses()
     this.onEvent?.({ type: `agents_changed`, agents: statuses })
     return statuses
@@ -367,20 +438,7 @@ export class AcpRegistry {
     await this.ensureLoaded()
     if (this.detectionCache.size === 0)
       return this.detectAgents({ forceShell: false })
-    if (this.resolveAgentAvailability) {
-      const configs = this.getAllConfigs()
-      await Promise.all(
-        configs.map(async (config) => {
-          const availabilityOverride = await this.resolveAgentAvailability?.(config.id) ?? null
-          if (availabilityOverride !== null) {
-            this.detectionCache.set(config.id, {
-              installed: availabilityOverride,
-              resolvedPath: availabilityOverride ? config.command : undefined,
-            })
-          }
-        }),
-      )
-    }
+    await this.applyDynamicAvailability()
     return this.buildStatuses()
   }
 
@@ -486,8 +544,11 @@ export class AcpRegistry {
     this.onEvent?.({ type: `agents_changed`, agents: this.buildStatuses() })
 
     let lineCount = 0
+    let settled = false
     const stderrTail: string[] = []
     const handleOutput = (chunk: Buffer | string, isErr: boolean) => {
+      if (settled)
+        return
       const text = chunk.toString()
       for (const rawLine of text.split(/\r?\n/)) {
         const line = rawLine.trim()
@@ -510,11 +571,18 @@ export class AcpRegistry {
       }
     }
 
-    child.stdout.on(`data`, chunk => handleOutput(chunk, false))
-    child.stderr.on(`data`, chunk => handleOutput(chunk, true))
+    const onStdout = (chunk: Buffer | string) => handleOutput(chunk, false)
+    const onStderr = (chunk: Buffer | string) => handleOutput(chunk, true)
+    child.stdout.on(`data`, onStdout)
+    child.stderr.on(`data`, onStderr)
 
     return new Promise((resolve) => {
       const finish = async (ok: boolean, error?: string) => {
+        if (settled)
+          return
+        settled = true
+        child.stdout.off(`data`, onStdout)
+        child.stderr.off(`data`, onStderr)
         this.activeInstalls.delete(agentId)
         this.emitInstallProgress(
           agentId,

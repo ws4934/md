@@ -61,10 +61,10 @@ export async function resolveLoginShellPath(options: { force?: boolean } = {}): 
   if (!options.force && loginPathPromise)
     return loginPathPromise
 
-  loginPathPromise = (async () => {
+  const currentPromise = (async () => {
     const shell = process.env.SHELL || `/bin/zsh`
     const shellPath = await new Promise<string | null>((resolve) => {
-      execFile(
+      const child = execFile(
         shell,
         [`-ilc`, `printf '${PATH_SENTINEL}%s${PATH_SENTINEL}' "$PATH"`],
         {
@@ -89,6 +89,8 @@ export async function resolveLoginShellPath(options: { force?: boolean } = {}): 
           resolve(stdout.slice(start + PATH_SENTINEL.length, end))
         },
       )
+      // Send immediate EOF so interactive rc prompts (e.g. oh-my-zsh update checks) cannot hang until timeout.
+      child.stdin?.end()
     })
 
     const combined = mergePathEntries(
@@ -99,12 +101,14 @@ export async function resolveLoginShellPath(options: { force?: boolean } = {}): 
     cachedLoginPath = combined
     return combined
   })()
+  loginPathPromise = currentPromise
 
   try {
-    return await loginPathPromise
+    return await currentPromise
   }
   finally {
-    loginPathPromise = null
+    if (loginPathPromise === currentPromise)
+      loginPathPromise = null
   }
 }
 
@@ -113,8 +117,14 @@ export async function buildAgentEnv(
   pathOverride?: string,
 ): Promise<NodeJS.ProcessEnv> {
   const resolvedPath = pathOverride ?? await resolveLoginShellPath()
+  const baseEnv: NodeJS.ProcessEnv = { ...process.env }
+  // Plain objects are case-sensitive even on Windows where process.env uses `Path`; avoid duplicate PATH keys.
+  for (const key of Object.keys(baseEnv)) {
+    if (key !== `PATH` && key.toUpperCase() === `PATH`)
+      delete baseEnv[key]
+  }
   return {
-    ...process.env,
+    ...baseEnv,
     PATH: resolvedPath,
     ...extraEnv,
   }
@@ -185,10 +195,24 @@ export async function resolveBinaryOnPath(
   return null
 }
 
-function quoteWindowsArg(arg: string): string {
+export function quoteWindowsArg(arg: string): string {
+  if (/[\r\n\0]/.test(arg))
+    throw new Error(`Invalid control character in Windows command argument`)
+  if (arg.length === 0)
+    return `""`
   if (!/[\s"&|<>^()]/.test(arg))
     return arg
-  return `"${arg.replace(/"/g, `\\"`)}`
+  // Double backslashes immediately preceding `"` and trailing backslashes so CRT argv parsing preserves them.
+  const escaped = arg
+    .replace(/(\\*)"/g, `$1$1\\"`)
+    .replace(/(\\*)$/, `$1$1`)
+  return `"${escaped}"`
+}
+
+export function buildWindowsCmdLine(command: string, args: string[]): string {
+  // Wrap the full command in outer quotes for `cmd.exe /d /s /c` with `windowsVerbatimArguments: true`.
+  const inner = [quoteWindowsArg(command), ...args.map(quoteWindowsArg)].join(` `)
+  return `"${inner}"`
 }
 
 export function spawnAgentProcess(
@@ -199,11 +223,14 @@ export function spawnAgentProcess(
     env: NodeJS.ProcessEnv
   },
 ): ChildProcessWithoutNullStreams {
+  if (/\0/.test(command) || args.some(arg => arg.includes(`\0`)))
+    throw new Error(`Invalid null byte in process command or arguments`)
+
   const isWin = process.platform === `win32`
   const needsWindowsShell = isWin && (/\.(?:cmd|bat)$/i.test(command) || !path.extname(command))
 
   if (needsWindowsShell) {
-    const cmdLine = [quoteWindowsArg(command), ...args.map(quoteWindowsArg)].join(` `)
+    const cmdLine = buildWindowsCmdLine(command, args)
     const child = spawn(process.env.ComSpec || `cmd.exe`, [`/d`, `/s`, `/c`, cmdLine], {
       cwd: options.cwd,
       env: options.env,
@@ -341,11 +368,13 @@ export function createChildFailureGuard(
 ): { promise: Promise<never>, dispose: () => void } {
   let cleanup = () => {}
   const promise = new Promise<never>((_resolve, reject) => {
-    const onError = (error: Error) => {
-      cleanup()
-      reject(new Error(`ACP process failed to start: ${error.message}`))
-    }
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    let flushTimer: ReturnType<typeof setTimeout> | undefined
+    let settled = false
+
+    const rejectWithExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (settled)
+        return
+      settled = true
       cleanup()
       const stderr = stderrChunks.join(``).trim()
       const suffix = stderr ? `: ${stderr.slice(-400)}` : ``
@@ -356,7 +385,34 @@ export function createChildFailureGuard(
       )
     }
 
+    const onError = (error: Error) => {
+      if (settled)
+        return
+      settled = true
+      cleanup()
+      reject(new Error(`ACP process failed to start: ${error.message}`))
+    }
+
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      // Wait briefly for `close` so buffered stderr written right before exit is captured.
+      if (!child.stderr || child.stderr.readableEnded) {
+        rejectWithExit(code, signal)
+        return
+      }
+      const onClose = () => rejectWithExit(code, signal)
+      child.once(`close`, onClose)
+      flushTimer = setTimeout(() => {
+        child.off(`close`, onClose)
+        rejectWithExit(code, signal)
+      }, 30)
+      flushTimer.unref?.()
+    }
+
     cleanup = () => {
+      if (flushTimer !== undefined) {
+        clearTimeout(flushTimer)
+        flushTimer = undefined
+      }
       child.off(`error`, onError)
       child.off(`exit`, onExit)
     }

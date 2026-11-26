@@ -445,18 +445,18 @@ export function mergeToolCallSnapshot(
   const filePath
     = diff?.path
       ?? update.locations?.[0]?.path
-      ?? readString(rawInput, [`path`, `filePath`, `file`, `Path`, `target`])
+      ?? readString(rawInput, [`path`, `filePath`, `file_path`, `file`, `Path`, `target`])
       ?? previous?.filePath
 
   const command
     = extractCommandFromRawInput(rawInput, toolKind)
       ?? previous?.command
       ?? (toolKind === `execute` ? title || undefined : undefined)
-  const rawOldText = diff?.oldText ?? readStringAllowEmpty(rawInput, [`oldText`, `oldString`, `Target`])
+  const rawOldText = diff?.oldText ?? readStringAllowEmpty(rawInput, [`oldText`, `oldString`, `old_string`, `old_text`, `Target`])
   const rawNewText
     = toolKind === `delete`
-      ? ``
-      : (diff?.newText ?? readStringAllowEmpty(rawInput, [`newText`, `newString`, `content`, `Replacement`, `Content`]))
+      ? (diff?.newText ?? (rawOldText !== undefined ? `` : undefined))
+      : (diff?.newText ?? readStringAllowEmpty(rawInput, [`newText`, `newString`, `new_string`, `new_text`, `content`, `Replacement`, `Content`]))
 
   let detail = contentText ?? previous?.detail
   if (!detail) {
@@ -471,9 +471,8 @@ export function mergeToolCallSnapshot(
   }
 
   const isEditLike = toolKind === `edit` || toolKind === `delete` || toolKind === `move`
-  const rawUnifiedDiff = isEditLike
-    ? (contentText ?? readString(rawInput, [`patch`, `diff`, `unifiedDiff`]))
-    : undefined
+  const explicitPatch = isEditLike ? readString(rawInput, [`patch`, `diff`, `unifiedDiff`]) : undefined
+  const rawUnifiedDiff = isEditLike ? (explicitPatch ?? contentText) : undefined
 
   let unifiedDiff = previous?.unifiedDiff
   let diffStats: AcpDiffStats | undefined = previous?.diffStats
@@ -484,8 +483,12 @@ export function mergeToolCallSnapshot(
       newText: rawNewText,
       unifiedDiff: rawUnifiedDiff,
     })
-    unifiedDiff = compact.unifiedDiff || undefined
-    diffStats = compact.stats
+    // Plain status/error text in `content` has no +/- hunks; do not let it overwrite a real diff.
+    const fromPlainContentText = rawOldText === undefined && rawNewText === undefined && explicitPatch === undefined
+    if (!fromPlainContentText || compact.stats.hasChanges) {
+      unifiedDiff = compact.unifiedDiff || undefined
+      diffStats = compact.stats
+    }
   }
 
   const error

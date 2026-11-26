@@ -28,6 +28,9 @@ const stringifyIds = process.env.FAKE_AGENT_STRINGIFY_IDS === `1`
 const directWriteWithoutEditTool = process.env.FAKE_AGENT_DIRECT_WRITE_ONLY === `1`
 const pushModeUpdate = process.env.FAKE_AGENT_PUSH_MODE || ``
 const pushThoughtUpdate = process.env.FAKE_AGENT_PUSH_THOUGHT || ``
+const slowPromptMs = Number(process.env.FAKE_AGENT_SLOW_PROMPT_MS || 0)
+const crashInPrompt = process.env.FAKE_AGENT_CRASH_IN_PROMPT === `1`
+const ignoreCancel = process.env.FAKE_AGENT_IGNORE_CANCEL === `1`
 
 const SESSION_ID = `fake_sess_01`
 let currentModelId = modelStyle === `agy`
@@ -44,6 +47,8 @@ let currentCwd = process.cwd()
 let receivedMcpServers = []
 let nextClientRequestId = 1000
 const pendingClientRequests = new Map()
+const cancelWaiters = new Set()
+let activeTurnCancelled = false
 
 function writeRaw(line) {
   process.stdout.write(`${line}\n`)
@@ -342,6 +347,34 @@ function buildModelsMetadata() {
 }
 
 async function handlePrompt(id, params) {
+  activeTurnCancelled = false
+  if (crashInPrompt) {
+    process.stderr.write(`fatal: simulated crash mid-turn\n`)
+    setTimeout(() => process.exit(2), 15)
+    return
+  }
+
+  if (slowPromptMs > 0) {
+    const cancelled = await new Promise((resolve) => {
+      let timer
+      const onCancel = () => {
+        clearTimeout(timer)
+        cancelWaiters.delete(onCancel)
+        resolve(true)
+      }
+      timer = setTimeout(() => {
+        cancelWaiters.delete(onCancel)
+        resolve(false)
+      }, slowPromptMs)
+      timer.unref?.()
+      cancelWaiters.add(onCancel)
+    })
+    if (cancelled) {
+      sendResult(id, { stopReason: `cancelled` })
+      return
+    }
+  }
+
   const text = (params.prompt || [])
     .filter(b => b.type === `text`)
     .map(b => b.text)
@@ -467,6 +500,10 @@ async function handlePrompt(id, params) {
       ],
     })
     const editOutcome = editPerm?.outcome
+    if (activeTurnCancelled) {
+      sendResult(id, { stopReason: `cancelled` })
+      return
+    }
     editAllowed = editOutcome?.outcome === `selected` && editOutcome.optionId !== `opt_reject_once`
   }
 
@@ -657,7 +694,7 @@ async function handleRequest(msg) {
       })
 
       if (emitCommands) {
-        setTimeout(async () => {
+        const timer = setTimeout(async () => {
           // Mirror Claude Code: project skills under `<cwd>/.claude/skills` are advertised as commands.
           const skills = await fs.readdir(path.join(currentCwd, `.claude/skills`)).catch(() => [])
           sendUpdate({
@@ -669,6 +706,7 @@ async function handleRequest(msg) {
             ],
           })
         }, commandsDelayMs)
+        timer.unref?.()
       }
       return
     }
@@ -776,6 +814,11 @@ rl.on(`line`, (line) => {
       void handleRequest(msg).catch((error) => {
         sendError(msg.id, -32603, error instanceof Error ? error.message : String(error))
       })
+    }
+    else if (msg.method === `session/cancel` && !ignoreCancel) {
+      activeTurnCancelled = true
+      for (const waiter of [...cancelWaiters])
+        waiter()
     }
     return
   }

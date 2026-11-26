@@ -17,6 +17,7 @@ export class AcpEventBatcher {
   private readonly onEmit: (event: AcpHostEvent) => void
   private readonly pending = new Map<string, { type: `message_chunk` | `thought_chunk`, text: string }>()
   private timer: ReturnType<typeof setTimeout> | null = null
+  private disposed = false
 
   constructor(options: AcpEventBatcherOptions) {
     this.batchMs = options.batchMs ?? DEFAULT_BATCH_MS
@@ -25,6 +26,12 @@ export class AcpEventBatcher {
 
   push(event: AcpHostEvent): void {
     if (event.type === `message_chunk` || event.type === `thought_chunk`) {
+      if (!event.text)
+        return
+      if (this.disposed || this.batchMs <= 0) {
+        this.onEmit(event)
+        return
+      }
       const existing = this.pending.get(event.sessionId)
       if (existing && existing.type === event.type) {
         existing.text += event.text
@@ -75,6 +82,7 @@ export class AcpEventBatcher {
   }
 
   dispose(): void {
+    this.disposed = true
     this.flushAll()
   }
 
