@@ -797,6 +797,7 @@ app.whenReady().then(() => {
     registerAppProtocol()
 
   const userDataDir = app.getPath(`userData`)
+  const apiAgentScript = resolveUnpackedAgentScript(__dirname, `api-agent.js`)
   const imageMcpScript = resolveUnpackedAgentScript(__dirname, `image-mcp.js`)
   const skillsDir = resolveUnpackedSkillsDir(__dirname)
 
@@ -835,10 +836,14 @@ app.whenReady().then(() => {
     resolveAgentAvailability: async (agentId) => {
       if (agentId !== API_MODEL_AGENT_ID)
         return null
+      if (!(await fileExists(apiAgentScript)))
+        return false
       return aiConfigStore!.isModelApiConfigured()
     },
     resolveDirectProbe: async (agentId) => {
       if (agentId !== API_MODEL_AGENT_ID)
+        return null
+      if (!(await fileExists(apiAgentScript)))
         return null
       const { modelApi } = await aiConfigStore!.getPublicConfigs()
       if (!modelApi.hasApiKey || modelApi.enabledModels.length === 0)
@@ -913,8 +918,12 @@ app.whenReady().then(() => {
     dispose: async () => {
       clearBackgroundTimers()
       unsubscribeIpCharacters()
-      acpEventBatcher?.dispose()
-      await acpHost?.dispose()
+      try {
+        await acpHost?.dispose()
+      }
+      finally {
+        acpEventBatcher?.dispose()
+      }
       await imageGenBridge?.close()
     },
     confirmQuit: async (copy) => {

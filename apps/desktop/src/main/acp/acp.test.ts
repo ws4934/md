@@ -756,6 +756,205 @@ describe(`acpHost permission levels, ACP modes & article disk sync`, () => {
     expect(syncedEvents).toHaveLength(1)
     expect(syncedEvents[0].content).toContain(`<!-- turn-end-sync -->`)
   })
+
+  it(`confines article.md against symlinks and oversized files on sync and replaces symlinks atomically on prompt`, async () => {
+    const dataDir = await makeTempDir(`md-acp-host-confine-`)
+    const outsideDir = await makeTempDir(`md-acp-outside-article-`)
+    const outsideSecretPath = path.join(outsideDir, `secret.md`)
+    await fs.writeFile(outsideSecretPath, `OUTSIDE_SECRET_CONTENT`, `utf8`)
+
+    const agentScript = path.join(outsideDir, `symlink-agent.mjs`)
+    await fs.writeFile(
+      agentScript,
+      [
+        `import fs from 'node:fs/promises'`,
+        `import path from 'node:path'`,
+        `import readline from 'node:readline'`,
+        `const cwd = process.cwd()`,
+        `const articlePath = path.join(cwd, 'article.md')`,
+        `const outsideTarget = process.env.OUTSIDE_TARGET`,
+        `const send = msg => process.stdout.write(JSON.stringify(msg) + '\\n')`,
+        `const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })`,
+        `rl.on('line', async (line) => {`,
+        `  if (!line.trim()) return`,
+        `  const msg = JSON.parse(line)`,
+        `  if (msg.method === 'initialize') {`,
+        `    send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'sym', version: '1.0.0' } } })`,
+        `    return`,
+        `  }`,
+        `  if (msg.method === 'session/new') {`,
+        `    send({ jsonrpc: '2.0', id: msg.id, result: { sessionId: 'sym_sess_1' } })`,
+        `    return`,
+        `  }`,
+        `  if (msg.method === 'session/prompt') {`,
+        `    const text = (msg.params.prompt || []).map(b => b.text || '').join('\\n')`,
+        `    if (text.includes('SWAP_OUTSIDE_SYMLINK')) {`,
+        `      await fs.rm(articlePath, { force: true })`,
+        `      await fs.symlink(outsideTarget, articlePath)`,
+        `    }`,
+        `    else if (text.includes('SWAP_INSIDE_SYMLINK')) {`,
+        `      const insideOther = path.join(cwd, 'other.md')`,
+        `      await fs.writeFile(insideOther, 'INSIDE_SYMLINK_TARGET', 'utf8')`,
+        `      await fs.rm(articlePath, { force: true })`,
+        `      await fs.symlink(insideOther, articlePath)`,
+        `    }`,
+        `    else if (text.includes('MAKE_OVERSIZED')) {`,
+        `      await fs.rm(articlePath, { force: true })`,
+        `      await fs.writeFile(articlePath, 'big', 'utf8')`,
+        `      await fs.truncate(articlePath, 10 * 1024 * 1024 + 1)`,
+        `    }`,
+        `    else if (text.includes('NORMAL_WRITE')) {`,
+        `      const cur = await fs.readFile(articlePath, 'utf8')`,
+        `      await fs.writeFile(articlePath, cur + '\\n\\nEdited safely.', 'utf8')`,
+        `    }`,
+        `    send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'sym_sess_1', update: { sessionUpdate: 'tool_call', toolCallId: 'tc1', title: 'Edit', kind: 'edit', status: 'in_progress' } } })`,
+        `    send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'sym_sess_1', update: { sessionUpdate: 'tool_call_update', toolCallId: 'tc1', status: 'completed' } } })`,
+        `    send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn' } })`,
+        `  }`,
+        `})`,
+      ].join(`\n`),
+      `utf8`,
+    )
+
+    const syncedEvents: Array<Extract<AcpHostEvent, { type: `article_synced` }>> = []
+    const host = new AcpHost({
+      dataDir,
+      extraBuiltinAgents: [{
+        id: `sym-agent`,
+        name: `Symlink Agent`,
+        command: process.execPath,
+        args: [agentScript],
+        env: { OUTSIDE_TARGET: outsideSecretPath },
+        detectBinaries: [process.execPath],
+        builtin: true,
+        avatar: { letter: `S`, color: `#5B5BD6` },
+      }],
+      onEvent: (event) => {
+        if (event.type === `article_synced`)
+          syncedEvents.push(event)
+      },
+    })
+    openHosts.push(host)
+
+    const { sessionId } = await host.startSession({
+      agentId: `sym-agent`,
+      postId: `post-confine`,
+      postTitle: `Confine`,
+      content: `# Initial Safe`,
+    })
+    const [workspaceId] = await fs.readdir(path.join(dataDir, `acp-workspaces`))
+    const workspaceArticlePath = path.join(dataDir, `acp-workspaces`, workspaceId, `article.md`)
+
+    // 1. Agent replaces article.md with a symlink outside workspace -> never read into editor.
+    await host.prompt({
+      sessionId,
+      text: `SWAP_OUTSIDE_SYMLINK`,
+      content: `# Initial Safe`,
+      postTitle: `Confine`,
+    })
+    expect(syncedEvents).toEqual([])
+    expect((await fs.lstat(workspaceArticlePath)).isSymbolicLink()).toBe(true)
+
+    // 2. Next prompt writes via temp file + rename -> replaces symlink, external file untouched, normal sync works.
+    await host.prompt({
+      sessionId,
+      text: `NORMAL_WRITE`,
+      content: `# Editor Next Turn`,
+      postTitle: `Confine`,
+    })
+    expect(await fs.readFile(outsideSecretPath, `utf8`)).toBe(`OUTSIDE_SECRET_CONTENT`)
+    const restoredStat = await fs.lstat(workspaceArticlePath)
+    expect(restoredStat.isSymbolicLink()).toBe(false)
+    expect(restoredStat.isFile()).toBe(true)
+    expect(syncedEvents).toHaveLength(1)
+    expect(syncedEvents[0].content).toBe(`# Editor Next Turn\n\nEdited safely.`)
+
+    // 3. Intra-workspace symlink is also rejected by lstat (must be a regular file).
+    syncedEvents.length = 0
+    await host.prompt({
+      sessionId,
+      text: `SWAP_INSIDE_SYMLINK`,
+      content: `# Editor Next Turn\n\nEdited safely.`,
+      postTitle: `Confine`,
+    })
+    expect(syncedEvents).toEqual([])
+
+    // 4. Oversized article.md (> 10 MB) is rejected before reading into memory.
+    await host.prompt({
+      sessionId,
+      text: `MAKE_OVERSIZED`,
+      content: `# Back To Regular`,
+      postTitle: `Confine`,
+    })
+    expect(syncedEvents).toEqual([])
+  })
+
+  it(`never leaks raw native mode IDs from setPermissionMode fallback and modeId branches`, async () => {
+    const dataDir = await makeTempDir(`md-acp-mode-leak-`)
+    const host = new AcpHost({
+      dataDir,
+      extraBuiltinAgents: [
+        {
+          id: `fake-agy-modes`,
+          name: `Fake Agy Modes`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_MODES_STYLE: `agy`,
+            FAKE_AGENT_INITIAL_MODE: `default`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `A`, color: `#0F9D8A` },
+        },
+        {
+          id: `fake-custom-modes`,
+          name: `Fake Custom Modes`,
+          command: process.execPath,
+          args: [FAKE_AGENT_SCRIPT],
+          env: {
+            FAKE_AGENT_MODES_STYLE: `custom_only`,
+            FAKE_AGENT_INITIAL_MODE: `deep_review`,
+            FAKE_AGENT_REJECT_SET_MODE: `1`,
+          },
+          detectBinaries: [process.execPath],
+          builtin: true,
+          avatar: { letter: `C`, color: `#5B5BD6` },
+        },
+      ],
+    })
+    openHosts.push(host)
+
+    const agy = await host.startSession({
+      agentId: `fake-agy-modes`,
+      permissionLevel: `bypass`,
+      postId: `p-agy`,
+      postTitle: `Agy`,
+      content: `# Agy`,
+    })
+    expect(agy.currentModeId).toBeNull()
+
+    // Fallback branch (neither permissionLevel nor truthy modeId) must not leak native `default`.
+    expect(await host.setPermissionMode({ sessionId: agy.sessionId }))
+      .toEqual({ permissionLevel: `bypass`, modeId: null })
+    expect(await host.setPermissionMode({ sessionId: agy.sessionId, modeId: null }))
+      .toEqual({ permissionLevel: `bypass`, modeId: null })
+
+    // Requesting an unadvertised canonical bypass modeId via `{ modeId }` must also mask native `default`.
+    expect(await host.setPermissionMode({ sessionId: agy.sessionId, modeId: `bypassPermissions` }))
+      .toEqual({ permissionLevel: `bypass`, modeId: null })
+
+    // Requesting an unknown modeId when native mode is an unmapped custom mode (`deep_review`) must not leak `deep_review`.
+    const custom = await host.startSession({
+      agentId: `fake-custom-modes`,
+      permissionLevel: `bypass`,
+      postId: `p-custom`,
+      postTitle: `Custom`,
+      content: `# Custom`,
+    })
+    expect(await host.setPermissionMode({ sessionId: custom.sessionId, modeId: `unknown_mode` }))
+      .toEqual({ permissionLevel: `ask`, modeId: null })
+  })
 })
 
 describe(`probeAcpAgent and AcpRegistry`, () => {
@@ -1784,6 +1983,34 @@ describe(`skills in agent workspaces`, () => {
     expect(first.endsWith(`/Users/me/notes.md 是什么`)).toBe(true)
     expect(second).toContain(`[Context]`)
     expect(second).not.toContain(`[Writing rules]`)
+  })
+
+  it(`recognizes command turns with leading whitespace while keeping outgoing text unchanged`, async () => {
+    const dataDir = await makeTempDir(`md-acp-turns-ws-`)
+    const promptsPath = path.join(dataDir, `prompts.jsonl`)
+    const events: AcpHostEvent[] = []
+    const host = new AcpHost({
+      dataDir,
+      extraBuiltinAgents: [fakeAgent(`fake-ws-cmd`, { FAKE_AGENT_EMIT_COMMANDS: `1`, FAKE_AGENT_RECORD_PROMPTS: promptsPath })],
+      onEvent: event => events.push(event),
+    })
+    openHosts.push(host)
+
+    const { sessionId } = await host.startSession({ agentId: `fake-ws-cmd`, postId: `p`, postTitle: `T`, content: `` })
+    await waitFor(() => events.some(e => e.type === `commands_updated`))
+
+    await host.prompt({ sessionId, text: `  \t/outline 存款`, content: ``, postTitle: `T` })
+    await host.prompt({ sessionId, text: `Normal follow-up`, content: ``, postTitle: `T` })
+
+    const [commandTurn, normalTurn] = await readPrompts(promptsPath)
+    expect(commandTurn).toHaveLength(2)
+    expect(commandTurn[0]).toBe(`  \t/outline 存款`)
+    expect(commandTurn[1]).toContain(`[Context]`)
+    expect(commandTurn[1]).toContain(`[Writing rules]`)
+    // Leading-whitespace command turn must not mark writing rules as delivered.
+    expect(normalTurn).toHaveLength(1)
+    expect(normalTurn[0]).toContain(`[Writing rules]`)
+    expect(normalTurn[0].endsWith(`Normal follow-up`)).toBe(true)
   })
 })
 

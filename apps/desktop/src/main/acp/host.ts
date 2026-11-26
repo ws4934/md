@@ -15,9 +15,10 @@ import type {
 } from '@md/shared/types'
 import type { IpCharacterStore } from '../ip-characters'
 import { createHash, randomUUID } from 'node:crypto'
-import { readdirSync, readFileSync } from 'node:fs'
+import { constants as fsConstants, readdirSync, readFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import process from 'node:process'
 import {
   agentHasPlanMode,
   clampAgentModePermissionLevel,
@@ -146,10 +147,11 @@ function isPathInside(root: string, target: string): boolean {
 }
 
 function isCommandTurn(text: string, commands: AcpSlashCommand[]): boolean {
-  const head = text.split(/\s/, 1)[0]
+  const head = text.trimStart().split(/\s/, 1)[0]
   return commands.some(command => commandToken(command) === head)
 }
 
+const MAX_ARTICLE_BYTES = 10 * 1024 * 1024
 const MAX_WORKSPACE_IMAGE_BYTES = 10 * 1024 * 1024
 const WORKSPACE_IMAGE_MIME: Record<string, string> = {
   '.png': `image/png`,
@@ -403,7 +405,7 @@ export class AcpHost {
     let imageGenEnabled = false
     try {
       await fs.mkdir(workspaceDir, { recursive: true })
-      await fs.writeFile(articlePath, params.content, `utf8`)
+      await this.writeWorkspaceArticle(workspaceDir, params.content)
       imageGenEnabled = Boolean(await this.isImageGenConfigured?.())
       await installBundledSkills(workspaceDir, this.skillsDir)
       if (this.ipCharacters) {
@@ -636,6 +638,63 @@ export class AcpHost {
   }
 
   /**
+   * Writes `<workspace>/article.md` via a temp file + rename inside the canonical workspace
+   * so an agent-planted symlink is replaced rather than followed.
+   */
+  private async writeWorkspaceArticle(workspaceDir: string, content: string): Promise<void> {
+    const [rootsReal, workspaceReal] = await Promise.all([
+      fs.realpath(this.workspacesRoot),
+      fs.realpath(workspaceDir),
+    ])
+    if (!isPathInside(rootsReal, workspaceReal))
+      throw new Error(`Article workspace is outside the workspaces root`)
+
+    const targetPath = path.join(workspaceReal, `article.md`)
+    const tmpPath = path.join(workspaceReal, `.article.md.${randomUUID()}.tmp`)
+    try {
+      await fs.writeFile(tmpPath, content, { encoding: `utf8`, flag: `wx` })
+      if (process.platform === `win32`) {
+        const existing = await fs.lstat(targetPath).catch(() => null)
+        if (existing?.isSymbolicLink())
+          await fs.unlink(targetPath).catch(() => undefined)
+      }
+      await fs.rename(tmpPath, targetPath)
+    }
+    catch (error) {
+      await fs.rm(tmpPath, { force: true }).catch(() => undefined)
+      throw error
+    }
+  }
+
+  private async readWorkspaceArticle(managed: ManagedSession): Promise<string | null> {
+    const lstat = await fs.lstat(managed.articlePath)
+    if (lstat.isSymbolicLink() || !lstat.isFile() || lstat.size > MAX_ARTICLE_BYTES)
+      return null
+
+    const [rootsReal, workspaceReal, articleReal] = await Promise.all([
+      fs.realpath(this.workspacesRoot),
+      fs.realpath(managed.workspaceDir),
+      fs.realpath(managed.articlePath),
+    ])
+    if (!isPathInside(rootsReal, workspaceReal) || !isPathInside(workspaceReal, articleReal))
+      return null
+
+    const fh = await fs.open(articleReal, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+    try {
+      const stat = await fh.stat()
+      if (!stat.isFile() || stat.size > MAX_ARTICLE_BYTES)
+        return null
+      const buf = await fh.readFile()
+      if (buf.byteLength > MAX_ARTICLE_BYTES)
+        return null
+      return buf.toString(`utf8`)
+    }
+    finally {
+      await fh.close()
+    }
+  }
+
+  /**
    * Reads `<workspace>/article.md` and emits `article_synced` only when disk content changed.
    * Serialized per session so rapid edit completions never emit out-of-order snapshots.
    */
@@ -647,8 +706,8 @@ export class AcpHost {
       if (!sessionId)
         return
       try {
-        const diskContent = await fs.readFile(managed.articlePath, `utf8`)
-        if (managed.closing || diskContent === managed.lastSyncedContent)
+        const diskContent = await this.readWorkspaceArticle(managed)
+        if (diskContent === null || managed.closing || diskContent === managed.lastSyncedContent)
           return
         managed.lastSyncedContent = diskContent
         this.onEvent?.({
@@ -679,8 +738,9 @@ export class AcpHost {
     })
 
     try {
-      // Write the current editor content to the session's article file before each turn.
-      await fs.writeFile(managed.articlePath, params.content, `utf8`)
+      // Wait for any queued sync read before overwriting the session's article file.
+      await managed.syncChain.catch(() => undefined)
+      await this.writeWorkspaceArticle(managed.workspaceDir, params.content)
       managed.lastSyncedContent = params.content
 
       // Until the session announces its own commands, the probe's list (what the draft menu offered) decides.
@@ -836,18 +896,8 @@ export class AcpHost {
           : null
       if (managed.permissionState.level === `ask` || managed.permissionState.level === `plan`)
         managed.session.clearAlwaysAllowedPermissions()
-
-      return {
-        permissionLevel: managed.permissionState.level,
-        modeId: this.resolveExposedModeId(
-          managed.session.currentModeId,
-          managed.permissionState.level,
-          params.modeId,
-        ),
-      }
     }
-
-    if (params.modeId) {
+    else if (params.modeId) {
       const mapped = mapAcpModeIdToPermissionLevel(params.modeId)
       // Default unknown custom modes to `ask` so switching away from `bypass` stays safe.
       managed.permissionState.level = mapped ?? `ask`
@@ -878,13 +928,22 @@ export class AcpHost {
         }
       }
 
+      managed.permissionState.clientBypassModeId
+        = managed.permissionState.level === `bypass`
+          && mapPermissionLevelToAcpModeId(`bypass`, managed.session.modes) === null
+          ? managed.session.currentModeId
+          : null
       if (managed.permissionState.level === `ask` || managed.permissionState.level === `plan`)
         managed.session.clearAlwaysAllowedPermissions()
     }
 
     return {
       permissionLevel: managed.permissionState.level,
-      modeId: managed.session.currentModeId,
+      modeId: this.resolveExposedModeId(
+        managed.session.currentModeId,
+        managed.permissionState.level,
+        params.modeId,
+      ),
     }
   }
 

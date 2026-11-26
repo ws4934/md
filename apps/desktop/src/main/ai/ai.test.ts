@@ -633,6 +633,87 @@ describe(`aiConfigStore`, () => {
     const reloaded = new AiConfigStore({ configPath, cipher: createMockSafeStorage(false) })
     expect((await reloaded.getResolvedModelApiConfig()).apiKey).toBe(`sk-plain-fallback`)
   })
+
+  it(`clears saved apiKey when baseUrl changes to a different origin without an explicit apiKey`, async () => {
+    const dir = await makeTempDir(`md-ai-cfg-origin-`)
+    const configPath = path.join(dir, `ai-config.json`)
+    const cipher = createMockSafeStorage(true)
+    const store = new AiConfigStore({ configPath, cipher })
+
+    await store.updateModelApiConfig({
+      protocol: `openai-compatible`,
+      baseUrl: `https://api.openai.com/v1`,
+      apiKey: `sk-model-openai`,
+      enabledModels: [`gpt-5.4`],
+    })
+    await store.updateImageGenConfig({
+      providerPreset: `openai`,
+      baseUrl: `https://api.openai.com/v1`,
+      apiKey: `sk-img-openai`,
+      model: `gpt-image-1`,
+    })
+
+    // Same origin (path / trailing slash change only) keeps the saved key.
+    const sameOriginModel = await store.updateModelApiConfig({
+      baseUrl: `https://api.openai.com/v2/compat/`,
+    })
+    expect(sameOriginModel.hasApiKey).toBe(true)
+    expect((await store.getResolvedModelApiConfig()).apiKey).toBe(`sk-model-openai`)
+
+    const sameOriginImage = await store.updateImageGenConfig({
+      baseUrl: `https://api.openai.com/v2/`,
+    })
+    expect(sameOriginImage.hasApiKey).toBe(true)
+    expect((await store.getResolvedImageGenConfig()).apiKey).toBe(`sk-img-openai`)
+
+    // Different origin without `apiKey` in patch clears the saved key.
+    const crossOriginModel = await store.updateModelApiConfig({
+      baseUrl: `https://api.deepseek.com/v1`,
+    })
+    expect(crossOriginModel.hasApiKey).toBe(false)
+    expect((await store.getResolvedModelApiConfig()).apiKey).toBe(``)
+    expect((await store.getResolvedModelApiConfig()).isConfigured).toBe(false)
+
+    const crossOriginImage = await store.updateImageGenConfig({
+      baseUrl: `http://127.0.0.1:9999/v1`,
+    })
+    expect(crossOriginImage.hasApiKey).toBe(false)
+    expect((await store.getResolvedImageGenConfig()).apiKey).toBe(``)
+    expect((await store.getResolvedImageGenConfig()).isConfigured).toBe(false)
+
+    // Switching protocol with empty baseUrl (resolving to Anthropic's default origin) also clears saved key.
+    await store.updateModelApiConfig({
+      protocol: `openai-compatible`,
+      baseUrl: `https://api.openai.com/v1`,
+      apiKey: `sk-model-again`,
+      enabledModels: [`gpt-5.4`],
+    })
+    const protocolDefaultOrigin = await store.updateModelApiConfig({
+      protocol: `anthropic`,
+      baseUrl: ``,
+    })
+    expect(protocolDefaultOrigin.hasApiKey).toBe(false)
+    expect((await store.getResolvedModelApiConfig()).apiKey).toBe(``)
+
+    // Clearing imageGen baseUrl clears saved key, preventing two-step exfiltration.
+    await store.updateImageGenConfig({
+      baseUrl: `https://api.openai.com/v1`,
+      apiKey: `sk-img-again`,
+    })
+    const clearedUrlImage = await store.updateImageGenConfig({ baseUrl: `` })
+    expect(clearedUrlImage.hasApiKey).toBe(false)
+    expect((await store.getResolvedImageGenConfig()).apiKey).toBe(``)
+
+    // Providing a new explicit apiKey alongside a cross-origin baseUrl stores the new key.
+    const withExplicitKey = await store.updateModelApiConfig({
+      baseUrl: `https://api.deepseek.com/v1`,
+      apiKey: `sk-deepseek-fresh`,
+      enabledModels: [`deepseek-chat`],
+    })
+    expect(withExplicitKey.hasApiKey).toBe(true)
+    const reloaded = new AiConfigStore({ configPath, cipher })
+    expect((await reloaded.getResolvedModelApiConfig()).apiKey).toBe(`sk-deepseek-fresh`)
+  })
 })
 
 describe(`remote model parsing and fetching`, () => {

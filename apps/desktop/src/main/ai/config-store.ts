@@ -97,6 +97,29 @@ function normalizeBaseUrl(raw: string, fallback: string): string {
   return isValidHttpBaseUrl(trimmed) ? trimmed : fallback
 }
 
+function parseHttpOrigin(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (!trimmed)
+    return null
+  try {
+    const parsed = new URL(trimmed)
+    if ((parsed.protocol !== `http:` && parsed.protocol !== `https:`) || !parsed.hostname)
+      return null
+    return parsed.origin
+  }
+  catch {
+    return null
+  }
+}
+
+function hasBaseUrlOriginChanged(prevBaseUrl: string, nextBaseUrl: string): boolean {
+  if (prevBaseUrl === nextBaseUrl)
+    return false
+  const prevOrigin = parseHttpOrigin(prevBaseUrl)
+  const nextOrigin = parseHttpOrigin(nextBaseUrl)
+  return !prevOrigin || !nextOrigin || prevOrigin !== nextOrigin
+}
+
 function normalizeModelList(list: unknown): string[] {
   if (!Array.isArray(list))
     return []
@@ -350,9 +373,11 @@ export class AiConfigStore {
       ? patch.providerPreset.trim() || (nextProtocol === `openai-compatible` ? `custom` : nextProtocol)
       : prev.providerPreset
 
+    const prevEffectiveBaseUrl = prev.baseUrl.trim() || DEFAULT_PROTOCOL_BASE_URLS[prev.protocol]
+    // Clear the saved key when switching to a different origin without supplying a new key.
     const nextApiKey = patch.apiKey !== undefined
       ? this.encryptSecret(patch.apiKey)
-      : prev.apiKey
+      : (hasBaseUrlOriginChanged(prevEffectiveBaseUrl, nextBaseUrl) ? null : prev.apiKey)
 
     const nextEnabled = patch.enabledModels !== undefined
       ? normalizeModelList(patch.enabledModels)
@@ -397,9 +422,10 @@ export class AiConfigStore {
       ? (patch.baseUrl.trim() ? validateHttpBaseUrl(patch.baseUrl) : ``)
       : prev.baseUrl
 
+    // Clear the saved key when switching to a different origin without supplying a new key.
     const nextApiKey = patch.apiKey !== undefined
       ? this.encryptSecret(patch.apiKey)
-      : prev.apiKey
+      : (hasBaseUrlOriginChanged(prev.baseUrl, nextBaseUrl) ? null : prev.apiKey)
 
     const nextModel = patch.model !== undefined
       ? patch.model.trim()
