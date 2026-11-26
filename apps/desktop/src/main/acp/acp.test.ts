@@ -15,7 +15,7 @@ import {
 } from '@md/shared/utils/acp-permissions'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AcpEventBatcher } from './event-batcher'
-import { AcpHost, buildPromptText } from './host'
+import { AcpHost, buildPromptText, fingerprintBundledSkills } from './host'
 import { createSafeNdJsonStream } from './ndjson-stream'
 import { probeAcpAgent, ProbeCache } from './probe'
 import { AcpRegistry } from './registry'
@@ -1782,6 +1782,46 @@ describe(`skills in agent workspaces`, () => {
     expect(first.endsWith(`/Users/me/notes.md 是什么`)).toBe(true)
     expect(second).toContain(`[Context]`)
     expect(second).not.toContain(`[Writing rules]`)
+  })
+})
+
+describe(`fingerprintBundledSkills`, () => {
+  it(`returns a stable 12-char hex fingerprint and skips directories without SKILL.md`, async () => {
+    const dirA = await makeTempDir(`md-acp-fp-a-`)
+    const dirB = await makeTempDir(`md-acp-fp-b-`)
+    for (const dir of [dirA, dirB]) {
+      await fs.mkdir(path.join(dir, `alpha`))
+      await fs.writeFile(path.join(dir, `alpha`, `SKILL.md`), `---\nname: alpha\n---\n`)
+    }
+    await fs.mkdir(path.join(dirA, `no-skill-md`))
+
+    const fpA = fingerprintBundledSkills(dirA)
+    const fpB = fingerprintBundledSkills(dirB)
+    expect(fpA).toMatch(/^[0-9a-f]{12}$/)
+    expect(fpA).toBe(fpB)
+  })
+
+  it(`changes when a SKILL.md is edited or a new skill directory is added`, async () => {
+    const dir = await makeTempDir(`md-acp-fp-change-`)
+    await fs.mkdir(path.join(dir, `alpha`))
+    await fs.writeFile(path.join(dir, `alpha`, `SKILL.md`), `v1`)
+    const initial = fingerprintBundledSkills(dir)
+
+    await fs.writeFile(path.join(dir, `alpha`, `SKILL.md`), `v2`)
+    const edited = fingerprintBundledSkills(dir)
+    expect(edited).not.toBe(initial)
+
+    await fs.mkdir(path.join(dir, `beta`))
+    await fs.writeFile(path.join(dir, `beta`, `SKILL.md`), `v1`)
+    const added = fingerprintBundledSkills(dir)
+    expect(added).not.toBe(edited)
+    expect(added).not.toBe(initial)
+  })
+
+  it(`returns an empty string for undefined or missing directories`, async () => {
+    const dir = await makeTempDir(`md-acp-fp-missing-`)
+    expect(fingerprintBundledSkills(undefined)).toBe(``)
+    expect(fingerprintBundledSkills(path.join(dir, `does-not-exist`))).toBe(``)
   })
 })
 

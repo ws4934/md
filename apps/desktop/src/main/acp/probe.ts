@@ -117,7 +117,7 @@ export async function probeAcpAgent(options: ProbeAgentOptions): Promise<AcpProb
 export interface ProbeCacheOptions {
   cachePath?: string
   ttlMs?: number
-  /** Persisted entries from another app version are dropped (agents, adapters and bundled skills may differ). */
+  /** Cache identity (app version plus bundled-skills fingerprint); persisted entries from another identity are dropped. */
   appVersion?: string
 }
 

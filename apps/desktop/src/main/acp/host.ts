@@ -13,7 +13,8 @@ import type {
   AcpStartSessionResult,
   AcpWorkspaceImage,
 } from '@md/shared/types'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { readdirSync, readFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import {
@@ -96,6 +97,35 @@ async function installBundledSkills(dir: string, skillsDir: string | undefined):
   if (failure)
     console.warn(`[acp] failed to install bundled skills:`, failure.reason)
   return !failure
+}
+
+/**
+ * Short hash of bundled `<name>/SKILL.md` files so probe caches invalidate when skills change
+ * without an app version bump (e.g. dev builds or local packaging).
+ */
+export function fingerprintBundledSkills(skillsDir: string | undefined): string {
+  if (!skillsDir)
+    return ``
+  try {
+    const names = readdirSync(skillsDir, { withFileTypes: true })
+      .filter(entry => entry.isDirectory() || entry.isSymbolicLink())
+      .map(entry => entry.name)
+      .sort()
+    const hash = createHash(`sha256`)
+    for (const name of names) {
+      try {
+        const content = readFileSync(path.join(skillsDir, name, `SKILL.md`), `utf8`)
+        hash.update(`${name}\0${content}\0`)
+      }
+      catch {
+        // Skip entries without a readable SKILL.md.
+      }
+    }
+    return hash.digest(`hex`).slice(0, 12)
+  }
+  catch {
+    return ``
+  }
 }
 
 /** Codex lists skills as `$name`; other agents list slash commands as bare names typed with `/`. */
@@ -199,7 +229,7 @@ export class AcpHost {
     this.onEvent = options.onEvent
     this.probeCache = new ProbeCache({
       cachePath: path.join(options.dataDir, `acp-probe-cache.json`),
-      appVersion: options.appVersion,
+      appVersion: [options.appVersion, fingerprintBundledSkills(options.skillsDir)].filter(Boolean).join(`+`) || undefined,
     })
     this.registry = new AcpRegistry({
       settingsPath: path.join(options.dataDir, `acp-settings.json`),
