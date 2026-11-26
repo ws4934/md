@@ -116,6 +116,7 @@ export class QuitGuard {
   private state: `idle` | `confirming` | `disposing` | `ready_to_quit` = `idle`
   private explicitLocale: string | null = null
   private nonInteractive = false
+  private pendingQuit: (() => void) | null = null
 
   constructor(options: QuitGuardOptions) {
     this.options = options
@@ -124,6 +125,10 @@ export class QuitGuard {
 
   get currentState(): `idle` | `confirming` | `disposing` | `ready_to_quit` {
     return this.state
+  }
+
+  get locale(): QuitLocale {
+    return resolveQuitLocale(this.explicitLocale, this.options.getFallbackLocale?.())
   }
 
   setLocale(locale: string): void {
@@ -137,6 +142,17 @@ export class QuitGuard {
 
   handleBeforeQuit(event: PreventableEvent): void {
     this.handleInteractiveExit(event)
+  }
+
+  /**
+   * Runs the same confirm + dispose flow as a user quit, then calls `quit` instead of
+   * `quitApp` (e.g. `autoUpdater.quitAndInstall()`). Ignored while a quit is already underway.
+   */
+  requestQuit(quit: () => void): void {
+    if (this.state !== `idle`)
+      return
+    this.pendingQuit = quit
+    this.handleInteractiveExit({ preventDefault: () => {} })
   }
 
   /**
@@ -173,8 +189,7 @@ export class QuitGuard {
     }
 
     this.state = `confirming`
-    const locale = resolveQuitLocale(this.explicitLocale, this.options.getFallbackLocale?.())
-    const copy = formatQuitConfirmCopy(locale, activeSessions)
+    const copy = formatQuitConfirmCopy(this.locale, activeSessions)
 
     void this.options.confirmQuit(copy)
       .then((confirmed) => {
@@ -182,13 +197,16 @@ export class QuitGuard {
           return
         if (!confirmed) {
           this.state = `idle`
+          this.pendingQuit = null
           return
         }
         this.beginDisposeAndQuit()
       })
       .catch(() => {
-        if (this.state === `confirming`)
+        if (this.state === `confirming`) {
           this.state = `idle`
+          this.pendingQuit = null
+        }
       })
   }
 
@@ -215,6 +233,8 @@ export class QuitGuard {
         this.state = `ready_to_quit`
         if (forceAfterDispose)
           this.options.forceExit(0)
+        else if (this.pendingQuit)
+          this.pendingQuit()
         else
           this.options.quitApp()
       })

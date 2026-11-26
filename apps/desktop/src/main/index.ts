@@ -10,12 +10,14 @@ import type {
   WeChatPublishRequest,
   WeChatUploadImageRequest,
 } from '@md/shared/types'
+import type { UpdateMode } from './auto-update'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { API_MODEL_AGENT_ID } from '@md/shared/types'
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, powerMonitor, protocol, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, powerMonitor, protocol, safeStorage, shell } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import { API_AGENT_MODES, API_THOUGHT_LEVEL_OPTIONS } from '../agents/api-agent/provider'
 import { IPC_CHANNELS } from '../shared/ipc-channels'
 import { AcpEventBatcher } from './acp/event-batcher'
@@ -27,6 +29,7 @@ import { resolveUnpackedAgentScript, resolveUnpackedSkillsDir } from './ai/paths
 import { fetchRemoteModels } from './ai/remote-models'
 import { redactSecret } from './ai/sanitize'
 import { APP_HOST, APP_SCHEME, isSafeExternalUrl, resolveAppProtocolTarget } from './app-protocol'
+import { createUpdatePromptGate, readMacAutoInstallFlag, releasePageUrl, resolveUpdateMode, UPDATE_COPY } from './auto-update'
 import { QuitGuard } from './quit-guard'
 import { mimeForExtension, WeChatPublisher } from './wechat/publisher'
 
@@ -34,6 +37,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const DEV_SERVER_URL = process.env.MD_DESKTOP_DEV_URL
 const QUIT_DISPOSE_TIMEOUT_MS = 4_000
+const UPDATE_FIRST_CHECK_DELAY_MS = 10_000
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 
 app.setName(`md`)
 
@@ -75,6 +80,10 @@ let aiConfigStore: AiConfigStore | null = null
 let imageGenBridge: ImageGenBridge | null = null
 let wechatPublisher: WeChatPublisher | null = null
 let quitGuard: QuitGuard | null = null
+let updateMode: UpdateMode | null = null
+let downloadedUpdateVersion: string | null = null
+let installingUpdate = false
+const shouldPromptUpdate = createUpdatePromptGate()
 
 const testQuitResponses: Array<`cancel` | `confirm`> = (process.env.MD_DESKTOP_TEST_QUIT_RESPONSES ?? ``)
   .split(`,`)
@@ -234,6 +243,8 @@ function registerIpc(host: AcpHost, publisher: WeChatPublisher, configStore: AiC
 
   ipcMain.handle(IPC_CHANNELS.SET_LOCALE, (_event, locale: string) => {
     quitGuard?.setLocale(locale)
+    if (updateMode)
+      setAppMenu()
   })
 
   ipcMain.handle(IPC_CHANNELS.WECHAT_PUBLISH, (_event, request: WeChatPublishRequest) =>
@@ -308,6 +319,135 @@ function registerIpc(host: AcpHost, publisher: WeChatPublisher, configStore: AiC
   ipcMain.handle(IPC_CHANNELS.ACP_RESPOND_PERMISSION, (_event, params) => host.respondPermission(params))
   ipcMain.handle(IPC_CHANNELS.ACP_CLOSE_SESSION, (_event, sessionId) => host.closeSession(sessionId))
   ipcMain.handle(IPC_CHANNELS.ACP_READ_WORKSPACE_IMAGE, (_event, params) => host.readWorkspaceImage(params))
+}
+
+function updateCopy() {
+  return UPDATE_COPY[quitGuard?.locale ?? `en-US`]
+}
+
+async function showUpdateMessage(type: `info` | `error`, message: string, detail: string, buttons: string[]): Promise<number> {
+  const owner = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+  const options: Electron.MessageBoxOptions = {
+    type,
+    buttons,
+    defaultId: 0,
+    cancelId: buttons.length - 1,
+    title: message,
+    message,
+    detail,
+    noLink: true,
+  }
+  const { response } = owner
+    ? await dialog.showMessageBox(owner, options)
+    : await dialog.showMessageBox(options)
+  return response
+}
+
+async function promptRestartToUpdate(version: string): Promise<void> {
+  const copy = updateCopy()
+  const response = await showUpdateMessage(`info`, copy.downloaded(version), copy.downloadedDetail, [copy.restartNow, copy.later])
+  if (response !== 0)
+    return
+  // Same confirm/dispose path as a normal quit; installing only starts once agents are shut down.
+  quitGuard?.requestQuit(() => {
+    installingUpdate = true
+    autoUpdater.quitAndInstall()
+  })
+}
+
+async function promptDownloadUpdate(version: string, fileUrl: string | undefined): Promise<void> {
+  const page = releasePageUrl(fileUrl)
+  if (!page) {
+    console.warn(`[md-desktop:update] cannot derive a release page from ${fileUrl}`)
+    return
+  }
+  const copy = updateCopy()
+  const response = await showUpdateMessage(`info`, copy.available(version), copy.availableDetail, [copy.download, copy.later])
+  if (response === 0)
+    await shell.openExternal(page)
+}
+
+async function checkForUpdates(manual: boolean): Promise<void> {
+  const copy = updateCopy()
+  try {
+    const result = await autoUpdater.checkForUpdates()
+    // Download failures are already reported through the `error` event.
+    void result?.downloadPromise?.catch(() => undefined)
+    const info = result?.isUpdateAvailable ? result.updateInfo : null
+    if (!info) {
+      if (manual)
+        await showUpdateMessage(`info`, copy.upToDate, copy.upToDateDetail(app.getVersion()), [copy.ok])
+    }
+    else if (updateMode === `notify`) {
+      if (shouldPromptUpdate(info.version, manual))
+        await promptDownloadUpdate(info.version, info.files[0]?.url)
+    }
+    else if (manual) {
+      if (downloadedUpdateVersion === info.version)
+        await promptRestartToUpdate(info.version)
+      else
+        await showUpdateMessage(`info`, copy.downloading(info.version), copy.downloadingDetail, [copy.ok])
+    }
+  }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (manual)
+      await showUpdateMessage(`error`, copy.checkFailed, message, [copy.ok])
+    else
+      console.warn(`[md-desktop:update] background check failed: ${message}`)
+  }
+}
+
+/** Electron's default menu plus "Check for Updates…" in the app menu (macOS) or Help menu. */
+function setAppMenu(): void {
+  const isMac = process.platform === `darwin`
+  const checkItem: Electron.MenuItemConstructorOptions = {
+    label: updateCopy().menuLabel,
+    click: () => void checkForUpdates(true),
+  }
+  const template: Electron.MenuItemConstructorOptions[] = [
+    { role: `fileMenu` },
+    { role: `editMenu` },
+    { role: `viewMenu` },
+    { role: `windowMenu` },
+    { role: `help`, submenu: isMac ? [] : [checkItem] },
+  ]
+  if (isMac) {
+    template.unshift({
+      role: `appMenu`,
+      submenu: [
+        { role: `about` },
+        checkItem,
+        { type: `separator` },
+        { role: `services` },
+        { type: `separator` },
+        { role: `hide` },
+        { role: `hideOthers` },
+        { role: `unhide` },
+        { type: `separator` },
+        { role: `quit` },
+      ],
+    })
+  }
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
+function startAutoUpdate(mode: UpdateMode): void {
+  updateMode = mode
+  autoUpdater.autoDownload = mode === `install`
+  autoUpdater.on(`update-downloaded`, (info) => {
+    downloadedUpdateVersion = info.version
+    if (shouldPromptUpdate(info.version, false))
+      void promptRestartToUpdate(info.version)
+  })
+  autoUpdater.on(`error`, () => {
+    // The quit guard already disposed the agents, so quit rather than linger half shut down.
+    if (installingUpdate)
+      app.quit()
+  })
+  setAppMenu()
+  setTimeout(() => void checkForUpdates(false), UPDATE_FIRST_CHECK_DELAY_MS)
+  setInterval(() => void checkForUpdates(false), UPDATE_CHECK_INTERVAL_MS)
 }
 
 app.whenReady().then(() => {
@@ -481,6 +621,16 @@ app.whenReady().then(() => {
       setTimeout(() => quitGuard?.requestNonInteractiveQuit(), smokeExitMs)
     })
   }
+
+  const mode = resolveUpdateMode({
+    isPackaged: app.isPackaged,
+    isSmokeRun: smokeExitMs > 0,
+    platform: process.platform,
+    isAppImage: Boolean(process.env.APPIMAGE),
+    macAutoInstall: readMacAutoInstallFlag(app.getAppPath()),
+  })
+  if (mode)
+    startAutoUpdate(mode)
 
   // Register after app.whenReady() so libuv installs over Chromium's C signal handlers,
   // preventing SIGINT/SIGTERM from routing into the interactive before-quit confirmation.

@@ -154,6 +154,47 @@ describe(`quitGuard decision matrix`, () => {
     expect(guard.currentState).toBe(`ready_to_quit`)
   })
 
+  it(`requestQuit goes through confirm + dispose, then runs its own action instead of quitApp`, async () => {
+    let resolvePrompt!: (confirmed: boolean) => void
+    const calls: string[] = []
+    const confirmQuit = vi.fn(() => new Promise<boolean>((resolve) => {
+      resolvePrompt = resolve
+    }))
+    const dispose = vi.fn(async () => {
+      calls.push(`dispose`)
+    })
+    const quitApp = vi.fn(() => calls.push(`quitApp`))
+    const install = vi.fn(() => calls.push(`install`))
+    const active = [{ sessionId: `s1`, agentId: `claude`, agentName: `Claude Code`, waitingPermission: false }]
+    const makeGuard = () => new QuitGuard({ getActiveSessions: () => active, dispose, confirmQuit, quitApp, forceExit: vi.fn() })
+
+    // Cancelled restart keeps agents running, and a later plain quit does not install.
+    const cancelled = makeGuard()
+    cancelled.requestQuit(install)
+    expect(confirmQuit).toHaveBeenCalledTimes(1)
+    resolvePrompt(false)
+    await flushMicrotasks()
+    expect(calls).toEqual([])
+    expect(cancelled.currentState).toBe(`idle`)
+    cancelled.handleBeforeQuit(makeEvent())
+    resolvePrompt(true)
+    await flushMicrotasks()
+    expect(calls).toEqual([`dispose`, `quitApp`])
+
+    // Confirmed restart disposes agents first; the action's own app.quit() then passes through.
+    calls.length = 0
+    const confirmed = makeGuard()
+    confirmed.requestQuit(install)
+    confirmed.requestQuit(install)
+    expect(confirmQuit).toHaveBeenCalledTimes(3)
+    resolvePrompt(true)
+    await flushMicrotasks()
+    expect(calls).toEqual([`dispose`, `install`])
+    const followUp = makeEvent()
+    confirmed.handleBeforeQuit(followUp)
+    expect(followUp.prevented).toBe(false)
+  })
+
   it(`skips confirmation on smoke runs and non-interactive shutdown/signals`, async () => {
     const confirmQuit = vi.fn(async () => false)
     const dispose = vi.fn(async () => {})
