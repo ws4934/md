@@ -1680,19 +1680,18 @@ describe(`skills in agent workspaces`, () => {
     return skillsDir
   }
 
-  it(`installs the format skill and bundled skills for sessions and per-probe workspaces`, async () => {
+  it(`installs bundled skills for sessions and per-probe workspaces`, async () => {
     const dataDir = await makeTempDir(`md-acp-skills-`)
     const host = new AcpHost({
       dataDir,
       skillsDir: await makeSkillsDir(),
-      isImageGenConfigured: () => true,
       // Announce after the 600ms quiet window to cover slow first announcements.
       extraBuiltinAgents: [fakeAgent(`fake-skills`, { FAKE_AGENT_EMIT_COMMANDS: `1`, FAKE_AGENT_COMMANDS_DELAY_MS: `900` })],
     })
     openHosts.push(host)
 
     const probe = await host.probeAgent(`fake-skills`)
-    expect(probe.commands.map(c => c.name)).toEqual([`outline`, `polish`, `demo-skill`, `md-article-format`])
+    expect(probe.commands.map(c => c.name)).toEqual([`outline`, `polish`, `demo-skill`])
     expect(probe.commandsAnnounced).toBe(true)
     // The probe workspace is removed once the probe closes.
     expect(await fs.readdir(path.join(dataDir, `acp-workspaces`))).toEqual([])
@@ -1700,17 +1699,12 @@ describe(`skills in agent workspaces`, () => {
     await host.startSession({ agentId: `fake-skills`, postId: `p`, postTitle: `T`, content: `` })
     const [workspaceId] = await fs.readdir(path.join(dataDir, `acp-workspaces`))
     const workspaceDir = path.join(dataDir, `acp-workspaces`, workspaceId)
-    for (const dir of [`.claude/skills`, `.agents/skills`, `.qwen/skills`]) {
-      expect(await fs.readFile(path.join(workspaceDir, dir, `demo-skill`, `SKILL.md`), `utf8`)).toContain(`name: demo-skill`)
-      const formatSkill = await fs.readFile(path.join(workspaceDir, dir, `md-article-format`, `SKILL.md`), `utf8`)
-      expect(formatSkill).toContain(`name: md-article-format`)
-      expect(formatSkill).toContain(`[Writing rules]`)
-      expect(formatSkill).toContain(`generate_image`)
-    }
-    expect(await fs.readdir(workspaceDir)).not.toContain(`CLAUDE.md`)
+    for (const dir of [`.claude/skills`, `.agents/skills`, `.qwen/skills`])
+      expect(await fs.readdir(path.join(workspaceDir, dir))).toEqual([`demo-skill`])
+    expect((await fs.readdir(workspaceDir)).sort()).toEqual([`.agents`, `.claude`, `.qwen`, `article.md`])
   })
 
-  it(`still installs the format skill and probes off the home directory when the bundle is missing`, async () => {
+  it(`probes off the home directory even when the bundle is missing`, async () => {
     const dataDir = await makeTempDir(`md-acp-skills-missing-`)
     const host = new AcpHost({
       dataDir,
@@ -1721,10 +1715,10 @@ describe(`skills in agent workspaces`, () => {
 
     // Probing in the home directory would pick up the user's own `~/.claude/skills`.
     const probe = await host.probeAgent(`fake-skills`)
-    expect(probe.commands.map(c => c.name)).toEqual([`outline`, `polish`, `md-article-format`])
+    expect(probe.commands.map(c => c.name)).toEqual([`outline`, `polish`])
   })
 
-  it(`points skill-aware agents at the format skill and sends command turns as their own first block`, async () => {
+  it(`sends command turns as their own first block with context, attachments and rules in a second block`, async () => {
     const dataDir = await makeTempDir(`md-acp-turns-`)
     const promptsPath = path.join(dataDir, `prompts.jsonl`)
     const events: AcpHostEvent[] = []
@@ -1743,15 +1737,14 @@ describe(`skills in agent workspaces`, () => {
     const [commandTurn, normalTurn] = await readPrompts(promptsPath)
     expect(commandTurn[0]).toBe(`/outline 存款`)
     expect(commandTurn[1]).toContain(`Attached reference files:\n- /ref/a.md`)
-    expect(commandTurn[1]).toContain(`md-article-format`)
+    expect(commandTurn[1]).toContain(`[Writing rules]`)
     expect(normalTurn).toHaveLength(1)
-    expect(normalTurn[0]).toContain(`md-article-format`)
+    expect(normalTurn[0]).toContain(`[Context]`)
+    expect(normalTurn[0]).not.toContain(`[Writing rules]`)
     expect(normalTurn[0].endsWith(`Polish it`)).toBe(true)
-    for (const blocks of [commandTurn, normalTurn])
-      expect(blocks.join(`\n`)).not.toContain(`[Writing rules]`)
   })
 
-  it(`injects the full rules once for agents without the skill and never treats paths as commands`, async () => {
+  it(`never treats a leading path as a command`, async () => {
     const dataDir = await makeTempDir(`md-acp-turns-plain-`)
     const promptsPath = path.join(dataDir, `prompts.jsonl`)
     const host = new AcpHost({ dataDir, extraBuiltinAgents: [fakeAgent(`fake-plain`, { FAKE_AGENT_RECORD_PROMPTS: promptsPath })] })

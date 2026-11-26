@@ -29,7 +29,7 @@ import { ProbeCache } from './probe'
 import { AcpRegistry } from './registry'
 import { AcpSession } from './session'
 import { isMethodNotFoundError } from './translator'
-import { ARTICLE_FORMAT_SKILL_NAME, ARTICLE_FORMAT_SKILL_POINTER, buildArticleFormatSkill, buildArticleWritingRules } from './writing-rules'
+import { buildArticleWritingRules } from './writing-rules'
 
 export interface AcpActiveSessionSummary {
   sessionId: string
@@ -82,20 +82,15 @@ export interface AcpHostOptions {
  */
 const SKILL_DIRS = [`.claude/skills`, `.agents/skills`, `.qwen/skills`]
 
-/** Installs the generated article format skill plus the bundled skills; skills are optional, so failures only warn. */
-async function installSkills(dir: string, skillsDir: string | undefined, options: { imageGenEnabled: boolean }): Promise<void> {
-  const formatSkill = buildArticleFormatSkill(options)
+/** Copies the bundled skills where agent CLIs discover them; skills are optional, so failures only warn. */
+async function installBundledSkills(dir: string, skillsDir: string | undefined): Promise<void> {
+  if (!skillsDir)
+    return
   try {
-    await Promise.all(SKILL_DIRS.map(async (target) => {
-      const skillDir = path.join(dir, target, ARTICLE_FORMAT_SKILL_NAME)
-      await fs.mkdir(skillDir, { recursive: true })
-      await fs.writeFile(path.join(skillDir, `SKILL.md`), formatSkill, `utf8`)
-      if (skillsDir)
-        await fs.cp(skillsDir, path.join(dir, target), { recursive: true })
-    }))
+    await Promise.all(SKILL_DIRS.map(target => fs.cp(skillsDir, path.join(dir, target), { recursive: true })))
   }
   catch (error) {
-    console.warn(`[acp] failed to install skills:`, error)
+    console.warn(`[acp] failed to install bundled skills:`, error)
   }
 }
 
@@ -107,10 +102,6 @@ function commandToken(command: AcpSlashCommand): string {
 function isCommandTurn(text: string, commands: AcpSlashCommand[]): boolean {
   const head = text.split(/\s/, 1)[0]
   return commands.some(command => commandToken(command) === head)
-}
-
-function hasFormatSkill(commands: AcpSlashCommand[]): boolean {
-  return commands.some(command => command.name.replace(/^\$/, ``) === ARTICLE_FORMAT_SKILL_NAME)
 }
 
 const MAX_WORKSPACE_IMAGE_BYTES = 10 * 1024 * 1024
@@ -139,21 +130,15 @@ function articleContextLines(postTitle: string | undefined, articlePath: string,
   ]
 }
 
-/**
- * Article context for a turn. Agents that discovered the format skill get a one-line pointer on
- * every turn; others get the full writing rules on the first turn only.
- */
+/** Article context for a turn; the writing rules ride on the first turn only (agents keep them in history). */
 export function buildPromptContext(
   params: AcpPromptParams,
   articlePath: string,
-  rules: `full` | `skill` | `none`,
+  includeRules: boolean,
   options?: { imageGenEnabled?: boolean },
 ): string {
-  const lines = articleContextLines(params.postTitle, articlePath, formatAttachments(params))
-  if (rules === `skill`)
-    lines.push(ARTICLE_FORMAT_SKILL_POINTER)
-  const header = lines.join(`\n`)
-  return rules === `full` ? `${header}\n\n${buildArticleWritingRules(options)}` : header
+  const header = articleContextLines(params.postTitle, articlePath, formatAttachments(params)).join(`\n`)
+  return includeRules ? `${header}\n\n${buildArticleWritingRules(options)}` : header
 }
 
 export function buildPromptText(
@@ -162,7 +147,7 @@ export function buildPromptText(
   includeRules: boolean,
   options?: { imageGenEnabled?: boolean },
 ): string {
-  return `${buildPromptContext(params, articlePath, includeRules ? `full` : `none`, options)}\n\n${params.text}`
+  return `${buildPromptContext(params, articlePath, includeRules, options)}\n\n${params.text}`
 }
 
 /**
@@ -170,12 +155,10 @@ export function buildPromptText(
  * own first block and the article context as a second block (also keeps attachments out of arguments).
  */
 function buildTurnBlocks(managed: ManagedSession, params: AcpPromptParams): ContentBlock[] {
-  const commands = managed.session.commands
   const includeRules = !managed.writingRulesSent
   managed.writingRulesSent = true
-  const rules = hasFormatSkill(commands) ? `skill` : includeRules ? `full` : `none`
-  const context = buildPromptContext(params, managed.articlePath, rules, { imageGenEnabled: managed.imageGenEnabled })
-  if (isCommandTurn(params.text, commands))
+  const context = buildPromptContext(params, managed.articlePath, includeRules, { imageGenEnabled: managed.imageGenEnabled })
+  if (isCommandTurn(params.text, managed.session.commands))
     return [{ type: `text`, text: params.text }, { type: `text`, text: context }]
   return [{ type: `text`, text: `${context}\n\n${params.text}` }]
 }
@@ -226,7 +209,7 @@ export class AcpHost {
       const dir = path.join(this.workspacesRoot, `probe-${randomUUID()}`)
       this.activeWorkspaceDirs.add(dir)
       await fs.mkdir(dir, { recursive: true })
-      await installSkills(dir, this.skillsDir, { imageGenEnabled: false })
+      await installBundledSkills(dir, this.skillsDir)
       return dir
     },
     dispose: async (dir: string): Promise<void> => {
@@ -364,7 +347,7 @@ export class AcpHost {
     let imageGenEnabled = false
     try {
       imageGenEnabled = Boolean(await this.isImageGenConfigured?.())
-      await installSkills(workspaceDir, this.skillsDir, { imageGenEnabled })
+      await installBundledSkills(workspaceDir, this.skillsDir)
       const runtimeEnv = await this.resolveAgentRuntimeEnv?.(params.agentId, {
         workspaceDir,
         forProbe: false,

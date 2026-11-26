@@ -944,7 +944,7 @@ describe(`api model ACP agent end-to-end through AcpHost`, () => {
       .join(``)
     expect(turn1Text).toContain(`Hello from mock-gpt-pro (turns=1, effort=none)`)
     expect(turn1Thought).toContain(`Thinking step for mock-gpt-pro`)
-    // The API agent cannot load skills, so its first turn carries the full writing rules.
+    // The first turn carries the full writing rules ahead of the user's text.
     const firstUserMessage = String(fakeServer.chatRequests[0].messages?.find(m => m.role === `user`)?.content)
     expect(firstUserMessage).toContain(`[Writing rules]`)
     expect(firstUserMessage.endsWith(`Say hello`)).toBe(true)
