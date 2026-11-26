@@ -101,6 +101,13 @@ watch(matchedCommands, () => {
 
 watch(commandIndex, () => nextTick(() => scrollActiveOptionIntoView(commandMenuRef.value)))
 
+// A missing or timed-out probe leaves the draft `/` list empty or partial; opening the menu asks again.
+watch(() => /^\/\S*$/.test(text.value), (isSlashQuery) => {
+  const agent = agentStore.selectedAgent
+  if (isSlashQuery && agent?.installed && agentStore.needsProbe(agent.id))
+    void agentStore.probeAgent(agent.id)
+})
+
 function insertCommand(command: AcpSlashCommand) {
   text.value = `${commandToken(command)} `
   nextTick(() => {

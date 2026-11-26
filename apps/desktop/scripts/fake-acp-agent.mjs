@@ -489,7 +489,9 @@ async function handlePrompt(id, params) {
   }
 
   // Only the user's message (last paragraph) drives this, not the host's context/rules header.
-  const userText = text.slice(text.lastIndexOf(`\n\n`) + 2)
+  // Command turns put the user's text in the first block; otherwise it trails the injected context.
+  const textBlocks = (params.prompt || []).filter(b => b.type === `text`)
+  const userText = textBlocks.length > 1 ? textBlocks[0].text : text.slice(text.lastIndexOf(`\n\n`) + 2)
   const needsExecPerm = requirePermission || /permission|mermaid|命令|svg|run/i.test(userText)
   if (needsExecPerm) {
     sendUpdate({

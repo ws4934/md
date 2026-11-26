@@ -470,6 +470,69 @@ describe(`useAgentStore thinking level state`, () => {
     expect(acpMock.probeAgent).toHaveBeenCalledWith(`codex`, { force: false })
   })
 
+  it(`re-probes a historical session's agent on switch only while its commands were not announced`, async () => {
+    const [agy] = await acpMock.listAgents()
+    vi.mocked(acpMock.listAgents).mockResolvedValueOnce([agy, { ...agy, id: `codex`, name: `Codex`, isDefault: false }])
+    vi.mocked(acpMock.probeAgent).mockImplementation(async agentId => ({ ...createAgyProbe(), agentId, commandsAnnounced: true }))
+
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+    await agentStore.init()
+    agentStore.sessions.push({
+      id: `old`,
+      acpSessionId: null,
+      agentId: `codex`,
+      modelId: null,
+      postId: `post-1`,
+      title: `Old`,
+      items: [],
+      updatedAt: 1,
+    })
+    agentStore.probeByAgent.codex = { ...createAgyProbe(), agentId: `codex`, commandsAnnounced: false }
+    vi.mocked(acpMock.probeAgent).mockClear()
+
+    await agentStore.switchSession(`old`)
+    expect(acpMock.probeAgent).toHaveBeenCalledWith(`codex`, { force: false })
+    await vi.waitFor(() => expect(agentStore.probeByAgent.codex.commandsAnnounced).toBe(true))
+
+    vi.mocked(acpMock.probeAgent).mockClear()
+    await agentStore.switchSession(`old`)
+    expect(acpMock.probeAgent).not.toHaveBeenCalled()
+  })
+
+  it(`coalesces concurrent non-forced probes of one agent into a single IPC request`, async () => {
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+
+    const [first, second] = await Promise.all([
+      agentStore.probeAgent(`antigravity`),
+      agentStore.probeAgent(`antigravity`),
+    ])
+    expect(acpMock.probeAgent).toHaveBeenCalledTimes(1)
+    expect(first).toBe(second)
+
+    // Force-refresh still issues its own request.
+    agentStore.probeByAgent.antigravity = { ...createAgyProbe(), commandsAnnounced: false }
+    await Promise.all([agentStore.probeAgent(`antigravity`), agentStore.probeAgent(`antigravity`, true)])
+    expect(acpMock.probeAgent).toHaveBeenCalledTimes(3)
+    expect(acpMock.probeAgent).toHaveBeenLastCalledWith(`antigravity`, { force: true })
+  })
+
+  it(`flags agents whose probe is missing, failed, or not announced as needing a probe`, async () => {
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+
+    expect(agentStore.needsProbe(`antigravity`)).toBe(true)
+    agentStore.probeByAgent.antigravity = { ...createAgyProbe(), error: `spawn failed` }
+    expect(agentStore.needsProbe(`antigravity`)).toBe(true)
+    agentStore.probeByAgent.antigravity = { ...createAgyProbe(), commandsAnnounced: false }
+    expect(agentStore.needsProbe(`antigravity`)).toBe(true)
+    agentStore.probeByAgent.antigravity = { ...createAgyProbe(), commandsAnnounced: true }
+    expect(agentStore.needsProbe(`antigravity`)).toBe(false)
+    agentStore.probeByAgent.antigravity = createAgyProbe()
+    expect(agentStore.needsProbe(`antigravity`)).toBe(false)
+  })
+
   it(`hides thinking options on Claude Haiku and restores remembered level when switching back to Sonnet`, async () => {
     const claudeProbe: AcpProbeResult = {
       agentId: `claude`,

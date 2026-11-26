@@ -181,7 +181,7 @@ function toggleMenu() {
     ? selectedAgent.value.id
     : agents.value.find(a => a.installed)?.id ?? null
   hoveredAgentId.value = initial
-  if (initial && !probeByAgent.value[initial])
+  if (initial && agentStore.needsProbe(initial))
     scheduleProbe(initial)
   // Pre-compute approximate coordinates before mount to prevent any (0, 0) flash.
   updateMenuPositions()
@@ -225,7 +225,7 @@ function onClickAgent(agent: AcpAgentStatus) {
   }
   hoveredAgentId.value = agent.id
   const probe = probeByAgent.value[agent.id]
-  if (!probe) {
+  if (agentStore.needsProbe(agent.id)) {
     scheduleProbe(agent.id)
   }
   // If no selectable models exist, select the agent immediately and close.

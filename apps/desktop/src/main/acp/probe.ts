@@ -14,8 +14,8 @@ const FIRST_COMMANDS_WAIT_FACTOR = 5
 const DEFAULT_PROBE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 // A probe that never saw `available_commands_update` may have just been too early; retry it sooner.
 const COMMANDS_PENDING_TTL_MS = 5 * 60 * 1000
-// Bump when cached probe metadata changes shape so stale ungrouped entries refresh automatically.
-const PROBE_CACHE_SCHEMA_VERSION = 2
+// Bump when cached probe metadata changes shape or meaning (v3: commands come from probes only).
+const PROBE_CACHE_SCHEMA_VERSION = 3
 
 interface PersistedProbeCache {
   schemaVersion: number
@@ -31,7 +31,8 @@ export interface ProbeAgentOptions {
   cwd?: string
   /** Per-probe workspace, created before spawning and disposed after the probe closes (overrides `cwd`). */
   workspace?: {
-    create: () => Promise<string>
+    /** `complete: false` marks the result's commands as possibly incomplete (e.g. skills failed to install). */
+    create: () => Promise<{ dir: string, complete: boolean }>
     dispose: (dir: string) => Promise<void>
   }
   pathOverride?: string
@@ -69,7 +70,8 @@ async function waitForAvailableCommands(
  */
 export async function probeAcpAgent(options: ProbeAgentOptions): Promise<AcpProbeResult> {
   const quietMs = options.commandQuietMs ?? COMMAND_QUIET_WINDOW_MS
-  const workspaceDir = options.workspace ? await options.workspace.create() : null
+  const workspace = options.workspace ? await options.workspace.create() : null
+  const workspaceDir = workspace?.dir ?? null
   const session = new AcpSession({
     agentId: options.agentId,
     command: options.command,
@@ -101,7 +103,7 @@ export async function probeAcpAgent(options: ProbeAgentOptions): Promise<AcpProb
       modes: session.modes,
       currentModeId: session.currentModeId,
       commands: session.commands,
-      commandsAnnounced: session.commandsUpdatedAt !== null,
+      commandsAnnounced: session.commandsUpdatedAt !== null && workspace?.complete !== false,
       probedAt: Date.now(),
     }
   }
@@ -216,6 +218,9 @@ export class ProbeCache {
       : (result.thinkingOptions && result.thinkingOptions.length > 0
           ? result.thinkingOptions
           : prev?.thinkingOptions)
+    // `commandsAnnounced: false` with no commands (e.g. a session start) means "commands unknown":
+    // keep the previous list and never extend a pending entry's short TTL.
+    const commandsKnown = result.commandsAnnounced !== false || result.commands.length > 0
     const merged: AcpProbeResult = {
       agentId: result.agentId,
       models,
@@ -224,9 +229,9 @@ export class ProbeCache {
       currentThinkingLevel: result.currentThinkingLevel ?? prev?.currentThinkingLevel ?? null,
       modes: result.modes.length > 0 ? result.modes : (prev?.modes ?? []),
       currentModeId: result.currentModeId ?? prev?.currentModeId ?? null,
-      commands: result.commands.length > 0 ? result.commands : (prev?.commands ?? []),
-      commandsAnnounced: result.commands.length > 0 ? result.commandsAnnounced : prev?.commandsAnnounced,
-      probedAt: result.probedAt || Date.now(),
+      commands: commandsKnown ? result.commands : (prev?.commands ?? []),
+      commandsAnnounced: commandsKnown ? result.commandsAnnounced : (prev?.commandsAnnounced ?? false),
+      probedAt: !commandsKnown && prev?.commandsAnnounced === false ? prev.probedAt : (result.probedAt || Date.now()),
     }
     this.cache.set(result.agentId, merged)
     this.schedulePersist()

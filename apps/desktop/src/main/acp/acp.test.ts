@@ -1716,6 +1716,8 @@ describe(`skills in agent workspaces`, () => {
     // Probing in the home directory would pick up the user's own `~/.claude/skills`.
     const probe = await host.probeAgent(`fake-skills`)
     expect(probe.commands.map(c => c.name)).toEqual([`outline`, `polish`])
+    // Skills failed to install, so the list may be incomplete and is retried sooner.
+    expect(probe.commandsAnnounced).toBe(false)
   })
 
   it(`sends command turns as their own first block with context, attachments and rules in a second block`, async () => {
@@ -1733,16 +1735,37 @@ describe(`skills in agent workspaces`, () => {
     await waitFor(() => events.some(e => e.type === `commands_updated`))
     await host.prompt({ sessionId, text: `/outline 存款`, content: ``, postTitle: `T`, attachments: [`/ref/a.md`] })
     await host.prompt({ sessionId, text: `Polish it`, content: ``, postTitle: `T` })
+    await host.prompt({ sessionId, text: `Shorter`, content: ``, postTitle: `T` })
 
-    const [commandTurn, normalTurn] = await readPrompts(promptsPath)
+    const [commandTurn, normalTurn, laterTurn] = await readPrompts(promptsPath)
     expect(commandTurn[0]).toBe(`/outline 存款`)
     expect(commandTurn[1]).toContain(`Attached reference files:\n- /ref/a.md`)
     expect(commandTurn[1]).toContain(`[Writing rules]`)
+    // A command may be handled locally, so the first normal turn still carries the rules.
     expect(normalTurn).toHaveLength(1)
-    expect(normalTurn[0]).toContain(`[Context]`)
-    expect(normalTurn[0]).not.toContain(`[Writing rules]`)
+    expect(normalTurn[0]).toContain(`[Writing rules]`)
     expect(normalTurn[0].endsWith(`Polish it`)).toBe(true)
-  })
+    expect(laterTurn[0]).toContain(`[Context]`)
+    expect(laterTurn[0]).not.toContain(`[Writing rules]`)
+  }, 20_000)
+
+  it(`recognizes commands from the probe before the session announces its own`, async () => {
+    const dataDir = await makeTempDir(`md-acp-turns-early-`)
+    const promptsPath = path.join(dataDir, `prompts.jsonl`)
+    const host = new AcpHost({
+      dataDir,
+      extraBuiltinAgents: [fakeAgent(`fake-late`, { FAKE_AGENT_EMIT_COMMANDS: `1`, FAKE_AGENT_COMMANDS_DELAY_MS: `900`, FAKE_AGENT_RECORD_PROMPTS: promptsPath })],
+    })
+    openHosts.push(host)
+
+    await host.probeAgent(`fake-late`)
+    const { sessionId } = await host.startSession({ agentId: `fake-late`, postId: `p`, postTitle: `T`, content: `` })
+    await host.prompt({ sessionId, text: `/outline 存款`, content: ``, postTitle: `T` })
+
+    const [[command, context]] = await readPrompts(promptsPath)
+    expect(command).toBe(`/outline 存款`)
+    expect(context).toContain(`[Context]`)
+  }, 20_000)
 
   it(`never treats a leading path as a command`, async () => {
     const dataDir = await makeTempDir(`md-acp-turns-plain-`)
@@ -1805,6 +1828,24 @@ describe(`probeCache versioning and pending commands`, () => {
     cache.seed({ ...cached, agentId: `announced`, commandsAnnounced: true, probedAt: tenMinutesAgo })
     expect(cache.get(`pending`)).toBeUndefined()
     expect(cache.get(`announced`)).toBeDefined()
+  })
+
+  it(`treats session-start seeds as "commands unknown" without extending pending entries`, () => {
+    const cache = new ProbeCache()
+    const unknown = { ...cached, commands: [], commandsAnnounced: false, probedAt: Date.now() }
+
+    cache.seed({ ...unknown, agentId: `fresh` })
+    expect(cache.get(`fresh`)?.commandsAnnounced).toBe(false)
+
+    const tenMinutesAgo = Date.now() - 10 * 60 * 1000
+    cache.seed({ ...cached, agentId: `stale-pending`, commandsAnnounced: false, probedAt: tenMinutesAgo })
+    cache.seed({ ...unknown, agentId: `stale-pending` })
+    expect(cache.get(`stale-pending`)).toBeUndefined()
+
+    cache.seed({ ...cached, agentId: `known`, commandsAnnounced: true })
+    cache.seed({ ...unknown, agentId: `known` })
+    expect(cache.get(`known`)?.commands).toEqual(cached.commands)
+    expect(cache.get(`known`)?.commandsAnnounced).toBe(true)
   })
 })
 

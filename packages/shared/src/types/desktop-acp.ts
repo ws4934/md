@@ -80,7 +80,7 @@ export interface AcpProbeResult {
   modes: AcpModeInfo[]
   currentModeId: string | null
   commands: AcpSlashCommand[]
-  /** `false` when the probe gave up waiting for `available_commands_update`; such results are retried sooner. */
+  /** `false` when the command list may be incomplete (no announcement before the probe gave up, or skills failed to install); retried sooner. */
   commandsAnnounced?: boolean
   probedAt: number
   error?: string

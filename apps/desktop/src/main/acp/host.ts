@@ -82,16 +82,20 @@ export interface AcpHostOptions {
  */
 const SKILL_DIRS = [`.claude/skills`, `.agents/skills`, `.qwen/skills`]
 
-/** Copies the bundled skills where agent CLIs discover them; skills are optional, so failures only warn. */
-async function installBundledSkills(dir: string, skillsDir: string | undefined): Promise<void> {
+/**
+ * Copies the bundled skills where agent CLIs discover them. Skills are optional, so failures only warn;
+ * returns whether every copy succeeded.
+ */
+async function installBundledSkills(dir: string, skillsDir: string | undefined): Promise<boolean> {
   if (!skillsDir)
-    return
-  try {
-    await Promise.all(SKILL_DIRS.map(target => fs.cp(skillsDir, path.join(dir, target), { recursive: true })))
-  }
-  catch (error) {
-    console.warn(`[acp] failed to install bundled skills:`, error)
-  }
+    return true
+  const results = await Promise.allSettled(SKILL_DIRS.map(target =>
+    fs.cp(skillsDir, path.join(dir, target), { recursive: true }),
+  ))
+  const failure = results.find(result => result.status === `rejected`)
+  if (failure)
+    console.warn(`[acp] failed to install bundled skills:`, failure.reason)
+  return !failure
 }
 
 /** Codex lists skills as `$name`; other agents list slash commands as bare names typed with `/`. */
@@ -153,14 +157,19 @@ export function buildPromptText(
 /**
  * Agents only run a command when it starts the prompt, so command turns send the user's text as its
  * own first block and the article context as a second block (also keeps attachments out of arguments).
+ * A command may be handled locally without the model seeing the context, so only a normal turn counts
+ * as having delivered the writing rules.
  */
-function buildTurnBlocks(managed: ManagedSession, params: AcpPromptParams): ContentBlock[] {
+function buildTurn(
+  managed: ManagedSession,
+  params: AcpPromptParams,
+  commands: AcpSlashCommand[],
+): { blocks: ContentBlock[], deliversRules: boolean } {
   const includeRules = !managed.writingRulesSent
-  managed.writingRulesSent = true
   const context = buildPromptContext(params, managed.articlePath, includeRules, { imageGenEnabled: managed.imageGenEnabled })
-  if (isCommandTurn(params.text, managed.session.commands))
-    return [{ type: `text`, text: params.text }, { type: `text`, text: context }]
-  return [{ type: `text`, text: `${context}\n\n${params.text}` }]
+  if (isCommandTurn(params.text, commands))
+    return { blocks: [{ type: `text`, text: params.text }, { type: `text`, text: context }], deliversRules: false }
+  return { blocks: [{ type: `text`, text: `${context}\n\n${params.text}` }], deliversRules: includeRules }
 }
 
 export class AcpHost {
@@ -205,12 +214,17 @@ export class AcpHost {
 
   /** Each probe gets its own workspace with the same skills as sessions, so draft commands match. */
   private readonly probeWorkspace = {
-    create: async (): Promise<string> => {
+    create: async (): Promise<{ dir: string, complete: boolean }> => {
       const dir = path.join(this.workspacesRoot, `probe-${randomUUID()}`)
       this.activeWorkspaceDirs.add(dir)
-      await fs.mkdir(dir, { recursive: true })
-      await installBundledSkills(dir, this.skillsDir)
-      return dir
+      try {
+        await fs.mkdir(dir, { recursive: true })
+      }
+      catch (error) {
+        this.activeWorkspaceDirs.delete(dir)
+        throw error
+      }
+      return { dir, complete: await installBundledSkills(dir, this.skillsDir) }
     },
     dispose: async (dir: string): Promise<void> => {
       this.activeWorkspaceDirs.delete(dir)
@@ -339,13 +353,13 @@ export class AcpHost {
     const articlePath = path.join(workspaceDir, `article.md`)
 
     this.activeWorkspaceDirs.add(workspaceDir)
-    await fs.mkdir(workspaceDir, { recursive: true })
-    await fs.writeFile(articlePath, params.content, `utf8`)
 
     let mergedEnv = launch.env
     let mcpServers: McpServer[] = []
     let imageGenEnabled = false
     try {
+      await fs.mkdir(workspaceDir, { recursive: true })
+      await fs.writeFile(articlePath, params.content, `utf8`)
       imageGenEnabled = Boolean(await this.isImageGenConfigured?.())
       await installBundledSkills(workspaceDir, this.skillsDir)
       const runtimeEnv = await this.resolveAgentRuntimeEnv?.(params.agentId, {
@@ -474,6 +488,7 @@ export class AcpHost {
         modes: session.modes,
         currentModeId: session.currentModeId,
         commands: [],
+        commandsAnnounced: false,
         probedAt: Date.now(),
       })
     }
@@ -587,10 +602,17 @@ export class AcpHost {
     await fs.writeFile(managed.articlePath, params.content, `utf8`)
     managed.lastSyncedContent = params.content
 
-    const blocks = buildTurnBlocks(managed, params)
+    // Until the session announces its own commands, the probe's list (what the draft menu offered) decides.
+    const commands = managed.session.commandsUpdatedAt !== null
+      ? managed.session.commands
+      : (this.probeCache.get(managed.session.agentId)?.commands ?? [])
+    const { blocks, deliversRules } = buildTurn(managed, params, commands)
 
     try {
-      return await managed.session.prompt(blocks)
+      const result = await managed.session.prompt(blocks)
+      if (deliversRules)
+        managed.writingRulesSent = true
+      return result
     }
     finally {
       // Read the article file back once more at turn end in case edits bypassed a tool_call update.

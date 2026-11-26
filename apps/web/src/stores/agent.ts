@@ -837,14 +837,35 @@ export const useAgentStore = defineStore(`agent`, () => {
     probeByAgent.value = next
   }
 
+  // `commandsAnnounced: false` is a timed-out probe; ask again and let the main-process TTL decide whether to re-probe.
+  function needsProbe(agentId: string): boolean {
+    const cached = probeByAgent.value[agentId]
+    return !cached || Boolean(cached.error) || cached.commandsAnnounced === false
+  }
+
+  // UI entry points (menu open, `/`, session switch) may fire together; non-forced callers share the in-flight request.
+  const pendingProbes = new Map<string, Promise<AcpProbeResult | null>>()
+
   async function probeAgent(agentId: string, force = false): Promise<AcpProbeResult | null> {
+    if (!force && !needsProbe(agentId))
+      return probeByAgent.value[agentId]
+    const pending = force ? undefined : pendingProbes.get(agentId)
+    if (pending)
+      return pending
+    const request = requestProbe(agentId, force)
+    pendingProbes.set(agentId, request)
+    try {
+      return await request
+    }
+    finally {
+      if (pendingProbes.get(agentId) === request)
+        pendingProbes.delete(agentId)
+    }
+  }
+
+  async function requestProbe(agentId: string, force: boolean): Promise<AcpProbeResult | null> {
     if (!window.mdDesktop?.acp)
       return null
-    const cached = probeByAgent.value[agentId]
-    // `commandsAnnounced: false` is a timed-out probe; ask again and let the main-process TTL decide whether to re-probe.
-    if (!force && cached && !cached.error && cached.commandsAnnounced !== false)
-      return cached
-
     probingAgents.value = { ...probingAgents.value, [agentId]: true }
     try {
       const result = await window.mdDesktop.acp.probeAgent(agentId, { force })
@@ -1215,9 +1236,9 @@ export const useAgentStore = defineStore(`agent`, () => {
       selectedModelByAgent.value[target.agentId] = target.modelId
     if (target.thinkingLevel)
       selectedThinkingLevelByAgent.value[target.agentId] = target.thinkingLevel
-    // Historical sessions may name an agent not yet probed this run; its draft needs the probe (`/` commands).
+    // Historical sessions may name an agent not yet (fully) probed this run; its draft needs the probe (`/` commands).
     const agent = selectedAgent.value
-    if (agent?.installed && !probeByAgent.value[agent.id] && !probingAgents.value[agent.id])
+    if (agent?.installed && needsProbe(agent.id))
       void probeAgent(agent.id)
   }
 
@@ -1497,6 +1518,7 @@ export const useAgentStore = defineStore(`agent`, () => {
     refreshAgentsList,
     detectAgents,
     invalidateProbe,
+    needsProbe,
     probeAgent,
     selectAgentAndModel,
     setSessionThinkingLevel,
