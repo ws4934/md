@@ -7,6 +7,7 @@ import type {
   DesktopBridge,
   DesktopImageGenConfigUpdate,
   DesktopListRemoteModelsParams,
+  DesktopMarketplaceListParams,
   DesktopModelApiConfigUpdate,
   DesktopTestImageGenParams,
   DesktopUpdateState,
@@ -103,6 +104,14 @@ const desktopBridge: DesktopBridge = {
         ipcRenderer.removeListener(IPC_CHANNELS.UPDATES_STATE, handler)
       }
     },
+  },
+  marketplace: {
+    listThemes: (params?: DesktopMarketplaceListParams) =>
+      ipcRenderer.invoke(IPC_CHANNELS.MARKETPLACE_LIST_THEMES, params),
+    getItem: (id: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.MARKETPLACE_GET_ITEM, id),
+    installItem: (id: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.MARKETPLACE_INSTALL_ITEM, id),
   },
 }
 

@@ -1,5 +1,6 @@
 import type { DesktopAiApi } from './desktop-ai'
 import type { DesktopPickedImage, DesktopWeChatApi } from './desktop-wechat'
+import type { MarketplaceItemDetail, MarketplaceListResponse, MarketplaceSort } from './marketplace'
 
 export interface AcpAgentAvatar {
   letter: string
@@ -292,6 +293,19 @@ export interface DesktopUpdatesApi {
   onState: (listener: (state: DesktopUpdateState) => void) => () => void
 }
 
+export interface DesktopMarketplaceListParams {
+  q?: string
+  sort?: MarketplaceSort
+  page?: number
+  pageSize?: number
+}
+
+export interface DesktopMarketplaceApi {
+  listThemes: (params?: DesktopMarketplaceListParams) => Promise<MarketplaceListResponse>
+  getItem: (id: string) => Promise<MarketplaceItemDetail>
+  installItem: (id: string) => Promise<MarketplaceItemDetail>
+}
+
 export interface DesktopBridge {
   isDesktop: true
   platform: string
@@ -299,6 +313,7 @@ export interface DesktopBridge {
   ai: DesktopAiApi
   wechat: DesktopWeChatApi
   updates: DesktopUpdatesApi
+  marketplace: DesktopMarketplaceApi
   pickFiles: () => Promise<DesktopPickedFile[]>
   pickImage: () => Promise<DesktopPickedImage | null>
   openExternal: (url: string) => Promise<void>

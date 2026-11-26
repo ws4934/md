@@ -42,6 +42,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { DEFAULT_LOCALE, isAppLocale } from '@/i18n/constants'
 import { requiredString, toTypedSchema } from '@/lib/form-schema'
+import { isAccountUiEnabled } from '@/services/account/config'
 import { isMarketplaceUiEnabled } from '@/services/marketplace/client'
 import { useAuthStore } from '@/stores/auth'
 import { useConfirmStore } from '@/stores/confirm'
@@ -83,6 +84,8 @@ const {
 const { isLoggedIn } = storeToRefs(authStore)
 
 const showUi = isMarketplaceUiEnabled()
+// Publishing and account-scoped views require GitHub OAuth sign-in, which is disabled on desktop.
+const canPublish = isAccountUiEnabled()
 const searchQuery = ref(``)
 const sort = ref<MarketplaceSort>(`newest`)
 const selectedId = ref<string | null>(null)
@@ -123,8 +126,11 @@ const dialogOpen = computed({
 const itemType = computed<MarketplaceItemType>(() => `theme`)
 
 watch(isShowMarketplaceDialog, (open) => {
-  if (open)
+  if (open) {
     marketplaceDialogTab.value = `theme`
+    if (!canPublish && marketplaceDialogView.value !== `discover` && marketplaceDialogView.value !== `installed`)
+      marketplaceDialogView.value = `discover`
+  }
 })
 
 watch(marketplaceDialogTab, (tab) => {
@@ -515,6 +521,7 @@ watch(
               {{ t('marketplace.viewInstalled') }}
             </Button>
             <Button
+              v-if="canPublish"
               size="sm"
               variant="ghost"
               class="h-8 shrink-0 px-2.5 text-xs"
@@ -524,7 +531,7 @@ watch(
               {{ t('marketplace.viewMine') }}
             </Button>
             <Button
-              v-if="isAdmin"
+              v-if="canPublish && isAdmin"
               size="sm"
               variant="ghost"
               class="h-8 shrink-0 gap-1 px-2.5 text-xs"
@@ -537,7 +544,7 @@ watch(
           </div>
         </div>
 
-        <Button size="sm" class="h-8 shrink-0 gap-1 px-2.5 sm:px-3" @click="goPublish">
+        <Button v-if="canPublish" size="sm" class="h-8 shrink-0 gap-1 px-2.5 sm:px-3" @click="goPublish">
           <Plus class="size-3.5" />
           {{ t('marketplace.publish') }}
         </Button>

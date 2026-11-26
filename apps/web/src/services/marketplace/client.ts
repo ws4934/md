@@ -12,8 +12,12 @@ import { t } from '@/i18n/translate'
 import { ApiError, MdApiClient } from '@/services/account/client'
 import { isAccountConfigured } from '@/services/account/config'
 
+export function hasDesktopMarketplaceBridge(): boolean {
+  return typeof window !== `undefined` && Boolean(window.mdDesktop?.marketplace)
+}
+
 export function isMarketplaceConfigured(): boolean {
-  return isAccountConfigured()
+  return isAccountConfigured() || hasDesktopMarketplaceBridge()
 }
 
 export function isMarketplaceUiEnabled(): boolean {
@@ -93,6 +97,8 @@ function toQuery(params: MarketplaceListParams = {}): string {
 
 export class MarketplaceClient extends MdApiClient {
   listThemes(params?: MarketplaceListParams): Promise<MarketplaceListResponse> {
+    if (!isAccountConfigured() && window.mdDesktop?.marketplace)
+      return window.mdDesktop.marketplace.listThemes(params)
     return this.request<MarketplaceListResponse>(`GET`, `/marketplace/themes${toQuery(params)}`)
   }
 
@@ -101,10 +107,14 @@ export class MarketplaceClient extends MdApiClient {
   }
 
   get(id: string): Promise<MarketplaceItemDetail> {
+    if (!isAccountConfigured() && window.mdDesktop?.marketplace)
+      return window.mdDesktop.marketplace.getItem(id)
     return this.request<MarketplaceItemDetail>(`GET`, `/marketplace/${id}`)
   }
 
   install(id: string): Promise<MarketplaceItemDetail> {
+    if (!isAccountConfigured() && window.mdDesktop?.marketplace)
+      return window.mdDesktop.marketplace.installItem(id)
     return this.request<MarketplaceItemDetail>(`POST`, `/marketplace/${id}/install`)
   }
 

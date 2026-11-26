@@ -34,4 +34,7 @@ export const IPC_CHANNELS = {
   UPDATES_CHECK: `md:updates:check`,
   UPDATES_INSTALL: `md:updates:install`,
   UPDATES_STATE: `md:updates:state`,
+  MARKETPLACE_LIST_THEMES: `md:marketplace:list-themes`,
+  MARKETPLACE_GET_ITEM: `md:marketplace:get-item`,
+  MARKETPLACE_INSTALL_ITEM: `md:marketplace:install-item`,
 } as const

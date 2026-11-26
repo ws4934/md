@@ -41,6 +41,7 @@ import {
   resolveUpdateMode,
   UPDATE_COPY,
 } from './auto-update'
+import { createDesktopMarketplaceClient } from './marketplace'
 import { QuitGuard } from './quit-guard'
 import { mimeForExtension, WeChatPublisher } from './wechat/publisher'
 
@@ -368,6 +369,13 @@ function registerIpc(host: AcpHost, publisher: WeChatPublisher, configStore: AiC
       return
     quitAndInstallThroughGuard()
   })
+
+  const marketplaceClient = createDesktopMarketplaceClient({
+    apiUrl: process.env.MD_MARKETPLACE_API_URL,
+  })
+  ipcMain.handle(IPC_CHANNELS.MARKETPLACE_LIST_THEMES, (_event, params) => marketplaceClient.listThemes(params))
+  ipcMain.handle(IPC_CHANNELS.MARKETPLACE_GET_ITEM, (_event, id) => marketplaceClient.getItem(id))
+  ipcMain.handle(IPC_CHANNELS.MARKETPLACE_INSTALL_ITEM, (_event, id) => marketplaceClient.installItem(id))
 }
 
 function updateCopy() {
