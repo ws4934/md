@@ -50,6 +50,7 @@
     "build:main": "tsx scripts/build.ts",
     "build": "pnpm --filter @md/web run build:desktop && pnpm run build:main",
     "dist": "pnpm run build && electron-builder --publish never",
+    "dist:dir": "pnpm run build && electron-builder --dir --publish never",
     "start": "electron .",
     "type-check": "tsc --noEmit",
     "test": "vitest run",

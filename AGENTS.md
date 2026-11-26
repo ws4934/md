@@ -73,9 +73,12 @@ pnpm vscode package   # vsce 打包
 ```bash
 pnpm desktop dev      # 构建主进程并启动 Vite + Electron 开发模式
 pnpm desktop build    # 构建渲染进程（web desktop 模式）与主进程 bundle
+pnpm desktop dist:dir # build 后生成免安装的应用目录（如 apps/desktop/release/mac-arm64/md.app），本机试跑用
 pnpm desktop dist     # build 后用 electron-builder 打当前平台的安装包到 apps/desktop/release
 pnpm desktop test     # vitest
 ```
+
+根目录的 `pnpm build:desktop`、`pnpm build:desktop:dist`、`pnpm build:desktop:release` 分别对应 `build`、`dist:dir`、`dist`。
 
 - 主进程、preload 和内置 agent 全部由 esbuild 打成单文件，运行时依赖都放在 `devDependencies`，安装包里不带 `node_modules`
 - 发版：更新 `apps/desktop/package.json` 的 `version`，推送 `desktop-v<version>` tag，由 `.github/workflows/release-desktop.yml` 构建 macOS（arm64/x64）、Windows、Linux（AppImage）并发布 `desktop-v<version>` release；带 `-` 的预发布 tag 不更新正式更新源
