@@ -1,4 +1,4 @@
-import type { AcpProbeResult } from '@md/shared/types'
+import type { AcpProbeResult, AcpSlashCommand } from '@md/shared/types'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -9,12 +9,15 @@ import { AcpSession } from './session'
 const COMMAND_QUIET_WINDOW_MS = 600
 const COMMAND_POLL_MS = 25
 const MAX_COMMAND_WAIT_MS = 1_500
+// Agents may announce commands well after `session/new`; wait this many quiet windows for the first batch.
+const FIRST_COMMANDS_WAIT_FACTOR = 5
 const DEFAULT_PROBE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 // Bump when cached probe metadata changes shape so stale ungrouped entries refresh automatically.
 const PROBE_CACHE_SCHEMA_VERSION = 2
 
 interface PersistedProbeCache {
   schemaVersion: number
+  appVersion?: string
   entries: Record<string, AcpProbeResult>
 }
 
@@ -34,16 +37,22 @@ export interface ProbeAgentOptions {
 async function waitForAvailableCommands(
   session: AcpSession,
   quietMs: number,
-  maxWaitMs: number,
+  firstWaitMs: number,
+  settleMaxMs: number,
 ): Promise<void> {
+  const sleep = () => new Promise(resolve => setTimeout(resolve, COMMAND_POLL_MS))
   const startedAt = Date.now()
-  while (Date.now() - startedAt < maxWaitMs) {
-    const updatedAt = session.commandsUpdatedAt
-    if (updatedAt !== null && Date.now() - updatedAt >= quietMs)
+  while (session.commandsUpdatedAt === null) {
+    if (Date.now() - startedAt >= firstWaitMs)
       return
-    if (updatedAt === null && Date.now() - startedAt >= quietMs)
+    await sleep()
+  }
+  // Commands may arrive in several batches; settle once the stream goes quiet.
+  const settleStartedAt = Date.now()
+  while (Date.now() - settleStartedAt < settleMaxMs) {
+    if (Date.now() - (session.commandsUpdatedAt ?? 0) >= quietMs)
       return
-    await new Promise(resolve => setTimeout(resolve, COMMAND_POLL_MS))
+    await sleep()
   }
 }
 
@@ -73,7 +82,7 @@ export async function probeAcpAgent(options: ProbeAgentOptions): Promise<AcpProb
 
   try {
     await session.initializeNewSession()
-    await waitForAvailableCommands(session, quietMs, Math.max(quietMs * 2, MAX_COMMAND_WAIT_MS))
+    await waitForAvailableCommands(session, quietMs, quietMs * FIRST_COMMANDS_WAIT_FACTOR, Math.max(quietMs * 2, MAX_COMMAND_WAIT_MS))
 
     return {
       agentId: options.agentId,
@@ -95,11 +104,14 @@ export async function probeAcpAgent(options: ProbeAgentOptions): Promise<AcpProb
 export interface ProbeCacheOptions {
   cachePath?: string
   ttlMs?: number
+  /** Persisted entries from another app version are dropped (agents, adapters and bundled skills may differ). */
+  appVersion?: string
 }
 
 export class ProbeCache {
   private readonly cachePath?: string
   private readonly ttlMs: number
+  private readonly appVersion?: string
   private cache = new Map<string, AcpProbeResult>()
   private inFlight = new Map<string, Promise<AcpProbeResult>>()
   private loaded = false
@@ -109,6 +121,7 @@ export class ProbeCache {
   constructor(options: ProbeCacheOptions = {}) {
     this.cachePath = options.cachePath
     this.ttlMs = options.ttlMs ?? DEFAULT_PROBE_CACHE_TTL_MS
+    this.appVersion = options.appVersion
   }
 
   private isFresh(entry: AcpProbeResult | undefined): entry is AcpProbeResult {
@@ -130,6 +143,7 @@ export class ProbeCache {
           parsed
           && typeof parsed === `object`
           && parsed.schemaVersion === PROBE_CACHE_SCHEMA_VERSION
+          && parsed.appVersion === this.appVersion
           && parsed.entries
           && typeof parsed.entries === `object`
         ) {
@@ -161,6 +175,7 @@ export class ProbeCache {
       }
       const payload: PersistedProbeCache = {
         schemaVersion: PROBE_CACHE_SCHEMA_VERSION,
+        appVersion: this.appVersion,
         entries,
       }
       await fs.mkdir(path.dirname(targetPath), { recursive: true })
@@ -201,6 +216,15 @@ export class ProbeCache {
       probedAt: result.probedAt || Date.now(),
     }
     this.cache.set(result.agentId, merged)
+    this.schedulePersist()
+  }
+
+  /** Refreshes the commands of an existing entry from a live session's announcement. */
+  updateCommands(agentId: string, commands: AcpSlashCommand[]): void {
+    const existing = this.cache.get(agentId)
+    if (!existing || existing.error)
+      return
+    this.cache.set(agentId, { ...existing, commands })
     this.schedulePersist()
   }
 

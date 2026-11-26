@@ -166,6 +166,9 @@ export const useAgentStore = defineStore(`agent`, () => {
   const sessions = ref<AgentConversationSession[]>([])
   const activeSessionId = ref<string | null>(null)
   const runningAcpSessions = ref<Record<string, boolean>>({})
+  // Keyed by ACP session id so announcements arriving before `startSession` resolves are kept.
+  // Presence means the agent announced; an empty list is authoritative (no probe fallback).
+  const announcedCommandsBySession = ref<Record<string, AcpSlashCommand[]>>({})
 
   let initialized = false
   let unsubscribeEvents: (() => void) | null = null
@@ -299,6 +302,9 @@ export const useAgentStore = defineStore(`agent`, () => {
   const customExtraModes = computed<AcpModeInfo[]>(() => getCustomExtraModes(availableModes.value))
 
   const availableCommands = computed<AcpSlashCommand[]>(() => {
+    const acpId = activeSession.value?.acpSessionId
+    if (acpId && acpId in announcedCommandsBySession.value)
+      return announcedCommandsBySession.value[acpId]
     const agent = selectedAgent.value
     if (!agent)
       return []
@@ -702,10 +708,7 @@ export const useAgentStore = defineStore(`agent`, () => {
         break
       }
       case `commands_updated`: {
-        const session = findSessionByAcpId(event.sessionId)
-        const probe = session ? probeByAgent.value[session.agentId] : undefined
-        if (probe)
-          probeByAgent.value = { ...probeByAgent.value, [probe.agentId]: { ...probe, commands: event.commands } }
+        announcedCommandsBySession.value = { ...announcedCommandsBySession.value, [event.sessionId]: event.commands }
         break
       }
       case `model_changed`: {
@@ -760,6 +763,9 @@ export const useAgentStore = defineStore(`agent`, () => {
         const nextRunning = { ...runningAcpSessions.value }
         delete nextRunning[event.sessionId]
         runningAcpSessions.value = nextRunning
+        const nextCommands = { ...announcedCommandsBySession.value }
+        delete nextCommands[event.sessionId]
+        announcedCommandsBySession.value = nextCommands
         const session = findSessionByAcpId(event.sessionId)
         if (session) {
           session.acpSessionId = null
@@ -1204,6 +1210,10 @@ export const useAgentStore = defineStore(`agent`, () => {
       selectedModelByAgent.value[target.agentId] = target.modelId
     if (target.thinkingLevel)
       selectedThinkingLevelByAgent.value[target.agentId] = target.thinkingLevel
+    // Historical sessions may name an agent not yet probed this run; its draft needs the probe (`/` commands).
+    const agent = selectedAgent.value
+    if (agent?.installed && !probeByAgent.value[agent.id] && !probingAgents.value[agent.id])
+      void probeAgent(agent.id)
   }
 
   async function deleteSession(id: string): Promise<void> {
@@ -1281,6 +1291,9 @@ export const useAgentStore = defineStore(`agent`, () => {
         session.thinkingOptions = started.thinkingOptions
         session.permissionLevel = started.permissionLevel
         session.modeId = started.currentModeId
+        // `[]` may mean "not announced yet"; an event that already arrived is at least as fresh.
+        if (started.commands.length > 0 && !(started.sessionId in announcedCommandsBySession.value))
+          announcedCommandsBySession.value = { ...announcedCommandsBySession.value, [started.sessionId]: started.commands }
         if (started.models.length > 0 || started.modes.length > 0 || started.thinkingOptions.length > 0) {
           const prevProbe = probeByAgent.value[agent.id]
           const nextModels = started.models.length > 0 ? started.models : (prevProbe?.models ?? [])

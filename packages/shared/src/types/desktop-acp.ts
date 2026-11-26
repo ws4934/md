@@ -16,6 +16,11 @@ export interface AcpAgentConfig {
   detectBinaries?: string[]
   builtin: boolean
   avatar: AcpAgentAvatar
+  /**
+   * The agent natively loads `CLAUDE.md` / `AGENTS.md` from its cwd, so the host writes article
+   * context and writing rules there and sends user prompts verbatim (keeps `/commands` working).
+   */
+  readsWorkspaceInstructions?: boolean
 }
 
 export interface AcpInstallProgress {

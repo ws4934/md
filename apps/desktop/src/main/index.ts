@@ -112,6 +112,8 @@ function buildExtraBuiltinAgents(): AcpAgentConfig[] {
       detectBinaries: [process.execPath],
       builtin: true,
       avatar: { letter: `M`, color: `#0284C7` },
+      // The API agent appends the workspace `AGENTS.md` to its system prompt.
+      readsWorkspaceInstructions: true,
     })
   }
 
@@ -337,6 +339,7 @@ app.whenReady().then(() => {
   })
   acpHost = new AcpHost({
     dataDir: userDataDir,
+    appVersion: app.getVersion(),
     skillsDir: resolveUnpackedSkillsDir(__dirname),
     extraBuiltinAgents: buildExtraBuiltinAgents(),
     resolveAgentAvailability: async (agentId) => {

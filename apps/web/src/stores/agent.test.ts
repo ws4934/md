@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { AcpHostEvent, AcpProbeResult, AcpSettings, DesktopAcpApi } from '@md/shared/types'
+import type { AcpHostEvent, AcpProbeResult, AcpSettings, AcpSlashCommand, DesktopAcpApi } from '@md/shared/types'
 import { createDefaultAcpSettings } from '@md/shared/utils/acp-permissions'
 import { createPinia, defineStore, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -281,19 +281,85 @@ describe(`useAgentStore thinking level state`, () => {
     expect(agentStore.selectedThinkingLevel).toBe(`low`)
   })
 
-  it(`refreshes available slash commands from commands_updated`, async () => {
+  it(`keeps announced slash commands per ACP session across startup races, probes, and session_closed`, async () => {
+    let probeCommands: AcpSlashCommand[] = [{ name: `probe-skill` }]
+    vi.mocked(acpMock.probeAgent).mockImplementation(async () => ({ ...createAgyProbe(), commands: probeCommands }))
+    // The host forwards `available_commands_update` before the `startSession` reply reaches the renderer,
+    // and the reply carries an older snapshot that must not replace the fresher announcement.
+    vi.mocked(acpMock.startSession).mockImplementationOnce(async () => {
+      eventListener?.({ type: `commands_updated`, sessionId: `sess-1`, commands: [{ name: `wechat-minsheng` }] })
+      return {
+        sessionId: `sess-1`,
+        modelId: `gemini-4-neon`,
+        models: [],
+        thinkingLevel: `high`,
+        thinkingOptions: [],
+        modes: [],
+        currentModeId: `default`,
+        permissionLevel: `ask`,
+        commands: [{ name: `stale-snapshot` }],
+      }
+    })
+
     const { useAgentStore } = await import(`./agent`)
     const agentStore = useAgentStore()
     await agentStore.init()
     await agentStore.probeAgent(`antigravity`)
-    await agentStore.sendPrompt(`Write outline`)
+    expect(agentStore.availableCommands.map(c => c.name)).toEqual([`probe-skill`])
 
-    eventListener?.({
-      type: `commands_updated`,
-      sessionId: `sess-1`,
-      commands: [{ name: `wechat-minsheng`, description: `Skill` }],
-    })
+    await agentStore.sendPrompt(`Write outline`)
     expect(agentStore.availableCommands.map(c => c.name)).toEqual([`wechat-minsheng`])
+
+    // A later probe of the same agent and another session's announcement leave the active list alone.
+    probeCommands = [{ name: `probe-skill-v2` }]
+    await agentStore.probeAgent(`antigravity`, true)
+    eventListener?.({ type: `commands_updated`, sessionId: `sess-other`, commands: [{ name: `other` }] })
+    expect(agentStore.availableCommands.map(c => c.name)).toEqual([`wechat-minsheng`])
+
+    // An announced empty list is authoritative while the session is active.
+    eventListener?.({ type: `commands_updated`, sessionId: `sess-1`, commands: [] })
+    expect(agentStore.availableCommands).toEqual([])
+
+    eventListener?.({ type: `session_closed`, sessionId: `sess-1` })
+    expect(agentStore.availableCommands.map(c => c.name)).toEqual([`probe-skill-v2`])
+
+    // A start reply that only carries commands (no models/modes/thinking) still seeds the session list.
+    vi.mocked(acpMock.startSession).mockResolvedValueOnce({
+      sessionId: `sess-2`,
+      modelId: null,
+      models: [],
+      thinkingLevel: null,
+      thinkingOptions: [],
+      modes: [],
+      currentModeId: null,
+      permissionLevel: `ask`,
+      commands: [{ name: `only-cmd` }],
+    })
+    await agentStore.sendPrompt(`Next`)
+    expect(agentStore.availableCommands.map(c => c.name)).toEqual([`only-cmd`])
+  })
+
+  it(`probes the agent of a historical session when switching to it`, async () => {
+    const [agy] = await acpMock.listAgents()
+    vi.mocked(acpMock.listAgents).mockResolvedValueOnce([agy, { ...agy, id: `codex`, name: `Codex`, isDefault: false }])
+
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+    await agentStore.init()
+    agentStore.sessions.push({
+      id: `old`,
+      acpSessionId: null,
+      agentId: `codex`,
+      modelId: null,
+      postId: `post-1`,
+      title: `Old`,
+      items: [],
+      updatedAt: 1,
+    })
+    vi.mocked(acpMock.probeAgent).mockClear()
+
+    await agentStore.switchSession(`old`)
+    expect(acpMock.probeAgent).toHaveBeenCalledWith(`codex`, { force: false })
   })
 
   it(`hides thinking options on Claude Haiku and restores remembered level when switching back to Sonnet`, async () => {

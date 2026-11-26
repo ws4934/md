@@ -120,7 +120,8 @@ function submit() {
 function handleKeydown(event: KeyboardEvent) {
   if (event.isComposing || event.keyCode === 229)
     return
-  if (isCommandMenuOpen.value) {
+  // Modified keys (e.g. Shift+Enter newline, Shift+Tab focus) keep their default behavior.
+  if (isCommandMenuOpen.value && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
     const count = matchedCommands.value.length
     if (event.key === `ArrowDown` || event.key === `ArrowUp`) {
       event.preventDefault()

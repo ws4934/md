@@ -13,6 +13,8 @@ const BUNDLED_SKILLS = [`wechat-minsheng`]
 const ESM_CJS_SHIM_BANNER = `import { createRequire as __mdCreateRequire } from 'node:module'; const require = __mdCreateRequire(import.meta.url);`
 
 export async function buildDesktopBundles(): Promise<void> {
+  // Rebuild from scratch so skills dropped from BUNDLED_SKILLS never ship.
+  await fs.rm(path.join(rootDir, `dist/skills`), { recursive: true, force: true })
   await Promise.all([
     ...BUNDLED_SKILLS.map(name => fs.cp(
       path.resolve(rootDir, `../../.agents/skills`, name),

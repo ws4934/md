@@ -19,6 +19,8 @@ const modelStyle = process.env.FAKE_AGENT_MODEL_STYLE || `models`
 const modesStyle = process.env.FAKE_AGENT_MODES_STYLE || `claude`
 const extraModes = process.env.FAKE_AGENT_EXTRA_MODES === `1`
 const emitCommands = process.env.FAKE_AGENT_EMIT_COMMANDS === `1`
+const commandsDelayMs = Number(process.env.FAKE_AGENT_COMMANDS_DELAY_MS || 40)
+const recordPromptsPath = process.env.FAKE_AGENT_RECORD_PROMPTS || ``
 const requirePermission = process.env.FAKE_AGENT_REQUIRE_PERMISSION === `1`
 const requireEditPermission = process.env.FAKE_AGENT_REQUIRE_EDIT_PERMISSION !== `0`
 const emitAllToolKinds = process.env.FAKE_AGENT_ALL_TOOL_KINDS === `1`
@@ -344,6 +346,8 @@ async function handlePrompt(id, params) {
     .filter(b => b.type === `text`)
     .map(b => b.text)
     .join(`\n`)
+  if (recordPromptsPath)
+    await fs.appendFile(recordPromptsPath, `${JSON.stringify(text)}\n`)
 
   if (emitAllToolKinds) {
     const kinds = [
@@ -660,7 +664,7 @@ async function handleRequest(msg) {
               ...skills.map(name => ({ name, description: `Skill` })),
             ],
           })
-        }, 40)
+        }, commandsDelayMs)
       }
       return
     }

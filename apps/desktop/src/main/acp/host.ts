@@ -46,6 +46,8 @@ interface ManagedSession {
   lastSyncedContent: string
   syncChain: Promise<void>
   writingRulesSent: boolean
+  readsWorkspaceInstructions: boolean
+  imageGenEnabled: boolean
   permissionState: {
     level: AcpPermissionLevel
     applyingHostMode: boolean
@@ -67,6 +69,8 @@ export interface AcpHostOptions {
   ) => Record<string, string> | undefined | Promise<Record<string, string> | undefined>
   resolveSessionMcpServers?: (agentId: string, workspaceDir: string) => McpServer[] | Promise<McpServer[]>
   isImageGenConfigured?: () => boolean | Promise<boolean>
+  /** App version; persisted probe results from other versions are discarded. */
+  appVersion?: string
   /** Directory of bundled `<name>/SKILL.md` skills copied into every agent workspace and the probe cwd. */
   skillsDir?: string
   onEvent?: (event: AcpHostEvent) => void
@@ -74,10 +78,15 @@ export interface AcpHostOptions {
 
 /**
  * Agent CLIs load project skills natively from their cwd: Claude Code reads `.claude/skills`,
- * Codex / OpenCode / Gemini CLI / Antigravity CLI read `.agents/skills`.
+ * Codex / OpenCode / Gemini CLI / Antigravity CLI read `.agents/skills`, older Qwen Code only `.qwen/skills`.
  */
+const SKILL_DIRS = [`.claude/skills`, `.agents/skills`, `.qwen/skills`]
+
+/** Verified over ACP: Claude Code loads `CLAUDE.md`; Codex and Antigravity CLI load `AGENTS.md`. */
+const INSTRUCTION_FILES = [`CLAUDE.md`, `AGENTS.md`]
+
 async function installBundledSkills(skillsDir: string, dir: string): Promise<void> {
-  await Promise.all([`.claude/skills`, `.agents/skills`].map(target =>
+  await Promise.all(SKILL_DIRS.map(target =>
     fs.cp(skillsDir, path.join(dir, target), { recursive: true }),
   ))
 }
@@ -91,22 +100,53 @@ const WORKSPACE_IMAGE_MIME: Record<string, string> = {
   '.webp': `image/webp`,
 }
 
+function formatAttachments(params: AcpPromptParams): string | null {
+  const attachments = params.attachments?.filter(Boolean) ?? []
+  return attachments.length > 0
+    ? `Attached reference files:\n${attachments.map(p => `- ${p}`).join(`\n`)}`
+    : null
+}
+
+function articleContextLines(postTitle: string | undefined, articlePath: string, attachmentsText?: string | null): string[] {
+  return [
+    `[Context] You are editing the open Markdown article in doocs/md.`,
+    `Article title: ${postTitle || `Untitled`}`,
+    `Article file path: ${articlePath}`,
+    ...(attachmentsText ? [attachmentsText] : []),
+    `Edit "${articlePath}" directly on disk to update the article.`,
+  ]
+}
+
+/** Article context and writing rules written to the workspace instruction files. */
+export function buildWorkspaceInstructions(
+  postTitle: string | undefined,
+  articlePath: string,
+  options?: { imageGenEnabled?: boolean },
+): string {
+  return `${articleContextLines(postTitle, articlePath).join(`\n`)}\n\n${buildArticleWritingRules(options)}\n`
+}
+
+/**
+ * Agents that load the instruction files get the user's words verbatim so `/commands` stay at the
+ * start; other agents get the context injected, except on slash-command turns, which defer the rules.
+ */
+function buildTurnText(managed: ManagedSession, params: AcpPromptParams): string {
+  if (managed.readsWorkspaceInstructions || params.text.startsWith(`/`)) {
+    const attachmentsText = formatAttachments(params)
+    return attachmentsText ? `${params.text}\n\n${attachmentsText}` : params.text
+  }
+  const includeRules = !managed.writingRulesSent
+  managed.writingRulesSent = true
+  return buildPromptText(params, managed.articlePath, includeRules, { imageGenEnabled: managed.imageGenEnabled })
+}
+
 export function buildPromptText(
   params: AcpPromptParams,
   articlePath: string,
   includeRules: boolean,
   options?: { imageGenEnabled?: boolean },
 ): string {
-  const attachments = params.attachments?.filter(Boolean) ?? []
-  const contextHeader = [
-    `[Context] You are editing the open Markdown article in doocs/md.`,
-    `Article title: ${params.postTitle || `Untitled`}`,
-    `Article file path: ${articlePath}`,
-    ...(attachments.length > 0
-      ? [`Attached reference files:\n${attachments.map(p => `- ${p}`).join(`\n`)}`]
-      : []),
-    `Edit "${articlePath}" directly on disk to update the article.`,
-  ].join(`\n`)
+  const contextHeader = articleContextLines(params.postTitle, articlePath, formatAttachments(params)).join(`\n`)
   return includeRules
     ? `${contextHeader}\n\n${buildArticleWritingRules({ imageGenEnabled: options?.imageGenEnabled })}\n\n${params.text}`
     : `${contextHeader}\n\n${params.text}`
@@ -125,17 +165,14 @@ export class AcpHost {
   private readonly resolveSessionMcpServers?: AcpHostOptions[`resolveSessionMcpServers`]
   private readonly isImageGenConfigured?: AcpHostOptions[`isImageGenConfigured`]
   private readonly skillsDir?: string
-  /** Probes run where bundled skills are visible so draft slash commands match real sessions. */
-  private readonly probeCwd: Promise<string | undefined>
+  private readonly probeDir: string
+  private probeDirReady: Promise<string> | null = null
   private readonly onEvent?: (event: AcpHostEvent) => void
 
   constructor(options: AcpHostOptions) {
     this.workspacesRoot = path.join(options.dataDir, `acp-workspaces`)
     this.skillsDir = options.skillsDir
-    const probeDir = path.join(options.dataDir, `acp-probe-workspace`)
-    this.probeCwd = options.skillsDir
-      ? installBundledSkills(options.skillsDir, probeDir).then(() => probeDir, () => undefined)
-      : Promise.resolve(undefined)
+    this.probeDir = path.join(options.dataDir, `acp-probe-workspace`)
     this.pathOverride = options.pathOverride
     this.resolveAgentAvailability = options.resolveAgentAvailability
     this.resolveDirectProbe = options.resolveDirectProbe
@@ -145,6 +182,7 @@ export class AcpHost {
     this.onEvent = options.onEvent
     this.probeCache = new ProbeCache({
       cachePath: path.join(options.dataDir, `acp-probe-cache.json`),
+      appVersion: options.appVersion,
     })
     this.registry = new AcpRegistry({
       settingsPath: path.join(options.dataDir, `acp-settings.json`),
@@ -155,6 +193,27 @@ export class AcpHost {
     })
     // Best-effort cleanup of orphaned workspace folders left by prior crashes / SIGKILLs.
     void this.sweepStaleWorkspaces()
+  }
+
+  /**
+   * Probes run in a dedicated workspace with the bundled skills so draft slash commands match
+   * real sessions. Rebuilt from scratch so removed skills never linger; retried after a failure.
+   */
+  private prepareProbeDir(): Promise<string> {
+    this.probeDirReady ??= (async () => {
+      try {
+        await fs.rm(this.probeDir, { recursive: true, force: true })
+        await fs.mkdir(this.probeDir, { recursive: true })
+        if (this.skillsDir)
+          await installBundledSkills(this.skillsDir, this.probeDir)
+      }
+      catch (error) {
+        console.warn(`[acp] failed to prepare the probe workspace:`, error)
+        this.probeDirReady = null
+      }
+      return this.probeDir
+    })()
+    return this.probeDirReady
   }
 
   private async sweepStaleWorkspaces(): Promise<void> {
@@ -260,7 +319,7 @@ export class AcpHost {
         command: launch.command,
         args: launch.args,
         env: mergedEnv,
-        cwd: await this.probeCwd,
+        cwd: await this.prepareProbeDir(),
         pathOverride: this.pathOverride,
       },
       options,
@@ -280,6 +339,9 @@ export class AcpHost {
     this.activeWorkspaceDirs.add(workspaceDir)
     await fs.mkdir(workspaceDir, { recursive: true })
     await fs.writeFile(articlePath, params.content, `utf8`)
+    const imageGenEnabled = Boolean(await this.isImageGenConfigured?.())
+    const instructions = buildWorkspaceInstructions(params.postTitle, articlePath, { imageGenEnabled })
+    await Promise.all(INSTRUCTION_FILES.map(file => fs.writeFile(path.join(workspaceDir, file), instructions, `utf8`)))
     if (this.skillsDir) {
       // Skills are optional; a broken bundle must not block the session.
       await installBundledSkills(this.skillsDir, workspaceDir)
@@ -353,6 +415,10 @@ export class AcpHost {
           return
         }
 
+        // Probes and sessions share the same skills, so live announcements keep draft commands current.
+        if (event.type === `commands_updated`)
+          this.probeCache.updateCommands(params.agentId, event.commands)
+
         if (event.type === `session_closed`) {
           const managed = this.sessions.get(event.sessionId)
           if (managed) {
@@ -395,6 +461,8 @@ export class AcpHost {
       lastSyncedContent: params.content,
       syncChain: Promise.resolve(),
       writingRulesSent: false,
+      readsWorkspaceInstructions: agentConfig?.readsWorkspaceInstructions === true,
+      imageGenEnabled,
       permissionState,
     })
 
@@ -527,16 +595,7 @@ export class AcpHost {
     await fs.writeFile(managed.articlePath, params.content, `utf8`)
     managed.lastSyncedContent = params.content
 
-    // Rules ride on the first turn only; the agent keeps them in its own conversation history.
-    const includeRules = !managed.writingRulesSent
-    managed.writingRulesSent = true
-    const imageGenEnabled = includeRules ? Boolean(await this.isImageGenConfigured?.()) : false
-    const blocks: ContentBlock[] = [
-      {
-        type: `text`,
-        text: buildPromptText(params, managed.articlePath, includeRules, { imageGenEnabled }),
-      },
-    ]
+    const blocks: ContentBlock[] = [{ type: `text`, text: buildTurnText(managed, params) }]
 
     try {
       return await managed.session.prompt(blocks)
