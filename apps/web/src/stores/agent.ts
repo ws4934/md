@@ -23,6 +23,7 @@ import {
 } from '@md/shared/utils/acp-thinking'
 import { computeCompactDiff } from '@md/shared/utils/compact-diff'
 import { uuidv4 } from '@md/shared/utils/uuid'
+import { toRaw } from 'vue'
 import { useImageUploader } from '@/composables/useImageUploader'
 import { t } from '@/i18n/translate'
 import {
@@ -81,6 +82,13 @@ const LAYOUT_WIDTHS_STORAGE_KEY = `desktop_acp_layout_widths_v1`
 const MAX_STORED_SESSIONS = 30
 const MAX_STORED_ITEMS_PER_SESSION = 200
 const MAX_LIVE_ITEMS_PER_SESSION = 400
+const MAX_ANNOUNCED_COMMAND_SESSIONS = 60
+const IPC_INVOKE_PREFIX_RE = /^Error invoking remote method '[^']+': (?:Error: )?/
+
+function extractErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error)
+  return raw.replace(IPC_INVOKE_PREFIX_RE, ``)
+}
 
 function compactDiffPayload<T extends { oldText?: string, newText?: string, unifiedDiff?: string, diffStats?: AcpToolCallItem[`diffStats`] }>(
   payload: T,
@@ -103,13 +111,63 @@ function compactDiffPayload<T extends { oldText?: string, newText?: string, unif
 }
 
 function sanitizeItemForStorage(item: AgentTimelineItem): AgentTimelineItem {
-  if (item.type === `assistant`)
-    return { ...item, streaming: false }
-  if (item.type === `tool_call`)
-    return { ...item, tool: compactDiffPayload(item.tool) }
-  if (item.type === `permission`)
-    return { ...item, request: compactDiffPayload(item.request) }
+  if (item.type === `assistant`) {
+    const thoughtDurationMs = item.thoughtStartedAt !== undefined && item.thoughtDurationMs === undefined
+      ? Math.max(0, Date.now() - item.thoughtStartedAt)
+      : item.thoughtDurationMs
+    return {
+      ...item,
+      ...(thoughtDurationMs !== undefined ? { thoughtDurationMs } : {}),
+      streaming: false,
+    }
+  }
+  if (item.type === `tool_call`) {
+    const tool = item.tool.status === `in_progress` || item.tool.status === `pending`
+      ? { ...item.tool, status: `failed` as const }
+      : item.tool
+    return { ...item, tool: compactDiffPayload(tool) }
+  }
+  if (item.type === `permission`) {
+    return {
+      ...item,
+      request: compactDiffPayload(item.request),
+      resolvedOutcome: item.resolvedOutcome ?? `cancelled`,
+    }
+  }
   return item
+}
+
+function normalizePersistedSessions(raw: unknown): AgentConversationSession[] {
+  if (!Array.isArray(raw))
+    return []
+  const normalized: AgentConversationSession[] = []
+  for (const entry of raw) {
+    if (!entry || typeof entry !== `object`)
+      continue
+    const candidate = entry as Partial<AgentConversationSession>
+    if (typeof candidate.id !== `string` || !candidate.id)
+      continue
+    const rawItems = Array.isArray(candidate.items) ? candidate.items : []
+    const items = rawItems
+      .filter((item): item is AgentTimelineItem => Boolean(item && typeof item === `object` && `type` in item && `id` in item))
+      .slice(-MAX_STORED_ITEMS_PER_SESSION)
+      .map(sanitizeItemForStorage)
+    normalized.push({
+      id: candidate.id,
+      acpSessionId: null,
+      agentId: typeof candidate.agentId === `string` && candidate.agentId ? candidate.agentId : `claude`,
+      modelId: typeof candidate.modelId === `string` ? candidate.modelId : null,
+      ...(candidate.thinkingLevel !== undefined ? { thinkingLevel: candidate.thinkingLevel } : {}),
+      ...(candidate.permissionLevel !== undefined ? { permissionLevel: candidate.permissionLevel } : {}),
+      ...(candidate.modeId !== undefined ? { modeId: candidate.modeId } : {}),
+      postId: typeof candidate.postId === `string` ? candidate.postId : ``,
+      title: typeof candidate.title === `string` && candidate.title ? candidate.title : t(`agent.panel.defaultTitle`),
+      items,
+      updatedAt: typeof candidate.updatedAt === `number` && Number.isFinite(candidate.updatedAt) ? candidate.updatedAt : 0,
+    })
+  }
+  normalized.sort((a, b) => b.updatedAt - a.updatedAt)
+  return normalized.slice(0, MAX_STORED_SESSIONS)
 }
 
 export const useAgentStore = defineStore(`agent`, () => {
@@ -175,9 +233,24 @@ export const useAgentStore = defineStore(`agent`, () => {
   const sessions = ref<AgentConversationSession[]>([])
   const activeSessionId = ref<string | null>(null)
   const runningAcpSessions = ref<Record<string, boolean>>({})
+  const startingSessionIds = ref<Record<string, boolean>>({})
+  const abortedStartSessionIds = new Set<string>()
   // Keyed by ACP session id so announcements arriving before `startSession` resolves are kept.
   // Presence means the agent announced; an empty list is authoritative (no probe fallback).
   const announcedCommandsBySession = ref<Record<string, AcpSlashCommand[]>>({})
+
+  function setSessionStarting(localSessionId: string, starting: boolean): void {
+    if (starting) {
+      if (!startingSessionIds.value[localSessionId])
+        startingSessionIds.value = { ...startingSessionIds.value, [localSessionId]: true }
+      return
+    }
+    if (localSessionId in startingSessionIds.value) {
+      const next = { ...startingSessionIds.value }
+      delete next[localSessionId]
+      startingSessionIds.value = next
+    }
+  }
 
   let initialized = false
   let unsubscribeEvents: (() => void) | null = null
@@ -189,14 +262,20 @@ export const useAgentStore = defineStore(`agent`, () => {
   })
 
   const isCurrentSessionRunning = computed(() => {
-    const acpId = activeSession.value?.acpSessionId
-    return Boolean(acpId && runningAcpSessions.value[acpId])
+    const session = activeSession.value
+    if (!session)
+      return false
+    if (startingSessionIds.value[session.id])
+      return true
+    return Boolean(session.acpSessionId && runningAcpSessions.value[session.acpSessionId])
   })
 
   const writingPostIds = computed<Set<string>>(() => {
     const ids = new Set<string>()
     for (const s of sessions.value) {
-      if (s.acpSessionId && runningAcpSessions.value[s.acpSessionId])
+      if (!s.postId)
+        continue
+      if (startingSessionIds.value[s.id] || (s.acpSessionId && runningAcpSessions.value[s.acpSessionId]))
         ids.add(s.postId)
     }
     return ids
@@ -293,12 +372,22 @@ export const useAgentStore = defineStore(`agent`, () => {
     return resolveThinkingLevelForModel(options, desired, model?.defaultThinkingLevel)
   })
 
+  const activeSessionForSelectedAgent = computed<AgentConversationSession | null>(() => {
+    const active = activeSession.value
+    if (!active)
+      return null
+    const agent = selectedAgent.value
+    if (agent && active.agentId !== agent.id)
+      return null
+    return active
+  })
+
   const currentPermissionLevel = computed<AcpPermissionLevel>(
-    () => activeSession.value?.permissionLevel ?? draftPermissionLevel.value,
+    () => activeSessionForSelectedAgent.value?.permissionLevel ?? draftPermissionLevel.value,
   )
 
   const currentModeId = computed<string | null>(
-    () => activeSession.value?.modeId ?? draftModeId.value,
+    () => activeSessionForSelectedAgent.value?.modeId ?? draftModeId.value,
   )
 
   const availableModes = computed<AcpModeInfo[]>(() => {
@@ -356,13 +445,91 @@ export const useAgentStore = defineStore(`agent`, () => {
     return t(`agent.panel.writingBadge`)
   })
 
-  async function persistSessions(): Promise<void> {
-    const serializable = sessions.value.slice(0, MAX_STORED_SESSIONS).map(({ thinkingOptions: _liveOptions, ...s }) => ({
-      ...s,
+  interface CachedSessionSnapshot {
+    updatedAt: number
+    modelId: string | null
+    thinkingLevel: string | null | undefined
+    permissionLevel: AcpPermissionLevel | undefined
+    modeId: string | null | undefined
+    title: string
+    postId: string
+    agentId: string
+    itemsLen: number
+    lastItem: AgentTimelineItem | undefined
+    snapshot: Omit<AgentConversationSession, `thinkingOptions`>
+  }
+  const persistedSessionCache = new WeakMap<object, CachedSessionSnapshot>()
+
+  function toSerializableSession(s: AgentConversationSession): Omit<AgentConversationSession, `thinkingOptions`> {
+    const raw = toRaw(s)
+    const itemsLen = s.items.length
+    const lastItem = itemsLen > 0 ? toRaw(s.items[itemsLen - 1]) : undefined
+    const cached = !s.acpSessionId ? persistedSessionCache.get(raw) : undefined
+    if (
+      cached
+      && cached.updatedAt === s.updatedAt
+      && cached.modelId === s.modelId
+      && cached.thinkingLevel === s.thinkingLevel
+      && cached.permissionLevel === s.permissionLevel
+      && cached.modeId === s.modeId
+      && cached.title === s.title
+      && cached.postId === s.postId
+      && cached.agentId === s.agentId
+      && cached.itemsLen === itemsLen
+      && cached.lastItem === lastItem
+    ) {
+      return cached.snapshot
+    }
+    const { thinkingOptions: _liveOptions, ...rest } = s
+    const snapshot: Omit<AgentConversationSession, `thinkingOptions`> = {
+      ...rest,
       acpSessionId: null,
       items: s.items.slice(-MAX_STORED_ITEMS_PER_SESSION).map(sanitizeItemForStorage),
-    }))
+    }
+    if (!s.acpSessionId) {
+      persistedSessionCache.set(raw, {
+        updatedAt: s.updatedAt,
+        modelId: s.modelId,
+        thinkingLevel: s.thinkingLevel,
+        permissionLevel: s.permissionLevel,
+        modeId: s.modeId,
+        title: s.title,
+        postId: s.postId,
+        agentId: s.agentId,
+        itemsLen,
+        lastItem,
+        snapshot,
+      })
+    }
+    return snapshot
+  }
+
+  async function persistSessions(): Promise<void> {
+    const serializable = [...sessions.value]
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, MAX_STORED_SESSIONS)
+      .map(toSerializableSession)
     await store.setJSON(SESSIONS_STORAGE_KEY, serializable)
+  }
+
+  function pruneInactiveSessions(): void {
+    if (sessions.value.length <= MAX_STORED_SESSIONS)
+      return
+    const protectedIds = new Set<string>()
+    if (activeSessionId.value)
+      protectedIds.add(activeSessionId.value)
+    for (const s of sessions.value) {
+      if (s.acpSessionId || startingSessionIds.value[s.id])
+        protectedIds.add(s.id)
+    }
+    const candidates = sessions.value
+      .filter(s => !protectedIds.has(s.id))
+      .sort((a, b) => a.updatedAt - b.updatedAt)
+    const excess = sessions.value.length - MAX_STORED_SESSIONS
+    if (excess <= 0 || candidates.length === 0)
+      return
+    const dropIds = new Set(candidates.slice(0, excess).map(s => s.id))
+    sessions.value = sessions.value.filter(s => !dropIds.has(s.id))
   }
 
   function trimLiveItems(session: AgentConversationSession): void {
@@ -424,6 +591,14 @@ export const useAgentStore = defineStore(`agent`, () => {
   const workspaceImageUploads = new Map<string, Promise<string | null>>()
   const reportedImageErrors = new Set<string>()
 
+  function clearReportedErrorsForSession(acpSessionId: string): void {
+    const prefix = `${acpSessionId}\u0000`
+    for (const key of reportedImageErrors) {
+      if (key.startsWith(prefix))
+        reportedImageErrors.delete(key)
+    }
+  }
+
   function uploadWorkspaceImage(
     acpSessionId: string,
     ref: string,
@@ -445,11 +620,12 @@ export const useAgentStore = defineStore(`agent`, () => {
         return uploadedUrl
       }
       catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
+        const message = extractErrorMessage(error)
         const errorKey = `${key}\u0000${message}`
         if (!reportedImageErrors.has(errorKey)) {
-          reportedImageErrors.add(errorKey)
           const session = targetSession ?? findSessionByAcpId(acpSessionId)
+          if (session?.acpSessionId === acpSessionId)
+            reportedImageErrors.add(errorKey)
           if (session) {
             session.items.push({
               type: `error`,
@@ -506,8 +682,9 @@ export const useAgentStore = defineStore(`agent`, () => {
     return -1
   }
 
-  // Coalesce high-frequency streaming deltas per animation frame to avoid per-token Vue updates.
-  const pendingChunks = new Map<string, { text: string, thought: string }>()
+  // Coalesce high-frequency streaming deltas per animation frame in arrival order.
+  interface PendingChunkSegment { kind: `text` | `thought`, text: string }
+  const pendingChunks = new Map<string, PendingChunkSegment[]>()
   let chunkFlushHandle = 0
 
   function finalizeAssistantThought(item: AgentTimelineItem | undefined): void {
@@ -517,47 +694,108 @@ export const useAgentStore = defineStore(`agent`, () => {
       item.thoughtDurationMs = Math.max(0, Date.now() - item.thoughtStartedAt)
   }
 
-  function applyChunkDelta(sessionId: string, textDelta: string, thoughtDelta: string): void {
-    const session = findSessionByAcpId(sessionId)
-    if (!session)
-      return
-
-    if (thoughtDelta) {
-      const last = session.items[session.items.length - 1]
-      if (last?.type === `assistant` && last.streaming) {
-        last.thoughtStartedAt ??= Date.now()
-        last.thought = (last.thought ?? ``) + thoughtDelta
+  function finalizeClosedSessionItems(session: AgentConversationSession): boolean {
+    let changed = false
+    for (let i = 0; i < session.items.length; i++) {
+      const item = session.items[i]
+      if (item.type === `assistant` && item.streaming) {
+        finalizeAssistantThought(item)
+        item.streaming = false
+        changed = true
       }
-      else {
-        const now = Date.now()
-        session.items.push({
-          type: `assistant`,
-          id: uuidv4(),
-          text: ``,
-          thought: thoughtDelta,
-          thoughtStartedAt: now,
-          streaming: true,
-          timestamp: now,
-        })
-        trimLiveItems(session)
+      else if (item.type === `permission` && !item.resolvedOutcome) {
+        item.resolvedOutcome = `cancelled`
+        changed = true
+      }
+      else if (item.type === `tool_call` && (item.tool.status === `in_progress` || item.tool.status === `pending`)) {
+        item.tool = { ...item.tool, status: `failed` }
+        changed = true
       }
     }
+    return changed
+  }
 
-    if (textDelta) {
-      const last = session.items[session.items.length - 1]
-      if (last?.type === `assistant` && last.streaming) {
-        finalizeAssistantThought(last)
-        last.text += textDelta
+  function cleanupAcpSessionRuntime(acpSessionId: string): void {
+    if (pendingChunks.delete(acpSessionId) && pendingChunks.size === 0 && chunkFlushHandle && typeof cancelAnimationFrame === `function`) {
+      cancelAnimationFrame(chunkFlushHandle)
+      chunkFlushHandle = 0
+    }
+    if (acpSessionId in runningAcpSessions.value) {
+      const nextRunning = { ...runningAcpSessions.value }
+      delete nextRunning[acpSessionId]
+      runningAcpSessions.value = nextRunning
+    }
+    if (acpSessionId in announcedCommandsBySession.value) {
+      const nextCommands = { ...announcedCommandsBySession.value }
+      delete nextCommands[acpSessionId]
+      announcedCommandsBySession.value = nextCommands
+    }
+    clearReportedErrorsForSession(acpSessionId)
+  }
+
+  function setAnnouncedCommands(acpSessionId: string, commands: AcpSlashCommand[]): void {
+    const next = { ...announcedCommandsBySession.value, [acpSessionId]: commands }
+    const keys = Object.keys(next)
+    if (keys.length > MAX_ANNOUNCED_COMMAND_SESSIONS) {
+      const activeAcpIds = new Set(sessions.value.map(s => s.acpSessionId).filter((id): id is string => Boolean(id)))
+      for (const key of keys) {
+        if (Object.keys(next).length <= MAX_ANNOUNCED_COMMAND_SESSIONS)
+          break
+        if (key !== acpSessionId && !activeAcpIds.has(key))
+          delete next[key]
+      }
+    }
+    announcedCommandsBySession.value = next
+  }
+
+  function applyChunkSegments(sessionId: string, segments: readonly PendingChunkSegment[]): void {
+    const session = findSessionByAcpId(sessionId)
+    if (!session || segments.length === 0)
+      return
+
+    for (const seg of segments) {
+      if (!seg.text)
+        continue
+      if (seg.kind === `thought`) {
+        const last = session.items[session.items.length - 1]
+        // Only merge into an active assistant item before any output text has streamed;
+        // interleaved thoughts after text start a new assistant block to preserve timeline order.
+        if (last?.type === `assistant` && last.streaming && !last.text) {
+          last.thoughtStartedAt ??= Date.now()
+          last.thought = (last.thought ?? ``) + seg.text
+        }
+        else {
+          if (last?.type === `assistant` && last.streaming)
+            last.streaming = false
+          const now = Date.now()
+          session.items.push({
+            type: `assistant`,
+            id: uuidv4(),
+            text: ``,
+            thought: seg.text,
+            thoughtStartedAt: now,
+            streaming: true,
+            timestamp: now,
+          })
+          trimLiveItems(session)
+        }
       }
       else {
-        session.items.push({
-          type: `assistant`,
-          id: uuidv4(),
-          text: textDelta,
-          streaming: true,
-          timestamp: Date.now(),
-        })
-        trimLiveItems(session)
+        const last = session.items[session.items.length - 1]
+        if (last?.type === `assistant` && last.streaming) {
+          finalizeAssistantThought(last)
+          last.text += seg.text
+        }
+        else {
+          session.items.push({
+            type: `assistant`,
+            id: uuidv4(),
+            text: seg.text,
+            streaming: true,
+            timestamp: Date.now(),
+          })
+          trimLiveItems(session)
+        }
       }
     }
 
@@ -566,11 +804,11 @@ export const useAgentStore = defineStore(`agent`, () => {
 
   function flushPendingChunks(sessionId?: string): void {
     if (sessionId) {
-      const entry = pendingChunks.get(sessionId)
-      if (!entry)
+      const segments = pendingChunks.get(sessionId)
+      if (!segments)
         return
       pendingChunks.delete(sessionId)
-      applyChunkDelta(sessionId, entry.text, entry.thought)
+      applyChunkSegments(sessionId, segments)
       if (pendingChunks.size === 0 && chunkFlushHandle && typeof cancelAnimationFrame === `function`) {
         cancelAnimationFrame(chunkFlushHandle)
         chunkFlushHandle = 0
@@ -583,14 +821,25 @@ export const useAgentStore = defineStore(`agent`, () => {
       return
     const entries = [...pendingChunks.entries()]
     pendingChunks.clear()
-    for (const [sid, entry] of entries)
-      applyChunkDelta(sid, entry.text, entry.thought)
+    for (const [sid, segments] of entries)
+      applyChunkSegments(sid, segments)
   }
 
   function queueChunk(sessionId: string, kind: `text` | `thought`, delta: string): void {
-    const entry = pendingChunks.get(sessionId) ?? { text: ``, thought: `` }
-    entry[kind] += delta
-    pendingChunks.set(sessionId, entry)
+    if (!delta)
+      return
+    let segments = pendingChunks.get(sessionId)
+    if (!segments) {
+      segments = [{ kind, text: delta }]
+      pendingChunks.set(sessionId, segments)
+    }
+    else {
+      const tail = segments[segments.length - 1]
+      if (tail.kind === kind)
+        tail.text += delta
+      else
+        segments.push({ kind, text: delta })
+    }
 
     if (typeof requestAnimationFrame !== `function`) {
       flushPendingChunks(sessionId)
@@ -643,6 +892,9 @@ export const useAgentStore = defineStore(`agent`, () => {
       }
       case `turn_started`: {
         runningAcpSessions.value = { ...runningAcpSessions.value, [event.sessionId]: true }
+        const session = findSessionByAcpId(event.sessionId)
+        if (session)
+          setSessionStarting(session.id, false)
         break
       }
       case `turn_finished`: {
@@ -651,6 +903,7 @@ export const useAgentStore = defineStore(`agent`, () => {
         runningAcpSessions.value = nextRunning
         const session = findSessionByAcpId(event.sessionId)
         if (session) {
+          setSessionStarting(session.id, false)
           const last = session.items[session.items.length - 1]
           if (last?.type === `assistant`) {
             finalizeAssistantThought(last)
@@ -667,6 +920,7 @@ export const useAgentStore = defineStore(`agent`, () => {
         runningAcpSessions.value = nextRunning
         const session = findSessionByAcpId(event.sessionId)
         if (session) {
+          setSessionStarting(session.id, false)
           const last = session.items[session.items.length - 1]
           if (last?.type === `assistant`) {
             finalizeAssistantThought(last)
@@ -678,6 +932,7 @@ export const useAgentStore = defineStore(`agent`, () => {
             message: event.message,
             timestamp: Date.now(),
           })
+          trimLiveItems(session)
           session.updatedAt = Date.now()
           void persistSessions()
         }
@@ -708,28 +963,33 @@ export const useAgentStore = defineStore(`agent`, () => {
           entries: event.entries,
           timestamp: Date.now(),
         })
+        trimLiveItems(session)
         break
       }
       case `tool_call`: {
         const session = findSessionByAcpId(event.sessionId)
         if (!session)
           return
+        const compactedTool = compactDiffPayload(event.tool)
         const existing = session.items.find(
-          item => item.type === `tool_call` && item.tool.id === event.tool.id,
+          item => item.type === `tool_call` && item.tool.id === compactedTool.id,
         )
         if (existing && existing.type === `tool_call`) {
-          existing.tool = event.tool
+          existing.tool = compactedTool
         }
         else {
           const last = session.items[session.items.length - 1]
-          if (last?.type === `assistant`)
+          if (last?.type === `assistant`) {
+            finalizeAssistantThought(last)
             last.streaming = false
+          }
           session.items.push({
             type: `tool_call`,
-            id: event.tool.id,
-            tool: event.tool,
+            id: compactedTool.id,
+            tool: compactedTool,
             timestamp: Date.now(),
           })
+          trimLiveItems(session)
         }
         break
       }
@@ -745,9 +1005,10 @@ export const useAgentStore = defineStore(`agent`, () => {
         session.items.push({
           type: `permission`,
           id: event.request.requestId,
-          request: event.request,
+          request: compactDiffPayload(event.request),
           timestamp: Date.now(),
         })
+        trimLiveItems(session)
         break
       }
       case `permission_resolved`: {
@@ -768,7 +1029,7 @@ export const useAgentStore = defineStore(`agent`, () => {
         break
       }
       case `commands_updated`: {
-        announcedCommandsBySession.value = { ...announcedCommandsBySession.value, [event.sessionId]: event.commands }
+        setAnnouncedCommands(event.sessionId, event.commands)
         break
       }
       case `model_changed`: {
@@ -820,16 +1081,17 @@ export const useAgentStore = defineStore(`agent`, () => {
         break
       }
       case `session_closed`: {
-        const nextRunning = { ...runningAcpSessions.value }
-        delete nextRunning[event.sessionId]
-        runningAcpSessions.value = nextRunning
-        const nextCommands = { ...announcedCommandsBySession.value }
-        delete nextCommands[event.sessionId]
-        announcedCommandsBySession.value = nextCommands
         const session = findSessionByAcpId(event.sessionId)
+        cleanupAcpSessionRuntime(event.sessionId)
         if (session) {
+          setSessionStarting(session.id, false)
+          const mutated = finalizeClosedSessionItems(session)
           session.acpSessionId = null
           session.thinkingOptions = undefined
+          if (mutated) {
+            session.updatedAt = Date.now()
+            void persistSessions()
+          }
         }
         break
       }
@@ -852,24 +1114,43 @@ export const useAgentStore = defineStore(`agent`, () => {
 
     unsubscribeEvents = window.mdDesktop.acp.onEvent(handleHostEvent)
 
-    const [loadedAgents, loadedSettings, savedSessions] = await Promise.all([
-      window.mdDesktop.acp.listAgents(),
-      window.mdDesktop.acp.getSettings(),
-      store.getJSON<AgentConversationSession[]>(SESSIONS_STORAGE_KEY, []),
-    ])
+    let loadedAgents: AcpAgentStatus[]
+    let loadedSettings: AcpSettings
+    let rawSavedSessions: unknown
+    try {
+      ;[loadedAgents, loadedSettings, rawSavedSessions] = await Promise.all([
+        window.mdDesktop.acp.listAgents(),
+        window.mdDesktop.acp.getSettings(),
+        store.getJSON<unknown>(SESSIONS_STORAGE_KEY, []),
+      ])
+    }
+    catch (error) {
+      initialized = false
+      unsubscribeEvents?.()
+      unsubscribeEvents = null
+      throw error
+    }
 
+    const savedSessions = normalizePersistedSessions(rawSavedSessions)
     agents.value = loadedAgents
     settings.value = loadedSettings
     draftPermissionLevel.value = loadedSettings.defaultPermissionLevel
     selectedModelByAgent.value = { ...loadedSettings.lastModelByAgent }
     selectedThinkingLevelByAgent.value = { ...(loadedSettings.lastThinkingLevelByAgent ?? {}) }
     sessions.value = savedSessions
+
+    let matched: AgentConversationSession | null = null
     if (savedSessions.length > 0) {
       const currentId = postStore.currentPostId
-      const matched = currentId ? findLatestSessionForPost(currentId) : savedSessions[0]
+      matched = currentId ? findLatestSessionForPost(currentId) : savedSessions[0]
       activeSessionId.value = matched?.id ?? null
+      if (matched?.modelId)
+        selectedModelByAgent.value[matched.agentId] = matched.modelId
+      if (matched?.thinkingLevel)
+        selectedThinkingLevelByAgent.value[matched.agentId] = matched.thinkingLevel
     }
 
+    selectedAgentId.value = matched?.agentId || loadedSettings.defaultAgentId || selectedAgentId.value
     ensureValidSelectedAgent()
 
     if (selectedAgent.value?.installed)
@@ -890,7 +1171,17 @@ export const useAgentStore = defineStore(`agent`, () => {
     ensureValidSelectedAgent()
   }
 
+  // UI entry points (menu open, `/`, session switch) may fire together; non-forced callers share in-flight requests,
+  // and `probeGeneration` prevents an older slow probe or invalidated probe from overwriting fresher state.
+  const pendingProbes = new Map<string, Promise<AcpProbeResult | null>>()
+  const pendingForcedProbes = new Map<string, Promise<AcpProbeResult | null>>()
+  const probeGeneration = new Map<string, number>()
+  const activeProbeCounts = new Map<string, number>()
+
   function invalidateProbe(agentId: string): void {
+    probeGeneration.set(agentId, (probeGeneration.get(agentId) ?? 0) + 1)
+    pendingProbes.delete(agentId)
+    pendingForcedProbes.delete(agentId)
     if (!(agentId in probeByAgent.value))
       return
     const next = { ...probeByAgent.value }
@@ -904,32 +1195,45 @@ export const useAgentStore = defineStore(`agent`, () => {
     return !cached || Boolean(cached.error) || cached.commandsAnnounced === false
   }
 
-  // UI entry points (menu open, `/`, session switch) may fire together; non-forced callers share the in-flight request.
-  const pendingProbes = new Map<string, Promise<AcpProbeResult | null>>()
-
   async function probeAgent(agentId: string, force = false): Promise<AcpProbeResult | null> {
     if (!force && !needsProbe(agentId))
       return probeByAgent.value[agentId]
-    const pending = force ? undefined : pendingProbes.get(agentId)
-    if (pending)
-      return pending
+    const existingForced = pendingForcedProbes.get(agentId)
+    if (existingForced)
+      return existingForced
+    if (!force) {
+      const pending = pendingProbes.get(agentId)
+      if (pending)
+        return pending
+    }
     const request = requestProbe(agentId, force)
     pendingProbes.set(agentId, request)
+    if (force)
+      pendingForcedProbes.set(agentId, request)
     try {
       return await request
     }
     finally {
       if (pendingProbes.get(agentId) === request)
         pendingProbes.delete(agentId)
+      if (pendingForcedProbes.get(agentId) === request)
+        pendingForcedProbes.delete(agentId)
     }
   }
 
   async function requestProbe(agentId: string, force: boolean): Promise<AcpProbeResult | null> {
     if (!window.mdDesktop?.acp)
       return null
-    probingAgents.value = { ...probingAgents.value, [agentId]: true }
+    const seq = (probeGeneration.get(agentId) ?? 0) + 1
+    probeGeneration.set(agentId, seq)
+    const count = (activeProbeCounts.get(agentId) ?? 0) + 1
+    activeProbeCounts.set(agentId, count)
+    if (!probingAgents.value[agentId])
+      probingAgents.value = { ...probingAgents.value, [agentId]: true }
     try {
       const result = await window.mdDesktop.acp.probeAgent(agentId, { force })
+      if (probeGeneration.get(agentId) !== seq)
+        return probeByAgent.value[agentId] ?? result
       probeByAgent.value = { ...probeByAgent.value, [agentId]: result }
       const existingModel = selectedModelByAgent.value[agentId]
       if (existingModel) {
@@ -952,12 +1256,34 @@ export const useAgentStore = defineStore(`agent`, () => {
       else if (result.currentModelId) {
         selectedModelByAgent.value[agentId] = result.currentModelId
       }
+      // Migrate legacy variant model IDs on stored sessions once model metadata is available.
+      if (result.models.length > 0) {
+        for (const s of sessions.value) {
+          if (s.agentId !== agentId || !s.modelId)
+            continue
+          const parsed = parseVariantModelId(s.modelId, result.models)
+          if (parsed.baseModelId && parsed.baseModelId !== s.modelId) {
+            s.modelId = parsed.baseModelId
+            if (parsed.thinkingLevel && !s.thinkingLevel)
+              s.thinkingLevel = parsed.thinkingLevel
+          }
+        }
+      }
       return result
     }
     finally {
-      const next = { ...probingAgents.value }
-      delete next[agentId]
-      probingAgents.value = next
+      const remaining = (activeProbeCounts.get(agentId) ?? 1) - 1
+      if (remaining <= 0) {
+        activeProbeCounts.delete(agentId)
+        if (agentId in probingAgents.value) {
+          const next = { ...probingAgents.value }
+          delete next[agentId]
+          probingAgents.value = next
+        }
+      }
+      else {
+        activeProbeCounts.set(agentId, remaining)
+      }
     }
   }
 
@@ -968,6 +1294,13 @@ export const useAgentStore = defineStore(`agent`, () => {
     selectedAgentId.value = agentId
 
     const session = activeSession.value
+    const isUnstartedEmptyDraft = Boolean(session && !session.acpSessionId && session.items.length === 0)
+    if (switchedAgent && isUnstartedEmptyDraft && session) {
+      session.agentId = agentId
+      session.modeId = null
+      session.modelId = null
+      session.thinkingLevel = null
+    }
     const probe = probeByAgent.value[agentId]
     const prevModelId = selectedModelByAgent.value[agentId]
     const prevThinking = selectedThinkingLevelByAgent.value[agentId]
@@ -1108,12 +1441,17 @@ export const useAgentStore = defineStore(`agent`, () => {
         session.modelId = prevSessionModel ?? null
         session.thinkingLevel = prevSessionThinking
         session.thinkingOptions = prevSessionThinkingOptions
-        toast.error(error instanceof Error ? error.message : String(error))
+        toast.error(extractErrorMessage(error))
         return
       }
     }
     else if (settingsPatch) {
       void window.mdDesktop?.acp.updateSettings(settingsPatch)
+    }
+
+    if (isUnstartedEmptyDraft && session && !modelId) {
+      session.modelId = selectedModel.value?.id ?? null
+      session.thinkingLevel = selectedThinkingLevel.value
     }
 
     if (session && session.agentId === agentId)
@@ -1185,7 +1523,7 @@ export const useAgentStore = defineStore(`agent`, () => {
 
         if (session && session.agentId === agent.id)
           session.thinkingLevel = prevSessionLevel
-        toast.error(error instanceof Error ? error.message : String(error))
+        toast.error(extractErrorMessage(error))
         return
       }
     }
@@ -1203,7 +1541,7 @@ export const useAgentStore = defineStore(`agent`, () => {
     permissionLevel?: AcpPermissionLevel
     modeId?: string | null
   }): Promise<void> {
-    const session = activeSession.value
+    const session = activeSessionForSelectedAgent.value
     const prevDraftLevel = draftPermissionLevel.value
     const prevDraftMode = draftModeId.value
     const prevSessionLevel = session?.permissionLevel
@@ -1245,7 +1583,8 @@ export const useAgentStore = defineStore(`agent`, () => {
           session.permissionLevel = prevSessionLevel
           session.modeId = prevSessionMode
         }
-        toast.error(error instanceof Error ? error.message : String(error))
+        toast.error(extractErrorMessage(error))
+        return
       }
     }
 
@@ -1270,14 +1609,27 @@ export const useAgentStore = defineStore(`agent`, () => {
     }
     sessions.value.unshift(session)
     activeSessionId.value = session.id
+    pruneInactiveSessions()
     // Return the reactive proxy: callers mutate the record later (e.g. `acpSessionId`), which the raw object would not track.
     return sessions.value[0]
   }
 
   async function startNewSession(): Promise<void> {
     const current = activeSession.value
-    if (current?.acpSessionId && window.mdDesktop?.acp)
-      await window.mdDesktop.acp.closeSession(current.acpSessionId).catch(() => undefined)
+    if (current) {
+      if (startingSessionIds.value[current.id]) {
+        abortedStartSessionIds.add(current.id)
+        setSessionStarting(current.id, false)
+      }
+      if (current.acpSessionId) {
+        const closingAcpId = current.acpSessionId
+        finalizeClosedSessionItems(current)
+        current.acpSessionId = null
+        cleanupAcpSessionRuntime(closingAcpId)
+        if (window.mdDesktop?.acp)
+          await window.mdDesktop.acp.closeSession(closingAcpId).catch(() => undefined)
+      }
+    }
     // Detach activeSession first so the new draft resolves thinkingLevel from per-agent memory.
     activeSessionId.value = null
     draftPermissionLevel.value = settings.value.defaultPermissionLevel
@@ -1293,8 +1645,15 @@ export const useAgentStore = defineStore(`agent`, () => {
     activeSessionId.value = target.id
     if (target.agentId)
       selectedAgentId.value = target.agentId
-    if (target.modelId)
-      selectedModelByAgent.value[target.agentId] = target.modelId
+    if (target.modelId) {
+      const probe = probeByAgent.value[target.agentId]
+      const parsed = parseVariantModelId(target.modelId, probe?.models ?? [])
+      const baseId = parsed.baseModelId ?? target.modelId
+      target.modelId = baseId
+      if (parsed.thinkingLevel && !target.thinkingLevel)
+        target.thinkingLevel = parsed.thinkingLevel
+      selectedModelByAgent.value[target.agentId] = baseId
+    }
     if (target.thinkingLevel)
       selectedThinkingLevelByAgent.value[target.agentId] = target.thinkingLevel
     // Historical sessions may name an agent not yet (fully) probed this run; its draft needs the probe (`/` commands).
@@ -1319,12 +1678,29 @@ export const useAgentStore = defineStore(`agent`, () => {
 
   async function deleteSession(id: string): Promise<void> {
     const target = sessions.value.find(s => s.id === id)
-    if (target?.acpSessionId && window.mdDesktop?.acp)
-      await window.mdDesktop.acp.closeSession(target.acpSessionId).catch(() => undefined)
+    if (target) {
+      if (startingSessionIds.value[target.id]) {
+        abortedStartSessionIds.add(target.id)
+        setSessionStarting(target.id, false)
+      }
+      if (target.acpSessionId) {
+        const closingAcpId = target.acpSessionId
+        target.acpSessionId = null
+        cleanupAcpSessionRuntime(closingAcpId)
+        if (window.mdDesktop?.acp)
+          await window.mdDesktop.acp.closeSession(closingAcpId).catch(() => undefined)
+      }
+    }
 
     sessions.value = sessions.value.filter(s => s.id !== id)
-    if (activeSessionId.value === id)
-      activeSessionId.value = sessions.value[0]?.id ?? null
+    if (activeSessionId.value === id) {
+      const currentPostId = postStore.currentPostId
+      const fallback = currentPostId ? findLatestSessionForPost(currentPostId) : (sessions.value[0] ?? null)
+      if (fallback)
+        await switchSession(fallback.id)
+      else
+        activeSessionId.value = null
+    }
     await persistSessions()
   }
 
@@ -1352,21 +1728,41 @@ export const useAgentStore = defineStore(`agent`, () => {
     const sessionForOtherPost = Boolean(
       session && session.items.length > 0 && session.postId && postId && session.postId !== postId,
     )
-    if (!session || sessionForOtherPost || (session.acpSessionId && session.agentId !== agent.id)) {
+    const sessionForOtherAgent = Boolean(
+      session && session.items.length > 0 && session.agentId !== agent.id,
+    )
+    if (!session || sessionForOtherPost || sessionForOtherAgent || (session.acpSessionId && session.agentId !== agent.id)) {
       if (!sessionForOtherPost && session?.acpSessionId && session.agentId !== agent.id) {
         const staleSessionId = session.acpSessionId
+        finalizeClosedSessionItems(session)
         session.acpSessionId = null
+        cleanupAcpSessionRuntime(staleSessionId)
         void window.mdDesktop.acp.closeSession(staleSessionId).catch(() => undefined)
       }
       const derivedTitle = text.length > 22 ? `${text.slice(0, 22)}…` : text
       session = createSessionRecord(derivedTitle)
     }
+    else if (startingSessionIds.value[session.id] || (session.acpSessionId && runningAcpSessions.value[session.acpSessionId])) {
+      return
+    }
     else if (session.items.length === 0) {
+      // Read agent-resolved model & thinking BEFORE mutating `session.agentId`.
+      const resolvedModelId = selectedModel.value?.id ?? null
+      const resolvedThinking = selectedThinkingLevel.value
+      const agentChangedOnDraft = session.agentId !== agent.id
       session.title = text.length > 22 ? `${text.slice(0, 22)}…` : text
       session.agentId = agent.id
       session.postId = postId
+      session.modelId = resolvedModelId
+      session.thinkingLevel = resolvedThinking
+      if (agentChangedOnDraft) {
+        session.permissionLevel = draftPermissionLevel.value
+        session.modeId = draftModeId.value
+      }
     }
 
+    const desiredModelId = selectedModel.value?.id ?? null
+    const desiredThinkingLevel = selectedThinkingLevel.value
     const plainAttachments = attachments.length > 0 ? [...attachments] : []
     session.items.push({
       type: `user`,
@@ -1375,21 +1771,32 @@ export const useAgentStore = defineStore(`agent`, () => {
       attachments: plainAttachments.length > 0 ? plainAttachments : undefined,
       timestamp: Date.now(),
     })
+    trimLiveItems(session)
     session.updatedAt = Date.now()
     void persistSessions()
+
+    abortedStartSessionIds.delete(session.id)
+    setSessionStarting(session.id, true)
 
     try {
       if (!session.acpSessionId) {
         const started = await window.mdDesktop.acp.startSession({
           agentId: agent.id,
-          modelId: selectedModel.value?.id ?? null,
-          thinkingLevel: selectedThinkingLevel.value,
+          modelId: desiredModelId,
+          thinkingLevel: desiredThinkingLevel,
           permissionLevel: session.permissionLevel ?? draftPermissionLevel.value,
           modeId: session.modeId ?? draftModeId.value,
           postId,
           postTitle,
           content,
         })
+        const wasDeletedOrAborted = abortedStartSessionIds.has(session.id) || !sessions.value.some(s => s.id === session!.id)
+        if (wasDeletedOrAborted) {
+          abortedStartSessionIds.delete(session.id)
+          cleanupAcpSessionRuntime(started.sessionId)
+          void window.mdDesktop.acp.closeSession(started.sessionId).catch(() => undefined)
+          return
+        }
         session.acpSessionId = started.sessionId
         session.modelId = started.modelId
         session.thinkingLevel = started.thinkingLevel
@@ -1398,7 +1805,7 @@ export const useAgentStore = defineStore(`agent`, () => {
         session.modeId = started.currentModeId
         // `[]` may mean "not announced yet"; an event that already arrived is at least as fresh.
         if (started.commands.length > 0 && !(started.sessionId in announcedCommandsBySession.value))
-          announcedCommandsBySession.value = { ...announcedCommandsBySession.value, [started.sessionId]: started.commands }
+          setAnnouncedCommands(started.sessionId, started.commands)
         if (started.models.length > 0 || started.modes.length > 0 || started.thinkingOptions.length > 0) {
           const prevProbe = probeByAgent.value[agent.id]
           const nextModels = started.models.length > 0 ? started.models : (prevProbe?.models ?? [])
@@ -1451,7 +1858,7 @@ export const useAgentStore = defineStore(`agent`, () => {
       })
     }
     catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = extractErrorMessage(error)
       const last = session.items[session.items.length - 1]
       if (last?.type !== `error` || last.message !== message) {
         session.items.push({
@@ -1460,13 +1867,26 @@ export const useAgentStore = defineStore(`agent`, () => {
           message,
           timestamp: Date.now(),
         })
+        trimLiveItems(session)
       }
+      session.updatedAt = Date.now()
       void persistSessions()
+    }
+    finally {
+      setSessionStarting(session.id, false)
+      abortedStartSessionIds.delete(session.id)
     }
   }
 
   async function stopTurn(): Promise<void> {
-    const acpId = activeSession.value?.acpSessionId
+    const session = activeSession.value
+    if (!session)
+      return
+    if (startingSessionIds.value[session.id]) {
+      abortedStartSessionIds.add(session.id)
+      setSessionStarting(session.id, false)
+    }
+    const acpId = session.acpSessionId
     if (!acpId || !window.mdDesktop?.acp)
       return
     await window.mdDesktop.acp.cancelTurn(acpId)
@@ -1550,6 +1970,11 @@ export const useAgentStore = defineStore(`agent`, () => {
       chunkFlushHandle = 0
     }
     pendingChunks.clear()
+    reportedImageErrors.clear()
+    abortedStartSessionIds.clear()
+    pendingProbes.clear()
+    pendingForcedProbes.clear()
+    activeProbeCounts.clear()
     unsubscribeEvents?.()
     unsubscribeEvents = null
   })

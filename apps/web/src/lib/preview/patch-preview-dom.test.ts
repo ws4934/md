@@ -145,4 +145,19 @@ describe(`patchPreviewDom`, () => {
     patchPreviewDom(output, [])
     expect(output.innerHTML).toBe(``)
   })
+
+  it(`flags unhydrated Mermaid and PlantUML placeholders for hydration`, () => {
+    const output = makeOutputEl()
+    const mermaidPending: RenderedBlock[] = [
+      { key: `m1`, html: `<div class="mermaid-diagram" data-mermaid-key="k1">Loading…</div>` },
+    ]
+    expect(patchPreviewDom(output, mermaidPending).needsHydration).toBe(true)
+
+    const plantumlPending: RenderedBlock[] = [
+      mermaidPending[0],
+      { key: `p1`, html: `<div class="plantuml-diagram" data-placeholder="u1">Loading…</div>` },
+    ]
+    expect(patchPreviewDom(output, plantumlPending).needsHydration).toBe(true)
+    resetPreviewDomState(output)
+  })
 })

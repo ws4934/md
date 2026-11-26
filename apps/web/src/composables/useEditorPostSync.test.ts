@@ -189,4 +189,36 @@ describe(`useEditorPostSync`, () => {
     vi.advanceTimersByTime(500)
     expect(posts.value[0].content).toBe(`Synced from agent`)
   })
+
+  it(`marks delayed post hydration as isPostSwitch when target post arrives after currentPostId changes`, async () => {
+    const posts = ref<Post[]>([
+      makePost(`post-a`, `Post A`, `Same Body`),
+    ])
+    const currentPostId = ref(`post-a`)
+    const currentPost = computed(() => posts.value.find(p => p.id === currentPostId.value))
+
+    let editorDoc = `Same Body`
+    const switchFlags: boolean[] = []
+    const sync = useEditorPostSync({
+      currentPostId,
+      currentPost,
+      getPostById: id => posts.value.find(p => p.id === id),
+      hasEditor: () => true,
+      getEditorContent: () => editorDoc,
+      applyContentToEditor: (content, opts) => {
+        editorDoc = content
+        switchFlags.push(opts.isPostSwitch)
+      },
+    })
+    sync.bindLoadedPost(`post-a`)
+
+    // Switch to post-b before post-b exists in `posts` (e.g. async sync hydration).
+    currentPostId.value = `post-b`
+    await nextTick()
+    expect(switchFlags).toEqual([])
+
+    posts.value.push(makePost(`post-b`, `Post B`, `Same Body`))
+    await nextTick()
+    expect(switchFlags).toEqual([true])
+  })
 })

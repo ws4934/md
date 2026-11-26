@@ -6,6 +6,9 @@ import { store } from '@/storage'
 
 const STORAGE_KEY = `uploaded_image_map`
 
+// Serialize read-modify-write updates so concurrent Promise.all uploads never drop sibling cache entries.
+let storageMapWriteChain: Promise<void> = Promise.resolve()
+
 export function imageUploadCacheKey(host: string, hash: string): string {
   return `${host}:${hash}`
 }
@@ -13,15 +16,21 @@ export function imageUploadCacheKey(host: string, hash: string): string {
 export function useImageUploader() {
   const isUploading = ref(false)
   const error = ref<string | null>(null)
+  let activeUploads = 0
 
   const getStorageMap = async (): Promise<Record<string, string>> => {
+    await storageMapWriteChain
     return (await store.getJSON<Record<string, string>>(STORAGE_KEY, {})) ?? {}
   }
 
-  const updateStorageMap = async (hash: string, url: string) => {
-    const map = await getStorageMap()
-    map[hash] = url
-    await store.setJSON(STORAGE_KEY, map)
+  const updateStorageMap = (hash: string, url: string): Promise<void> => {
+    const next = storageMapWriteChain.then(async () => {
+      const map = (await store.getJSON<Record<string, string>>(STORAGE_KEY, {})) ?? {}
+      map[hash] = url
+      await store.setJSON(STORAGE_KEY, map)
+    })
+    storageMapWriteChain = next.catch(() => undefined)
+    return next
   }
 
   // SHA-256 for Blob/File via Web Crypto (replaces spark-md5)
@@ -70,6 +79,7 @@ export function useImageUploader() {
   }
 
   const upload = async (resource: string | File): Promise<string> => {
+    activeUploads++
     isUploading.value = true
     error.value = null
 
@@ -106,7 +116,9 @@ export function useImageUploader() {
       throw new Error(msg)
     }
     finally {
-      isUploading.value = false
+      activeUploads = Math.max(0, activeUploads - 1)
+      if (activeUploads === 0)
+        isUploading.value = false
     }
   }
 

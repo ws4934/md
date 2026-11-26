@@ -17,7 +17,7 @@ export async function captureShareSnapshot(): Promise<{ bodyHtml: string, styles
 
   if (rerenderForLight || renderStore.isDirty || !renderStore.output) {
     themeStore.updateCodeTheme()
-    renderStore.render(content, { themeMode: shareThemeMode })
+    renderStore.render(content, { themeMode: shareThemeMode, force: rerenderForLight })
   }
 
   const ready = await waitForPreviewReady(undefined, { themeMode: shareThemeMode })
@@ -37,7 +37,11 @@ export async function captureShareSnapshot(): Promise<{ bodyHtml: string, styles
     }
   }
   finally {
-    if (rerenderForLight)
-      renderStore.render(content, { themeMode: `dark` })
+    if (rerenderForLight) {
+      if (uiStore.viewMode === `edit`)
+        renderStore.markDirty()
+      else
+        renderStore.render(content, { themeMode: `dark`, force: true })
+    }
   }
 }

@@ -25,4 +25,25 @@ describe(`workspace images`, () => {
     expect(out).toContain(`![sp](https://cdn/m.png)`)
     expect(out).toContain(`![s1](images/s1.png)`)
   })
+
+  it(`ignores image examples inside fenced code blocks and wraps replacement URLs containing spaces or parens`, () => {
+    const withCode = [
+      `![\`inline\`](images/real.png)`,
+      `\`\`\`markdown`,
+      `![example](images/real.png)`,
+      `![missing](images/example-only.png)`,
+      `\`\`\``,
+      `~~~md`,
+      `![tilde](images/tilde-only.png)`,
+      `~~~`,
+    ].join(`\n`)
+
+    expect(findLocalImageRefs(withCode)).toEqual([`images/real.png`])
+
+    const replaced = replaceImageRefs(withCode, new Map([
+      [`images/real.png`, `https://cdn.example/real (1).png`],
+    ]))
+    expect(replaced).toContain(`![\`inline\`](<https://cdn.example/real (1).png>)`)
+    expect(replaced).toContain(`![example](images/real.png)`)
+  })
 })

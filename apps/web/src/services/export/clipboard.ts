@@ -54,15 +54,17 @@ function getJuiceWorker(): Worker | null {
       else
         pending.resolve(html ?? ``)
     })
-    worker.addEventListener(`error`, (event) => {
+    const failAllWorkerJobs = (reason: string) => {
       juiceWorker = null
       juiceWorkerUnavailable = true
-      const err = new Error(event.message || `Juice worker failed`)
+      const err = new Error(reason)
       for (const pending of pendingJuiceJobs.values())
         pending.reject(err)
       pendingJuiceJobs.clear()
       worker.terminate()
-    })
+    }
+    worker.addEventListener(`error`, event => failAllWorkerJobs(event.message || `Juice worker failed`))
+    worker.addEventListener(`messageerror`, () => failAllWorkerJobs(`Juice worker message deserialization failed`))
     juiceWorker = worker
     return worker
   }

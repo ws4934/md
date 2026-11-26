@@ -1,6 +1,7 @@
 import type { AcpToolCallItem } from '@md/shared/types'
 import type { AgentTimelineItem } from '@/stores/agent'
 import { formatShortFilePath } from '@md/shared/utils/compact-diff'
+import { toRaw } from 'vue'
 
 export type ToolCallTimelineItem = Extract<AgentTimelineItem, { type: `tool_call` }>
 export type ErrorTimelineItem = Extract<AgentTimelineItem, { type: `error` }>
@@ -68,7 +69,7 @@ const SKILLS_PREFIX_RE = /(?:^|[/\\])\.?(?:agents|claude|qwen)[/\\]skills[/\\]/i
 const LEADING_DOTDOT_RE = /^(?:\.\.[/\\])+/
 const WORKSPACE_IMAGE_PATH_RE = /\b(images\/[^\s)"'`]+\.(?:png|jpe?g|gif|webp))\b/i
 const IPV4_RE = /\b(\d{1,3}(?:\.\d{1,3}){3})\b/
-const UPLOAD_ERROR_RE = /^(?:图片|圖片|Failed to upload image|画像) (\S+) (?:上传失败：|上傳失敗：|のアップロードに失敗しました：|: )([\s\S]+)$/
+const UPLOAD_ERROR_RE = /^(?:图片|圖片|Failed to upload image|画像) (.+?)(?: 上传失败：| 上傳失敗：| のアップロードに失敗しました：|: )([\s\S]+)$/
 
 function parseUploadError(message: string): { path: string, reason: string } | null {
   const match = UPLOAD_ERROR_RE.exec(message)
@@ -306,9 +307,8 @@ export function summarizeErrorGroup(items: readonly ErrorTimelineItem[]): ErrorG
   if (messages.length === 0)
     return { sharedMessage: null, affectedPaths: [], whitelistIp: null, messages: [] }
 
-  const whitelistIp = extractWeChat40164Ip(messages[0])
-
   if (messages.length === 1) {
+    const whitelistIp = extractWeChat40164Ip(messages[0])
     const parsed = parseUploadError(messages[0])
     if (parsed) {
       return {
@@ -326,11 +326,12 @@ export function summarizeErrorGroup(items: readonly ErrorTimelineItem[]): ErrorG
   if (parsedUploads.every((entry): entry is NonNullable<typeof entry> => entry !== null)) {
     const reasons = new Set(parsedUploads.map(entry => entry.reason))
     if (reasons.size === 1) {
+      const sharedReason = parsedUploads[0].reason
       const affectedPaths = [...new Set(parsedUploads.map(entry => cleanDisplayPath(entry.path)))]
       return {
-        sharedMessage: parsedUploads[0].reason,
+        sharedMessage: sharedReason,
         affectedPaths,
-        whitelistIp,
+        whitelistIp: extractWeChat40164Ip(sharedReason),
         messages,
       }
     }
@@ -341,7 +342,7 @@ export function summarizeErrorGroup(items: readonly ErrorTimelineItem[]): ErrorG
     return {
       sharedMessage: uniqueMessages[0],
       affectedPaths: [],
-      whitelistIp,
+      whitelistIp: extractWeChat40164Ip(uniqueMessages[0]),
       messages,
     }
   }
@@ -349,9 +350,56 @@ export function summarizeErrorGroup(items: readonly ErrorTimelineItem[]): ErrorG
   return {
     sharedMessage: null,
     affectedPaths: [],
-    whitelistIp,
+    whitelistIp: null,
     messages: uniqueMessages,
   }
+}
+
+function hasNonWhitespace(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    if (code !== 32 && code !== 9 && code !== 10 && code !== 13)
+      return true
+  }
+  return false
+}
+
+type CachedBlockEntry
+  = | { kind: `user`, block: Extract<TimelineDisplayBlock, { kind: `user` }>, text: string, attachments: string[] | undefined }
+    | {
+      kind: `assistant`
+      block: Extract<TimelineDisplayBlock, { kind: `assistant` }>
+      text: string
+      thought: string | undefined
+      streaming: boolean | undefined
+      thoughtDurationMs: number | undefined
+    }
+    | { kind: `plan`, block: Extract<TimelineDisplayBlock, { kind: `plan` }>, entries: PlanTimelineItem[`entries`], timestamp: number }
+    | {
+      kind: `edit_tool`
+      block: Extract<TimelineDisplayBlock, { kind: `edit_tool` }>
+      tool: AcpToolCallItem
+      status: AcpToolCallItem[`status`]
+      error: string | undefined
+    }
+    | {
+      kind: `permission`
+      block: Extract<TimelineDisplayBlock, { kind: `permission` }>
+      request: PermissionTimelineItem[`request`]
+      resolvedOutcome: PermissionTimelineItem[`resolvedOutcome`]
+    }
+    | { kind: `tool_group`, block: Extract<TimelineDisplayBlock, { kind: `tool_group` }>, sig: string }
+    | { kind: `error_group`, block: Extract<TimelineDisplayBlock, { kind: `error_group` }>, messages: string[] }
+
+const blockCache = new WeakMap<object, CachedBlockEntry>()
+
+function buildToolGroupSignature(grouped: readonly ToolCallTimelineItem[], followedByContent: boolean): string {
+  let sig = `${grouped.length}:${followedByContent ? 1 : 0}`
+  for (let i = 0; i < grouped.length; i++) {
+    const t = grouped[i].tool
+    sig += `\u0001${t.id}\u0002${t.status}\u0002${t.title}\u0002${t.detail?.length ?? -1}\u0002${t.error ?? ``}\u0002${t.filePath ?? ``}\u0002${t.command ?? ``}`
+  }
+  return sig
 }
 
 function isSilentBookkeepingTool(tool: AcpToolCallItem): boolean {
@@ -378,41 +426,139 @@ export function groupTimelineItems(items: readonly AgentTimelineItem[]): Timelin
     return true
   })
 
+  // Single O(N) backward scan replaces per-group O(N^2) `slice(i + 1).some(...)` + `.trim()`.
+  let lastContentIdx = -1
+  for (let k = visibleItems.length - 1; k >= 0; k--) {
+    const candidate = visibleItems[k]
+    if (candidate.type === `user` || (candidate.type === `assistant` && hasNonWhitespace(candidate.text))) {
+      lastContentIdx = k
+      break
+    }
+  }
+
   const blocks: TimelineDisplayBlock[] = []
   let seenAnyUser = false
 
   for (let i = 0; i < visibleItems.length; i++) {
     const item = visibleItems[i]
+    const rawKey = toRaw(item)
 
     if (item.type === `user`) {
-      blocks.push({
-        kind: `user`,
-        id: item.id,
-        item,
-        isTurnStart: seenAnyUser,
-      })
+      const cached = blockCache.get(rawKey)
+      if (
+        cached?.kind === `user`
+        && cached.block.item === item
+        && cached.block.isTurnStart === seenAnyUser
+        && cached.text === item.text
+        && cached.attachments === item.attachments
+      ) {
+        blocks.push(cached.block)
+      }
+      else {
+        const block: Extract<TimelineDisplayBlock, { kind: `user` }> = {
+          kind: `user`,
+          id: item.id,
+          item,
+          isTurnStart: seenAnyUser,
+        }
+        blockCache.set(rawKey, { kind: `user`, block, text: item.text, attachments: item.attachments })
+        blocks.push(block)
+      }
       seenAnyUser = true
       continue
     }
 
     if (item.type === `assistant`) {
-      blocks.push({ kind: `assistant`, id: item.id, item })
+      const cached = blockCache.get(rawKey)
+      if (
+        cached?.kind === `assistant`
+        && cached.block.item === item
+        && cached.text === item.text
+        && cached.thought === item.thought
+        && cached.streaming === item.streaming
+        && cached.thoughtDurationMs === item.thoughtDurationMs
+      ) {
+        blocks.push(cached.block)
+      }
+      else {
+        const block: Extract<TimelineDisplayBlock, { kind: `assistant` }> = { kind: `assistant`, id: item.id, item }
+        blockCache.set(rawKey, {
+          kind: `assistant`,
+          block,
+          text: item.text,
+          thought: item.thought,
+          streaming: item.streaming,
+          thoughtDurationMs: item.thoughtDurationMs,
+        })
+        blocks.push(block)
+      }
       continue
     }
 
     if (item.type === `plan`) {
-      blocks.push({ kind: `plan`, id: item.id, item })
+      const cached = blockCache.get(rawKey)
+      if (
+        cached?.kind === `plan`
+        && cached.block.item === item
+        && cached.entries === item.entries
+        && cached.timestamp === item.timestamp
+      ) {
+        blocks.push(cached.block)
+      }
+      else {
+        const block: Extract<TimelineDisplayBlock, { kind: `plan` }> = { kind: `plan`, id: item.id, item }
+        blockCache.set(rawKey, { kind: `plan`, block, entries: item.entries, timestamp: item.timestamp })
+        blocks.push(block)
+      }
       continue
     }
 
     if (item.type === `permission`) {
-      blocks.push({ kind: `permission`, id: item.id, item })
+      const cached = blockCache.get(rawKey)
+      if (
+        cached?.kind === `permission`
+        && cached.block.item === item
+        && cached.request === item.request
+        && cached.resolvedOutcome === item.resolvedOutcome
+      ) {
+        blocks.push(cached.block)
+      }
+      else {
+        const block: Extract<TimelineDisplayBlock, { kind: `permission` }> = { kind: `permission`, id: item.id, item }
+        blockCache.set(rawKey, {
+          kind: `permission`,
+          block,
+          request: item.request,
+          resolvedOutcome: item.resolvedOutcome,
+        })
+        blocks.push(block)
+      }
       continue
     }
 
     if (item.type === `tool_call`) {
       if (isEditToolCall(item.tool)) {
-        blocks.push({ kind: `edit_tool`, id: item.id, item })
+        const cached = blockCache.get(rawKey)
+        if (
+          cached?.kind === `edit_tool`
+          && cached.block.item === item
+          && cached.tool === item.tool
+          && cached.status === item.tool.status
+          && cached.error === item.tool.error
+        ) {
+          blocks.push(cached.block)
+        }
+        else {
+          const block: Extract<TimelineDisplayBlock, { kind: `edit_tool` }> = { kind: `edit_tool`, id: item.id, item }
+          blockCache.set(rawKey, {
+            kind: `edit_tool`,
+            block,
+            tool: item.tool,
+            status: item.tool.status,
+            error: item.tool.error,
+          })
+          blocks.push(block)
+        }
         continue
       }
 
@@ -428,15 +574,22 @@ export function groupTimelineItems(items: readonly AgentTimelineItem[]): Timelin
         }
       }
 
+      const followedByContent = i < lastContentIdx
+      const sig = buildToolGroupSignature(grouped, followedByContent)
+      const cached = blockCache.get(rawKey)
+      if (
+        cached?.kind === `tool_group`
+        && cached.sig === sig
+        && cached.block.items.length === grouped.length
+        && cached.block.items.every((entry, idx) => entry === grouped[idx])
+      ) {
+        blocks.push(cached.block)
+        continue
+      }
+
       const hasRunning = grouped.some(entry => entry.tool.status === `in_progress` || entry.tool.status === `pending`)
       const failedCount = grouped.filter(entry => entry.tool.status === `failed`).length
-      const followedByContent = visibleItems.slice(i + 1).some(
-        after =>
-          after.type === `user`
-          || (after.type === `assistant` && Boolean(after.text.trim())),
-      )
-
-      blocks.push({
+      const block: Extract<TimelineDisplayBlock, { kind: `tool_group` }> = {
         kind: `tool_group`,
         id: `tg-${grouped[0].id}`,
         items: grouped,
@@ -444,7 +597,9 @@ export function groupTimelineItems(items: readonly AgentTimelineItem[]): Timelin
         hasFailed: failedCount > 0,
         failedCount,
         followedByContent,
-      })
+      }
+      blockCache.set(rawKey, { kind: `tool_group`, block, sig })
+      blocks.push(block)
       continue
     }
 
@@ -454,11 +609,27 @@ export function groupTimelineItems(items: readonly AgentTimelineItem[]): Timelin
         grouped.push(visibleItems[i + 1] as ErrorTimelineItem)
         i++
       }
-      blocks.push({
-        kind: `error_group`,
-        id: `eg-${grouped[0].id}`,
-        items: grouped,
-      })
+      const cached = blockCache.get(rawKey)
+      if (
+        cached?.kind === `error_group`
+        && cached.block.items.length === grouped.length
+        && cached.block.items.every((entry, idx) => entry === grouped[idx] && entry.message === cached.messages[idx])
+      ) {
+        blocks.push(cached.block)
+      }
+      else {
+        const block: Extract<TimelineDisplayBlock, { kind: `error_group` }> = {
+          kind: `error_group`,
+          id: `eg-${grouped[0].id}`,
+          items: grouped,
+        }
+        blockCache.set(rawKey, {
+          kind: `error_group`,
+          block,
+          messages: grouped.map(entry => entry.message),
+        })
+        blocks.push(block)
+      }
     }
   }
 

@@ -25,7 +25,10 @@ export interface PatchPreviewResult {
 const patchStates = new WeakMap<HTMLElement, PreviewPatchState>()
 
 function blockMayNeedHydration(html: string): boolean {
-  return html.includes(`data-language-pending="`) || html.includes(`infographic-diagram`)
+  return html.includes(`data-language-pending="`)
+    || html.includes(`data-mermaid-key="`)
+    || html.includes(`data-placeholder="`)
+    || html.includes(`infographic-diagram`)
 }
 
 function parseBlockNodes(

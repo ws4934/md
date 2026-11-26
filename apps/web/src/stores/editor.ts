@@ -61,6 +61,12 @@ export const useEditorStore = defineStore(`editor`, () => {
     const minLen = Math.min(prev.length, content.length)
     while (prefix < minLen && prev.charCodeAt(prefix) === content.charCodeAt(prefix))
       prefix++
+    // Avoid splitting a UTF-16 surrogate pair when two characters share a high surrogate.
+    if (prefix > 0) {
+      const prevLead = prev.charCodeAt(prefix - 1)
+      if (prevLead >= 0xD800 && prevLead <= 0xDBFF)
+        prefix--
+    }
 
     let suffix = 0
     while (
@@ -68,6 +74,12 @@ export const useEditorStore = defineStore(`editor`, () => {
       && prev.charCodeAt(prev.length - 1 - suffix) === content.charCodeAt(content.length - 1 - suffix)
     ) {
       suffix++
+    }
+    // Avoid splitting a UTF-16 surrogate pair when two characters share a low surrogate.
+    if (suffix > 0) {
+      const prevTrail = prev.charCodeAt(prev.length - suffix)
+      if (prevTrail >= 0xDC00 && prevTrail <= 0xDFFF)
+        suffix--
     }
 
     const from = prefix

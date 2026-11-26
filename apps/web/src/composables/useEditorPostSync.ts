@@ -26,6 +26,7 @@ export interface EditorPostSyncOptions {
 export function useEditorPostSync(options: EditorPostSyncOptions) {
   const persistDelayMs = options.persistDelayMs ?? 300
   let loadedPostId: string | null = null
+  let pendingPostSwitch = false
   let persistTimer: ReturnType<typeof setTimeout> | undefined
   let syncingDepth = 0
 
@@ -52,12 +53,14 @@ export function useEditorPostSync(options: EditorPostSyncOptions) {
 
   function bindLoadedPost(postId: string | null) {
     loadedPostId = postId || null
+    pendingPostSwitch = false
     options.onActivePostChange?.(loadedPostId)
   }
 
   function unbindLoadedPost() {
     cancelPendingPersist()
     loadedPostId = null
+    pendingPostSwitch = false
     options.onActivePostChange?.(null)
   }
 
@@ -101,6 +104,9 @@ export function useEditorPostSync(options: EditorPostSyncOptions) {
             options.applyContentToEditor(nextContent, { isPostSwitch: true })
           })
         }
+        else {
+          pendingPostSwitch = true
+        }
         return
       }
 
@@ -108,8 +114,10 @@ export function useEditorPostSync(options: EditorPostSyncOptions) {
       // cancel any stale debounced persist so it cannot revert the external update.
       cancelPendingPersist()
       if (nextContent != null) {
+        const isPostSwitch = pendingPostSwitch
+        pendingPostSwitch = false
         runStoreSync(() => {
-          options.applyContentToEditor(nextContent, { isPostSwitch: false })
+          options.applyContentToEditor(nextContent, { isPostSwitch })
         })
       }
     },

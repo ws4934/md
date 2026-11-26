@@ -119,4 +119,62 @@ describe(`groupTimelineItems`, () => {
     if (blocks[0].kind === `error_group`)
       expect(blocks[0].items).toHaveLength(2)
   })
+
+  it(`parses upload errors for paths containing spaces and avoids misleading whitelistIp on mixed errors`, () => {
+    const spaced = summarizeErrorGroup([
+      {
+        type: `error`,
+        id: `e1`,
+        timestamp: 1,
+        message: `Failed to upload image images/my chart.png: [40164] IP 10.20.30.40 not whitelisted`,
+      },
+      {
+        type: `error`,
+        id: `e2`,
+        timestamp: 2,
+        message: `Failed to upload image images/second chart.png: [40164] IP 10.20.30.40 not whitelisted`,
+      },
+    ])
+    expect(spaced.affectedPaths).toEqual([`images/my chart.png`, `images/second chart.png`])
+    expect(spaced.whitelistIp).toBe(`10.20.30.40`)
+
+    const mixed = summarizeErrorGroup([
+      { type: `error`, id: `m1`, timestamp: 1, message: `40164 IP 10.20.30.40` },
+      { type: `error`, id: `m2`, timestamp: 2, message: `Network timeout` },
+    ])
+    expect(mixed.sharedMessage).toBeNull()
+    expect(mixed.whitelistIp).toBeNull()
+  })
+
+  it(`reuses display block references for unchanged earlier items when streaming updates append to tail`, () => {
+    const userItem: AgentTimelineItem = { type: `user`, id: `u1`, text: `Write`, timestamp: 1 }
+    const readItem: AgentTimelineItem = {
+      type: `tool_call`,
+      id: `t1`,
+      timestamp: 2,
+      tool: { id: `t1`, title: `Read article.md`, toolKind: `read`, status: `completed` },
+    }
+    const editItem: AgentTimelineItem = {
+      type: `tool_call`,
+      id: `t2`,
+      timestamp: 3,
+      tool: { id: `t2`, title: `Edit article.md`, toolKind: `edit`, status: `completed` },
+    }
+    const assistantItem: Extract<AgentTimelineItem, { type: `assistant` }> = {
+      type: `assistant`,
+      id: `a1`,
+      text: `Hello`,
+      streaming: true,
+      timestamp: 4,
+    }
+
+    const firstPass = groupTimelineItems([userItem, readItem, editItem, assistantItem])
+    assistantItem.text = `Hello world`
+    const secondPass = groupTimelineItems([userItem, readItem, editItem, assistantItem])
+
+    expect(secondPass[0]).toBe(firstPass[0])
+    expect(secondPass[1]).toBe(firstPass[1])
+    expect(secondPass[2]).toBe(firstPass[2])
+    expect(secondPass[3]).not.toBe(firstPass[3])
+  })
 })

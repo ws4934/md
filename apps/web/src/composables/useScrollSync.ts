@@ -45,6 +45,7 @@ export function useScrollSync(
 
   let previewVersion = 0
   let cachedPreviewVersion = -1
+  let cachedPreviewScrollHeight = -1
   let cachedPreviewBlocks: HTMLElement[] = []
   let cachedPreviewOffsetTops: number[] = []
   let mutationObserver: MutationObserver | null = null
@@ -64,6 +65,10 @@ export function useScrollSync(
   function teardownMutationObserver() {
     mutationObserver?.disconnect()
     mutationObserver = null
+    cachedPreviewVersion = -1
+    cachedPreviewScrollHeight = -1
+    cachedPreviewBlocks = []
+    cachedPreviewOffsetTops = []
   }
 
   /**
@@ -88,12 +93,14 @@ export function useScrollSync(
     if (!mutationObserver)
       setupMutationObserver(preview)
 
-    if (cachedPreviewVersion === previewVersion)
+    const currentScrollHeight = preview.scrollHeight
+    if (cachedPreviewVersion === previewVersion && cachedPreviewScrollHeight === currentScrollHeight)
       return { blocks: cachedPreviewBlocks, offsetTops: cachedPreviewOffsetTops }
 
     const output = preview.querySelector(`#output`)
     if (!output) {
       cachedPreviewVersion = previewVersion
+      cachedPreviewScrollHeight = currentScrollHeight
       cachedPreviewBlocks = []
       cachedPreviewOffsetTops = []
       return { blocks: [], offsetTops: [] }
@@ -102,6 +109,7 @@ export function useScrollSync(
     const container = output.firstElementChild
     if (!container) {
       cachedPreviewVersion = previewVersion
+      cachedPreviewScrollHeight = currentScrollHeight
       cachedPreviewBlocks = []
       cachedPreviewOffsetTops = []
       return { blocks: [], offsetTops: [] }
@@ -148,6 +156,7 @@ export function useScrollSync(
     }
 
     cachedPreviewVersion = previewVersion
+    cachedPreviewScrollHeight = currentScrollHeight
     cachedPreviewBlocks = blocks
     cachedPreviewOffsetTops = offsetTops
     return { blocks, offsetTops }

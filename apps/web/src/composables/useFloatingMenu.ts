@@ -38,6 +38,7 @@ export function useFloatingMenu(params: {
 
   let resizeObserver: ResizeObserver | null = null
   let rafId = 0
+  let settleRafId = 0
 
   function isTriggerUnavailable(): boolean {
     const trigger = triggerRef.value
@@ -177,6 +178,10 @@ export function useFloatingMenu(params: {
       cancelAnimationFrame(rafId)
       rafId = 0
     }
+    if (settleRafId) {
+      cancelAnimationFrame(settleRafId)
+      settleRafId = 0
+    }
     resizeObserver?.disconnect()
     resizeObserver = null
     window.removeEventListener(`resize`, scheduleReposition)
@@ -201,10 +206,9 @@ export function useFloatingMenu(params: {
   }
 
   watch(isOpen, (open) => {
-    if (!open) {
-      detachAll()
+    detachAll()
+    if (!open)
       return
-    }
     window.addEventListener(`resize`, scheduleReposition)
     window.addEventListener(`scroll`, scheduleReposition, true)
     window.addEventListener(`blur`, handleWindowBlur)
@@ -217,7 +221,8 @@ export function useFloatingMenu(params: {
       for (const refEl of menuRefs)
         scrollActiveOptionIntoView(refEl.value)
       // Re-run once on the next frame in case fonts/maxHeight settled after Teleport mount.
-      requestAnimationFrame(() => {
+      settleRafId = requestAnimationFrame(() => {
+        settleRafId = 0
         if (!runRepositionOrClose())
           return
         for (const refEl of menuRefs)

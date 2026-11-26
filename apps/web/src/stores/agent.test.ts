@@ -975,3 +975,448 @@ describe(`useAgentStore post session isolation`, () => {
     expect(agentStore.activeSession?.id).not.toBe(`sess-post-1`)
   })
 })
+
+describe(`useAgentStore lifecycle, streaming, probes, and migration regressions`, () => {
+  const originalDesktop = window.mdDesktop
+  const originalRaf = globalThis.requestAnimationFrame
+  const originalCaf = globalThis.cancelAnimationFrame
+
+  afterEach(() => {
+    window.mdDesktop = originalDesktop
+    globalThis.requestAnimationFrame = originalRaf
+    globalThis.cancelAnimationFrame = originalCaf
+    postMock.id = `post-1`
+    postMock.title = `Test Post`
+    postMock.content = `# Test`
+  })
+
+  it(`honors configured defaultAgentId on init even when claude is installed, and normalizes interrupted persisted sessions`, async () => {
+    setActivePinia(createPinia())
+    const { store: storageMock } = await import(`@/storage`)
+    vi.mocked(storageMock.getJSON).mockResolvedValueOnce([
+      {
+        id: `persisted-1`,
+        acpSessionId: `stale-acp-id`,
+        agentId: `codex`,
+        modelId: `gpt-5`,
+        thinkingLevel: `high`,
+        postId: `post-1`,
+        title: `Interrupted Session`,
+        updatedAt: 500,
+        items: [
+          {
+            type: `assistant`,
+            id: `a-1`,
+            text: ``,
+            thought: `Partial thought`,
+            thoughtStartedAt: 100,
+            streaming: true,
+            timestamp: 100,
+          },
+          {
+            type: `tool_call`,
+            id: `tc-1`,
+            timestamp: 200,
+            tool: {
+              id: `tc-1`,
+              title: `Edit article.md`,
+              toolKind: `edit`,
+              status: `in_progress`,
+              oldText: `old line\n`,
+              newText: `new line\n`,
+            },
+          },
+          {
+            type: `permission`,
+            id: `perm-1`,
+            timestamp: 300,
+            request: {
+              requestId: `perm-1`,
+              sessionId: `stale-acp-id`,
+              toolCallId: `tc-2`,
+              title: `Run bash`,
+              toolKind: `execute`,
+              options: [],
+            },
+          },
+        ],
+      },
+    ] as never)
+
+    window.mdDesktop = {
+      isDesktop: true,
+      platform: `darwin`,
+      acp: {
+        listAgents: vi.fn(async () => [
+          {
+            id: `claude`,
+            name: `Claude Code`,
+            builtin: true,
+            installed: true,
+            command: `claude`,
+            args: [],
+            avatar: { letter: `C`, color: `#D97757` },
+            isDefault: false,
+          },
+          {
+            id: `codex`,
+            name: `Codex`,
+            builtin: true,
+            installed: true,
+            command: `codex`,
+            args: [],
+            avatar: { letter: `O`, color: `#10A37F` },
+            isDefault: true,
+          },
+        ]),
+        getSettings: vi.fn(async () => ({
+          ...createDefaultAcpSettings(),
+          defaultAgentId: `codex`,
+        })),
+        probeAgent: vi.fn(async agentId => ({
+          agentId,
+          models: [{ id: `gpt-5`, name: `GPT-5` }],
+          currentModelId: `gpt-5`,
+          modes: [],
+          currentModeId: null,
+          commands: [],
+          probedAt: Date.now(),
+        })),
+        onEvent: vi.fn(() => () => {}),
+      } as unknown as DesktopAcpApi,
+    } as never
+
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+    await agentStore.init()
+
+    expect(agentStore.selectedAgentId).toBe(`codex`)
+    expect(agentStore.selectedModel?.id).toBe(`gpt-5`)
+    expect(agentStore.isWaitingPermission).toBe(false)
+
+    const restored = agentStore.activeSession!
+    expect(restored.acpSessionId).toBeNull()
+    expect(restored.items[0]).toMatchObject({ type: `assistant`, streaming: false })
+    if (restored.items[0].type === `assistant`)
+      expect(restored.items[0].thoughtDurationMs).toBeGreaterThanOrEqual(0)
+    if (restored.items[1].type === `tool_call`) {
+      expect(restored.items[1].tool.status).toBe(`failed`)
+      expect(restored.items[1].tool.oldText).toBeUndefined()
+      expect(restored.items[1].tool.diffStats?.hasChanges).toBe(true)
+    }
+    if (restored.items[2].type === `permission`)
+      expect(restored.items[2].resolvedOutcome).toBe(`cancelled`)
+  })
+
+  it(`preserves chunk ordering across interleaved text/thought frames, finalizes thought duration on tool_call, and cleans up on session_closed`, async () => {
+    setActivePinia(createPinia())
+    const rafHolder: { current: FrameRequestCallback | null } = { current: null }
+    globalThis.requestAnimationFrame = vi.fn((cb: FrameRequestCallback) => {
+      rafHolder.current = cb
+      return 1
+    })
+    globalThis.cancelAnimationFrame = vi.fn()
+
+    let emit!: (event: AcpHostEvent) => void
+    window.mdDesktop = {
+      isDesktop: true,
+      platform: `darwin`,
+      acp: {
+        listAgents: vi.fn(async () => []),
+        getSettings: vi.fn(async () => createDefaultAcpSettings()),
+        onEvent: vi.fn((listener) => {
+          emit = listener
+          return () => {}
+        }),
+      } as unknown as DesktopAcpApi,
+    } as never
+
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+    await agentStore.init()
+    agentStore.sessions.push({
+      id: `s-stream`,
+      acpSessionId: `acp-stream`,
+      agentId: `claude`,
+      modelId: `sonnet`,
+      postId: `post-1`,
+      title: `Stream`,
+      items: [],
+      updatedAt: 1,
+    })
+    agentStore.activeSessionId = `s-stream`
+
+    // Same-frame interleaved chunks: thought -> text -> second thought -> second text.
+    emit({ type: `thought_chunk`, sessionId: `acp-stream`, text: `First thought` })
+    emit({ type: `message_chunk`, sessionId: `acp-stream`, text: `First answer` })
+    emit({ type: `thought_chunk`, sessionId: `acp-stream`, text: `Second thought` })
+    rafHolder.current?.(16)
+
+    const items = agentStore.activeSession!.items
+    expect(items).toHaveLength(2)
+    expect(items[0]).toMatchObject({
+      type: `assistant`,
+      thought: `First thought`,
+      text: `First answer`,
+      streaming: false,
+    })
+    expect(items[1]).toMatchObject({
+      type: `assistant`,
+      thought: `Second thought`,
+      text: ``,
+      streaming: true,
+    })
+
+    // Tool call arriving right after thought finalizes thoughtDurationMs.
+    emit({
+      type: `tool_call`,
+      sessionId: `acp-stream`,
+      tool: { id: `t-run`, title: `Run check`, toolKind: `execute`, status: `in_progress` },
+    })
+    if (items[1].type === `assistant`) {
+      expect(items[1].streaming).toBe(false)
+      expect(items[1].thoughtDurationMs).toBeGreaterThanOrEqual(0)
+    }
+
+    // Pending permission followed by unexpected session_closed cancels permission and unblocks composer.
+    emit({
+      type: `permission_requested`,
+      sessionId: `acp-stream`,
+      request: {
+        requestId: `req-1`,
+        sessionId: `acp-stream`,
+        toolCallId: `t-run`,
+        title: `Allow?`,
+        toolKind: `execute`,
+        options: [],
+      },
+    })
+    expect(agentStore.isWaitingPermission).toBe(true)
+
+    emit({ type: `session_closed`, sessionId: `acp-stream` })
+    expect(agentStore.isWaitingPermission).toBe(false)
+    const closedTool = items.find(i => i.type === `tool_call`)
+    if (closedTool?.type === `tool_call`)
+      expect(closedTool.tool.status).toBe(`failed`)
+  })
+
+  it(`isolates historical agent switches, empty-draft agent switches, permission modes, startSession cancellation, and post-scoped deletion`, async () => {
+    setActivePinia(createPinia())
+    let emit!: (event: AcpHostEvent) => void
+    let resolveStart!: (res: AcpStartSessionResult) => void
+    const startSession = vi.fn(() => new Promise<AcpStartSessionResult>((resolve) => {
+      resolveStart = resolve
+    }))
+    const prompt = vi.fn(async () => ({ stopReason: `end_turn` }))
+    const closeSession = vi.fn(async () => undefined)
+    const setPermissionMode = vi.fn(async ({ permissionLevel, modeId }) => ({
+      permissionLevel: permissionLevel ?? `ask`,
+      modeId: modeId ?? null,
+    }))
+
+    window.mdDesktop = {
+      isDesktop: true,
+      platform: `darwin`,
+      acp: {
+        listAgents: vi.fn(async () => [
+          {
+            id: `claude`,
+            name: `Claude`,
+            builtin: true,
+            installed: true,
+            command: `claude`,
+            args: [],
+            avatar: { letter: `C`, color: `#D97757` },
+            isDefault: true,
+          },
+          {
+            id: `codex`,
+            name: `Codex`,
+            builtin: true,
+            installed: true,
+            command: `codex`,
+            args: [],
+            avatar: { letter: `O`, color: `#10A37F` },
+            isDefault: false,
+          },
+        ]),
+        getSettings: vi.fn(async () => ({
+          ...createDefaultAcpSettings(),
+          lastThinkingLevelByAgent: { claude: `xhigh`, codex: `low` },
+        })),
+        updateSettings: vi.fn(async patch => ({ ...createDefaultAcpSettings(), ...patch })),
+        probeAgent: vi.fn(async agentId => ({
+          agentId,
+          models: [{
+            id: `${agentId}-m1`,
+            name: `${agentId}-m1`,
+            thinkingOptions: [{ id: `low` }, { id: `xhigh` }],
+            thinkingVariantIds: { low: `${agentId}-m1-low`, xhigh: `${agentId}-m1-xhigh` },
+          }],
+          currentModelId: `${agentId}-m1`,
+          modes: [{ id: `${agentId}-custom`, name: `${agentId} Custom` }],
+          currentModeId: null,
+          commands: [],
+          commandsAnnounced: true,
+          probedAt: Date.now(),
+        })),
+        startSession,
+        prompt,
+        closeSession,
+        setPermissionMode,
+        cancelTurn: vi.fn(async () => undefined),
+        onEvent: vi.fn((listener) => {
+          emit = listener
+          return () => {}
+        }),
+      } as unknown as DesktopAcpApi,
+    } as never
+
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+    await agentStore.init()
+    await agentStore.probeAgent(`claude`)
+    await agentStore.probeAgent(`codex`)
+
+    // Live claude session should NOT receive codex custom mode when user switches picker to codex.
+    agentStore.sessions.push({
+      id: `hist-claude`,
+      acpSessionId: `live-claude`,
+      agentId: `claude`,
+      modelId: `claude-m1`,
+      thinkingLevel: `xhigh`,
+      permissionLevel: `ask`,
+      postId: `post-1`,
+      title: `Claude Chat`,
+      items: [{ type: `user`, id: `u1`, text: `Hi`, timestamp: 1 }],
+      updatedAt: 10,
+    })
+    agentStore.activeSessionId = `hist-claude`
+
+    await agentStore.selectAgentAndModel(`codex`, `codex-m1`)
+    await agentStore.setSessionPermissionMode({ modeId: `codex-custom` })
+    expect(setPermissionMode).not.toHaveBeenCalled()
+    expect(agentStore.currentModeId).toBe(`codex-custom`)
+
+    // Historical (acpSessionId: null) claude session must not be reused when sending with codex.
+    agentStore.sessions[0].acpSessionId = null
+    const firstSend = agentStore.sendPrompt(`Hello Codex`)
+    expect(agentStore.activeSession?.id).not.toBe(`hist-claude`)
+    expect(agentStore.activeSession?.agentId).toBe(`codex`)
+    expect(agentStore.isCurrentSessionRunning).toBe(true)
+    expect(agentStore.writingPostIds.has(`post-1`)).toBe(true)
+
+    // Duplicate send while startSession is in flight is ignored; stopTurn aborts before prompt().
+    await agentStore.sendPrompt(`Duplicate while starting`)
+    expect(startSession).toHaveBeenCalledTimes(1)
+    await agentStore.stopTurn()
+    expect(agentStore.isCurrentSessionRunning).toBe(false)
+
+    resolveStart({
+      sessionId: `aborted-acp`,
+      modelId: `codex-m1`,
+      models: [],
+      thinkingLevel: `low`,
+      thinkingOptions: [],
+      modes: [],
+      currentModeId: `codex-custom`,
+      permissionLevel: `ask`,
+      commands: [],
+    })
+    await firstSend
+    expect(closeSession).toHaveBeenCalledWith(`aborted-acp`)
+    expect(prompt).not.toHaveBeenCalled()
+
+    // Empty draft created under claude then switched to codex forwards codex's thinking level (`low`), not claude's (`xhigh`).
+    await agentStore.selectAgentAndModel(`claude`, `claude-m1`)
+    await agentStore.startNewSession()
+    await agentStore.selectAgentAndModel(`codex`, `codex-m1`)
+    startSession.mockResolvedValueOnce({
+      sessionId: `codex-live-2`,
+      modelId: `codex-m1`,
+      models: [],
+      thinkingLevel: `low`,
+      thinkingOptions: [],
+      modes: [],
+      currentModeId: null,
+      permissionLevel: `ask`,
+      commands: [],
+    })
+    prompt.mockImplementationOnce(async () => {
+      emit({ type: `turn_error`, sessionId: `codex-live-2`, message: `Auth failed` })
+      throw new Error(`Error invoking remote method 'md-desktop:acp:prompt': Error: Auth failed`)
+    })
+    await agentStore.sendPrompt(`Draft under codex`)
+    expect(startSession).toHaveBeenLastCalledWith(expect.objectContaining({
+      agentId: `codex`,
+      modelId: `codex-m1`,
+      thinkingLevel: `low`,
+    }))
+    // Electron IPC prefix stripped so turn_error and rejected invoke deduplicate to 1 error item.
+    const errorItems = agentStore.activeSession!.items.filter(i => i.type === `error`)
+    expect(errorItems).toHaveLength(1)
+
+    // Deleting the only session on post-2 must not fall back to post-1's session.
+    postMock.id = `post-2`
+    agentStore.syncSessionForPost(`post-2`)
+    await agentStore.startNewSession()
+    const post2SessionId = agentStore.activeSessionId!
+    await agentStore.deleteSession(post2SessionId)
+    expect(agentStore.activeSessionId).toBeNull()
+  })
+
+  it(`prevents a slow stale probe or invalidated probe from overwriting fresher forced probe state`, async () => {
+    setActivePinia(createPinia())
+    let resolveSlow!: (res: AcpProbeResult) => void
+    let resolveFast!: (res: AcpProbeResult) => void
+    const probeAgentMock = vi.fn()
+      .mockImplementationOnce(() => new Promise<AcpProbeResult>((r) => { resolveSlow = r }))
+      .mockImplementationOnce(() => new Promise<AcpProbeResult>((r) => { resolveFast = r }))
+
+    window.mdDesktop = {
+      isDesktop: true,
+      platform: `darwin`,
+      acp: {
+        listAgents: vi.fn(async () => []),
+        getSettings: vi.fn(async () => createDefaultAcpSettings()),
+        probeAgent: probeAgentMock,
+        onEvent: vi.fn(() => () => {}),
+      } as unknown as DesktopAcpApi,
+    } as never
+
+    const { useAgentStore } = await import(`./agent`)
+    const agentStore = useAgentStore()
+
+    const slowPromise = agentStore.probeAgent(`claude`, false)
+    const fastForcedPromise = agentStore.probeAgent(`claude`, true)
+    expect(agentStore.probingAgents.claude).toBe(true)
+
+    resolveFast({
+      agentId: `claude`,
+      models: [{ id: `fresh-model`, name: `Fresh` }],
+      currentModelId: `fresh-model`,
+      modes: [],
+      currentModeId: null,
+      commands: [],
+      commandsAnnounced: true,
+      probedAt: 200,
+    })
+    await fastForcedPromise
+    // Still probing until slow request also settles, and slow result must not overwrite fresh-model.
+    expect(agentStore.probingAgents.claude).toBe(true)
+
+    resolveSlow({
+      agentId: `claude`,
+      models: [{ id: `stale-model`, name: `Stale` }],
+      currentModelId: `stale-model`,
+      modes: [],
+      currentModeId: null,
+      commands: [],
+      commandsAnnounced: false,
+      probedAt: 100,
+    })
+    await slowPromise
+    expect(agentStore.probingAgents.claude).toBeUndefined()
+    expect(agentStore.probeByAgent.claude.models.map(m => m.id)).toEqual([`fresh-model`])
+  })
+})
