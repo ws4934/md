@@ -37,4 +37,10 @@ export const IPC_CHANNELS = {
   MARKETPLACE_LIST_THEMES: `md:marketplace:list-themes`,
   MARKETPLACE_GET_ITEM: `md:marketplace:get-item`,
   MARKETPLACE_INSTALL_ITEM: `md:marketplace:install-item`,
+  IP_LIST: `md:ip:list`,
+  IP_UPDATE: `md:ip:update`,
+  IP_SET_DEFAULT: `md:ip:set-default`,
+  IP_REMOVE: `md:ip:remove`,
+  IP_READ_IMAGE: `md:ip:read-image`,
+  IP_CHANGED: `md:ip:changed`,
 } as const

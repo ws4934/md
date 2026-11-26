@@ -13,6 +13,7 @@ import type {
   AcpStartSessionResult,
   AcpWorkspaceImage,
 } from '@md/shared/types'
+import type { IpCharacterStore } from '../ip-characters'
 import { createHash, randomUUID } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
@@ -74,6 +75,7 @@ export interface AcpHostOptions {
   appVersion?: string
   /** Directory of bundled `<name>/SKILL.md` skills copied into every agent workspace and the probe cwd. */
   skillsDir?: string
+  ipCharacters?: IpCharacterStore
   onEvent?: (event: AcpHostEvent) => void
 }
 
@@ -215,11 +217,13 @@ export class AcpHost {
   private readonly resolveSessionMcpServers?: AcpHostOptions[`resolveSessionMcpServers`]
   private readonly isImageGenConfigured?: AcpHostOptions[`isImageGenConfigured`]
   private readonly skillsDir?: string
+  private readonly ipCharacters?: IpCharacterStore
   private readonly onEvent?: (event: AcpHostEvent) => void
 
   constructor(options: AcpHostOptions) {
     this.workspacesRoot = path.join(options.dataDir, `acp-workspaces`)
     this.skillsDir = options.skillsDir
+    this.ipCharacters = options.ipCharacters
     this.pathOverride = options.pathOverride
     this.resolveAgentAvailability = options.resolveAgentAvailability
     this.resolveDirectProbe = options.resolveDirectProbe
@@ -392,6 +396,14 @@ export class AcpHost {
       await fs.writeFile(articlePath, params.content, `utf8`)
       imageGenEnabled = Boolean(await this.isImageGenConfigured?.())
       await installBundledSkills(workspaceDir, this.skillsDir)
+      if (this.ipCharacters) {
+        try {
+          await this.ipCharacters.writeWorkspaceSnapshot(workspaceDir)
+        }
+        catch (error) {
+          console.warn(`[acp] failed to write IP character snapshot:`, error)
+        }
+      }
       const runtimeEnv = await this.resolveAgentRuntimeEnv?.(params.agentId, {
         workspaceDir,
         forProbe: false,
@@ -647,7 +659,33 @@ export class AcpHost {
     finally {
       // Read the article file back once more at turn end in case edits bypassed a tool_call update.
       await this.syncArticleFromDisk(managed)
+      if (this.ipCharacters) {
+        try {
+          await this.ipCharacters.applyWorkspaceSelection(managed.workspaceDir)
+        }
+        catch (error) {
+          console.warn(`[acp] failed to apply IP character selection:`, error)
+        }
+      }
     }
+  }
+
+  async refreshIpSnapshots(): Promise<void> {
+    if (!this.ipCharacters)
+      return
+    const store = this.ipCharacters
+    const workspaceDirs = [...this.sessions.values()].map(managed => managed.workspaceDir)
+    await Promise.all(
+      workspaceDirs.map(async (workspaceDir) => {
+        try {
+          await fs.access(workspaceDir)
+          await store.writeWorkspaceSnapshot(workspaceDir)
+        }
+        catch (error) {
+          console.warn(`[acp] failed to refresh IP character snapshot:`, error)
+        }
+      }),
+    )
   }
 
   async cancelTurn(sessionId: string): Promise<void> {

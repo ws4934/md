@@ -6,6 +6,8 @@ import type {
   AcpStartSessionParams,
   DesktopBridge,
   DesktopImageGenConfigUpdate,
+  DesktopIpCharacterUpdate,
+  DesktopIpLibrary,
   DesktopListRemoteModelsParams,
   DesktopMarketplaceListParams,
   DesktopModelApiConfigUpdate,
@@ -112,6 +114,26 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke(IPC_CHANNELS.MARKETPLACE_GET_ITEM, id),
     installItem: (id: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.MARKETPLACE_INSTALL_ITEM, id),
+  },
+  ipCharacters: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.IP_LIST),
+    update: (id: string, patch: DesktopIpCharacterUpdate) =>
+      ipcRenderer.invoke(IPC_CHANNELS.IP_UPDATE, id, patch),
+    setDefault: (id: string | null) =>
+      ipcRenderer.invoke(IPC_CHANNELS.IP_SET_DEFAULT, id),
+    remove: (id: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.IP_REMOVE, id),
+    readImage: (id: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.IP_READ_IMAGE, id),
+    onChanged: (callback: (library: DesktopIpLibrary) => void) => {
+      const handler = (_ipcEvent: Electron.IpcRendererEvent, payload: DesktopIpLibrary) => {
+        callback(payload)
+      }
+      ipcRenderer.on(IPC_CHANNELS.IP_CHANGED, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.IP_CHANGED, handler)
+      }
+    },
   },
 }
 

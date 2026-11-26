@@ -227,6 +227,7 @@ describe(`useAgentStore thinking level state`, () => {
       wechat: {} as never,
       updates: {} as never,
       marketplace: {} as never,
+      ipCharacters: {} as never,
       pickFiles: vi.fn(async () => []),
       pickImage: vi.fn(async () => null),
       openExternal: vi.fn(async () => undefined),

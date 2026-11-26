@@ -306,6 +306,40 @@ export interface DesktopMarketplaceApi {
   installItem: (id: string) => Promise<MarketplaceItemDetail>
 }
 
+export interface DesktopIpCharacter {
+  id: string
+  name: string
+  /** Short user-facing description (usually Chinese). */
+  description: string
+  /** English character description pasted verbatim into image prompts. */
+  prompt: string
+  /** File name inside the library dir, e.g. `<id>.png`; null when no reference image. */
+  imageFile: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface DesktopIpLibrary {
+  defaultId: string | null
+  characters: DesktopIpCharacter[]
+}
+
+export interface DesktopIpCharacterUpdate {
+  name?: string
+  description?: string
+  prompt?: string
+}
+
+export interface DesktopIpCharactersApi {
+  list: () => Promise<DesktopIpLibrary>
+  update: (id: string, patch: DesktopIpCharacterUpdate) => Promise<DesktopIpLibrary>
+  setDefault: (id: string | null) => Promise<DesktopIpLibrary>
+  remove: (id: string) => Promise<DesktopIpLibrary>
+  /** `data:` URL of the reference image, or null. */
+  readImage: (id: string) => Promise<string | null>
+  onChanged: (callback: (library: DesktopIpLibrary) => void) => () => void
+}
+
 export interface DesktopBridge {
   isDesktop: true
   platform: string
@@ -314,6 +348,7 @@ export interface DesktopBridge {
   wechat: DesktopWeChatApi
   updates: DesktopUpdatesApi
   marketplace: DesktopMarketplaceApi
+  ipCharacters: DesktopIpCharactersApi
   pickFiles: () => Promise<DesktopPickedFile[]>
   pickImage: () => Promise<DesktopPickedImage | null>
   openExternal: (url: string) => Promise<void>

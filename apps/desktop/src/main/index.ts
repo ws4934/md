@@ -3,6 +3,8 @@ import type {
   AcpAgentConfig,
   AcpHostEvent,
   DesktopImageGenConfigUpdate,
+  DesktopIpCharacterUpdate,
+  DesktopIpLibrary,
   DesktopListRemoteModelsParams,
   DesktopModelApiConfigUpdate,
   DesktopTestImageGenParams,
@@ -41,6 +43,7 @@ import {
   resolveUpdateMode,
   UPDATE_COPY,
 } from './auto-update'
+import { IpCharacterStore } from './ip-characters'
 import { createDesktopMarketplaceClient } from './marketplace'
 import { QuitGuard } from './quit-guard'
 import { mimeForExtension, WeChatPublisher } from './wechat/publisher'
@@ -100,6 +103,7 @@ let mainWindow: BrowserWindow | null = null
 let acpHost: AcpHost | null = null
 let acpEventBatcher: AcpEventBatcher | null = null
 let aiConfigStore: AiConfigStore | null = null
+let ipCharacterStore: IpCharacterStore | null = null
 let imageGenBridge: ImageGenBridge | null = null
 let wechatPublisher: WeChatPublisher | null = null
 let quitGuard: QuitGuard | null = null
@@ -138,6 +142,13 @@ function broadcastUpdateState(state: DesktopUpdateState): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed())
       win.webContents.send(IPC_CHANNELS.UPDATES_STATE, state)
+  }
+}
+
+function broadcastIpCharactersChanged(library: DesktopIpLibrary): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed())
+      win.webContents.send(IPC_CHANNELS.IP_CHANGED, library)
   }
 }
 
@@ -235,7 +246,12 @@ function createMainWindow(): BrowserWindow {
   return win
 }
 
-function registerIpc(host: AcpHost, publisher: WeChatPublisher, configStore: AiConfigStore): void {
+function registerIpc(
+  host: AcpHost,
+  publisher: WeChatPublisher,
+  configStore: AiConfigStore,
+  ipStore: IpCharacterStore,
+): void {
   ipcMain.handle(IPC_CHANNELS.PICK_FILES, async () => {
     const owner = mainWindow ?? BrowserWindow.getFocusedWindow() ?? undefined
     const options: Electron.OpenDialogOptions = {
@@ -376,6 +392,16 @@ function registerIpc(host: AcpHost, publisher: WeChatPublisher, configStore: AiC
   ipcMain.handle(IPC_CHANNELS.MARKETPLACE_LIST_THEMES, (_event, params) => marketplaceClient.listThemes(params))
   ipcMain.handle(IPC_CHANNELS.MARKETPLACE_GET_ITEM, (_event, id) => marketplaceClient.getItem(id))
   ipcMain.handle(IPC_CHANNELS.MARKETPLACE_INSTALL_ITEM, (_event, id) => marketplaceClient.installItem(id))
+
+  ipcMain.handle(IPC_CHANNELS.IP_LIST, () => ipStore.list())
+  ipcMain.handle(IPC_CHANNELS.IP_UPDATE, (_event, id: string, patch: DesktopIpCharacterUpdate) =>
+    ipStore.update(id, patch))
+  ipcMain.handle(IPC_CHANNELS.IP_SET_DEFAULT, (_event, id: string | null) =>
+    ipStore.setDefault(id))
+  ipcMain.handle(IPC_CHANNELS.IP_REMOVE, (_event, id: string) =>
+    ipStore.remove(id))
+  ipcMain.handle(IPC_CHANNELS.IP_READ_IMAGE, (_event, id: string) =>
+    ipStore.readImage(id))
 }
 
 function updateCopy() {
@@ -635,6 +661,14 @@ app.whenReady().then(() => {
     getConfig: () => aiConfigStore!.getResolvedImageGenConfig(),
   })
 
+  ipCharacterStore = new IpCharacterStore({
+    dir: path.join(userDataDir, `ip-characters`),
+  })
+  ipCharacterStore.onChange((library) => {
+    broadcastIpCharactersChanged(library)
+    void acpHost?.refreshIpSnapshots()
+  })
+
   acpEventBatcher = new AcpEventBatcher({
     batchMs: 16,
     onEmit: sendAcpEventImmediate,
@@ -643,6 +677,7 @@ app.whenReady().then(() => {
     dataDir: userDataDir,
     appVersion: app.getVersion(),
     skillsDir: resolveUnpackedSkillsDir(__dirname),
+    ipCharacters: ipCharacterStore,
     extraBuiltinAgents: buildExtraBuiltinAgents(),
     resolveAgentAvailability: async (agentId) => {
       if (agentId !== API_MODEL_AGENT_ID)
@@ -774,7 +809,7 @@ app.whenReady().then(() => {
   updateMode = mode
   updateState = createInitialUpdateState(app.getVersion(), mode)
 
-  registerIpc(acpHost, wechatPublisher, aiConfigStore)
+  registerIpc(acpHost, wechatPublisher, aiConfigStore, ipCharacterStore)
   mainWindow = createMainWindow()
 
   if (process.platform === `win32`) {
