@@ -107,7 +107,6 @@ async function main(args: string[]): Promise<void> {
     // x64 first: its zip becomes the legacy `path`, which also runs on Apple silicon.
     'latest-mac.yml': mergeFeeds([await read(`latest-mac-x64.yml`), await read(`latest-mac-arm64.yml`)]),
     'latest.yml': await read(`latest.yml`),
-    'latest-linux.yml': await read(`latest-linux.yml`),
   }
   for (const [name, feed] of Object.entries(feeds))
     await fs.writeFile(path.join(dir, name), absolutizeFeed(feed, baseUrl))

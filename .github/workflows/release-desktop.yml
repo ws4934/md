@@ -54,9 +54,6 @@ jobs:
           - os: windows-latest
             platform: win
             arch: x64
-          - os: ubuntu-latest
-            platform: linux
-            arch: x64
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -121,7 +118,6 @@ jobs:
             apps/desktop/release/*.dmg
             apps/desktop/release/*.zip
             apps/desktop/release/*.exe
-            apps/desktop/release/*.AppImage
             apps/desktop/release/*.blockmap
             apps/desktop/release/latest*.yml
           if-no-files-found: error
