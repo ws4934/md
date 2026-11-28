@@ -92,7 +92,10 @@ async function run(): Promise<void> {
   await buildDesktopBundles({ sourcemap: true })
 
   const electronBinary = require(`electron`) as unknown as string
-  const viteCliEntry = requireFromWeb.resolve(`vite/bin/vite.js`)
+  // vite's `exports` does not expose bin/vite.js; locate it through the exported package.json.
+  const vitePackageJson = requireFromWeb.resolve(`vite/package.json`)
+  const viteBin = (requireFromWeb(`vite/package.json`) as { bin: { vite: string } }).bin.vite
+  const viteCliEntry = path.join(path.dirname(vitePackageJson), viteBin)
   const viteProc = spawn(
     process.execPath,
     [viteCliEntry, `--mode`, `desktop`, `--host`, `127.0.0.1`, `--port`, String(DEV_PORT), `--strictPort`],
