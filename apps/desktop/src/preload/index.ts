@@ -11,6 +11,7 @@ import type {
   DesktopListRemoteModelsParams,
   DesktopMarketplaceListParams,
   DesktopModelApiConfigUpdate,
+  DesktopSkill,
   DesktopTestImageGenParams,
   DesktopUpdateState,
   WeChatPublishProgressEvent,
@@ -118,6 +119,20 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke(IPC_CHANNELS.IP_READ_IMAGE, id),
     onChanged: (callback: (library: DesktopIpLibrary) => void) =>
       subscribeChannel(IPC_CHANNELS.IP_CHANGED, callback),
+  },
+  skills: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.SKILLS_LIST),
+    read: (name: string) => ipcRenderer.invoke(IPC_CHANNELS.SKILLS_READ, name),
+    save: (name: string, content: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.SKILLS_SAVE, name, content),
+    create: (name: string) => ipcRenderer.invoke(IPC_CHANNELS.SKILLS_CREATE, name),
+    remove: (name: string) => ipcRenderer.invoke(IPC_CHANNELS.SKILLS_REMOVE, name),
+    reset: (name: string) => ipcRenderer.invoke(IPC_CHANNELS.SKILLS_RESET, name),
+    keepModified: (name: string) => ipcRenderer.invoke(IPC_CHANNELS.SKILLS_KEEP_MODIFIED, name),
+    setEnabled: (name: string, enabled: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.SKILLS_SET_ENABLED, name, enabled),
+    onChanged: (callback: (skills: DesktopSkill[]) => void) =>
+      subscribeChannel(IPC_CHANNELS.SKILLS_CHANGED, callback),
   },
 }
 

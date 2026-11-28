@@ -14,14 +14,19 @@ export interface SkillConfinementOptions {
   rootDir?: string
 }
 
-const MAX_SKILL_FILE_BYTES = 256 * 1024
+export const MAX_SKILL_FILE_BYTES = 256 * 1024
 const MAX_SKILL_SUPPORT_FILES = 200
 const MAX_SKILL_SUPPORT_DEPTH = 8
 const CASE_INSENSITIVE_FS = process.platform === `darwin` || process.platform === `win32`
 
 const FRONT_MATTER_RE = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/
 
-function parseSkillFrontMatter(raw: string): { name: string, description: string } | null {
+/** Skill names double as folder names and slash commands: no whitespace, path separators or leading dot. */
+export function isValidSkillName(name: string): boolean {
+  return Boolean(name) && !/[\s/\\]/.test(name) && !name.startsWith(`.`)
+}
+
+export function parseSkillFrontMatter(raw: string): { name: string, description: string } | null {
   const match = FRONT_MATTER_RE.exec(raw)
   if (!match)
     return null
@@ -44,7 +49,7 @@ function parseSkillFrontMatter(raw: string): { name: string, description: string
   if (typeof record.name !== `string`)
     return null
   const name = record.name.trim()
-  if (!name || /[\s/\\]/.test(name))
+  if (!isValidSkillName(name))
     return null
 
   if (record.description !== undefined && record.description !== null && typeof record.description !== `string`)

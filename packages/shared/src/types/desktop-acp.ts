@@ -340,6 +340,37 @@ export interface DesktopIpCharactersApi {
   onChanged: (callback: (library: DesktopIpLibrary) => void) => () => void
 }
 
+export interface DesktopSkill {
+  /** Folder name, equal to the SKILL.md front matter `name`. */
+  name: string
+  description: string
+  /** `bundled` ships with the app (read-only default); `custom` was created by the user. */
+  source: `bundled` | `custom`
+  /** Bundled skill replaced by the user's edited copy. */
+  modified: boolean
+  enabled: boolean
+  /** The app now ships a different bundled SKILL.md than the one the user's copy was based on. */
+  bundledUpdated: boolean
+  /** Why the skill is invalid; invalid skills are left out of agent workspaces. */
+  error?: string
+}
+
+export interface DesktopSkillsApi {
+  list: () => Promise<DesktopSkill[]>
+  /** Raw SKILL.md of the active copy (the user's copy when modified). */
+  read: (name: string) => Promise<string>
+  save: (name: string, content: string) => Promise<DesktopSkill[]>
+  create: (name: string) => Promise<DesktopSkill[]>
+  /** Deletes a custom skill. */
+  remove: (name: string) => Promise<DesktopSkill[]>
+  /** Drops the user's copy of a bundled skill. */
+  reset: (name: string) => Promise<DesktopSkill[]>
+  /** Keeps the user's copy and clears the `bundledUpdated` flag. */
+  keepModified: (name: string) => Promise<DesktopSkill[]>
+  setEnabled: (name: string, enabled: boolean) => Promise<DesktopSkill[]>
+  onChanged: (callback: (skills: DesktopSkill[]) => void) => () => void
+}
+
 export interface DesktopBridge {
   isDesktop: true
   platform: string
@@ -349,6 +380,7 @@ export interface DesktopBridge {
   updates: DesktopUpdatesApi
   marketplace: DesktopMarketplaceApi
   ipCharacters: DesktopIpCharactersApi
+  skills: DesktopSkillsApi
   pickFiles: () => Promise<DesktopPickedFile[]>
   pickImage: () => Promise<DesktopPickedImage | null>
   openExternal: (url: string) => Promise<void>

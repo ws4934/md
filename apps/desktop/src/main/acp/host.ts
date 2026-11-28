@@ -79,7 +79,7 @@ export interface AcpHostOptions {
   isImageGenConfigured?: () => boolean | Promise<boolean>
   /** App version; persisted probe results from other versions are discarded. */
   appVersion?: string
-  /** Directory of bundled `<name>/SKILL.md` skills copied into every agent workspace and the probe cwd. */
+  /** Directory of `<name>/SKILL.md` skills (the effective set) copied into every agent workspace and the probe cwd. */
   skillsDir?: string
   ipCharacters?: IpCharacterStore
   onEvent?: (event: AcpHostEvent) => void
@@ -343,7 +343,8 @@ export class AcpHost {
     return this.registry.cancelInstall(agentId)
   }
 
-  invalidateAgentProbe(agentId: string): void {
+  /** Omit `agentId` to drop every agent's probe, e.g. after the skill set changed. */
+  invalidateAgentProbe(agentId?: string): void {
     this.probeCache.invalidate(agentId)
   }
 

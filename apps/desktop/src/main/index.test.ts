@@ -1,4 +1,4 @@
-import type { AcpAgentStatus, AcpHostEvent, AcpProbeResult } from '@md/shared/types'
+import type { AcpAgentStatus, AcpHostEvent, AcpProbeResult, DesktopSkill } from '@md/shared/types'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -224,6 +224,29 @@ describe(`desktop main index wiring`, () => {
     const probeMissing = await invokeIpc<AcpProbeResult>(IPC_CHANNELS.ACP_PROBE_AGENT, API_MODEL_AGENT_ID, { force: true })
     expect(probeMissing.models).toEqual([])
     expect(probeMissing.error).toBeTruthy()
+  })
+
+  it(`serves skills over IPC and applies changes to the API model's slash commands`, async () => {
+    apiAgentScriptExists = true
+    await invokeIpc(IPC_CHANNELS.AI_UPDATE_MODEL_API, {
+      protocol: `openai-compatible`,
+      baseUrl: `https://api.openai.com/v1`,
+      apiKey: `sk-main-test-key`,
+      enabledModels: [`gpt-5.4`],
+      defaultModel: `gpt-5.4`,
+    })
+    const commandNames = async () =>
+      (await invokeIpc<AcpProbeResult>(IPC_CHANNELS.ACP_PROBE_AGENT, API_MODEL_AGENT_ID)).commands.map(c => c.name)
+
+    const created = await invokeIpc<DesktopSkill[]>(IPC_CHANNELS.SKILLS_CREATE, `ipc-skill`)
+    expect(created.find(s => s.name === `ipc-skill`)).toMatchObject({ source: `custom`, enabled: true })
+    expect(await invokeIpc<string>(IPC_CHANNELS.SKILLS_READ, `ipc-skill`)).toContain(`name: ipc-skill`)
+    expect(await commandNames()).toContain(`ipc-skill`)
+
+    await invokeIpc(IPC_CHANNELS.SKILLS_SET_ENABLED, `ipc-skill`, false)
+    expect(await commandNames()).not.toContain(`ipc-skill`)
+    await expect(invokeIpc(IPC_CHANNELS.SKILLS_SAVE, `ipc-skill`, `no front matter`)).rejects.toThrow(/invalidFrontMatter/)
+    expect((await invokeIpc<DesktopSkill[]>(IPC_CHANNELS.SKILLS_LIST)).find(s => s.name === `ipc-skill`)?.enabled).toBe(false)
   })
 
   it(`disposes acpEventBatcher after awaiting acpHost.dispose in QuitGuard shutdown`, async () => {

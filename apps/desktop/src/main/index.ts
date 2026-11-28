@@ -8,6 +8,7 @@ import type {
   DesktopListRemoteModelsParams,
   DesktopMarketplaceListParams,
   DesktopModelApiConfigUpdate,
+  DesktopSkill,
   DesktopTestImageGenParams,
   DesktopUpdateState,
   WeChatPublishProgressEvent,
@@ -67,6 +68,7 @@ import {
 import { IpCharacterStore } from './ip-characters'
 import { createDesktopMarketplaceClient } from './marketplace'
 import { QuitGuard } from './quit-guard'
+import { SkillStore } from './skill-store'
 import { mimeForExtension, WeChatPublisher } from './wechat/publisher'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -208,6 +210,13 @@ function broadcastIpCharactersChanged(library: DesktopIpLibrary): void {
   }
 }
 
+function broadcastSkillsChanged(skills: DesktopSkill[]): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed())
+      win.webContents.send(IPC_CHANNELS.SKILLS_CHANGED, skills)
+  }
+}
+
 function dispatchUpdateEvent(event: UpdaterStateEvent): void {
   const next = reduceUpdateState(updateState, event)
   if (areUpdateStatesEqual(updateState, next))
@@ -333,6 +342,7 @@ function registerIpc(
   publisher: WeChatPublisher,
   configStore: AiConfigStore,
   ipStore: IpCharacterStore,
+  skills: SkillStore,
 ): void {
   handleTrustedIpc(IPC_CHANNELS.PICK_FILES, async () => {
     const owner = mainWindow ?? BrowserWindow.getFocusedWindow() ?? undefined
@@ -521,6 +531,17 @@ function registerIpc(
     ipStore.remove(id))
   handleTrustedIpc(IPC_CHANNELS.IP_READ_IMAGE, (_event, id: string) =>
     ipStore.readImage(id))
+
+  handleTrustedIpc(IPC_CHANNELS.SKILLS_LIST, () => skills.list())
+  handleTrustedIpc(IPC_CHANNELS.SKILLS_READ, (_event, name: string) => skills.read(name))
+  handleTrustedIpc(IPC_CHANNELS.SKILLS_SAVE, (_event, name: string, content: string) =>
+    skills.save(name, content))
+  handleTrustedIpc(IPC_CHANNELS.SKILLS_CREATE, (_event, name: string) => skills.create(name))
+  handleTrustedIpc(IPC_CHANNELS.SKILLS_REMOVE, (_event, name: string) => skills.remove(name))
+  handleTrustedIpc(IPC_CHANNELS.SKILLS_RESET, (_event, name: string) => skills.reset(name))
+  handleTrustedIpc(IPC_CHANNELS.SKILLS_KEEP_MODIFIED, (_event, name: string) => skills.keepModified(name))
+  handleTrustedIpc(IPC_CHANNELS.SKILLS_SET_ENABLED, (_event, name: string, enabled: boolean) =>
+    skills.setEnabled(name, enabled))
 }
 
 function updateCopy() {
@@ -792,14 +813,13 @@ function startAutoUpdate(mode: UpdateMode): void {
   updateIntervalTimer.unref?.()
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (!DEV_SERVER_URL)
     registerAppProtocol()
 
   const userDataDir = app.getPath(`userData`)
   const apiAgentScript = resolveUnpackedAgentScript(__dirname, `api-agent.js`)
   const imageMcpScript = resolveUnpackedAgentScript(__dirname, `image-mcp.js`)
-  const skillsDir = resolveUnpackedSkillsDir(__dirname)
 
   aiConfigStore = new AiConfigStore({
     configPath: path.join(userDataDir, `ai-config.json`),
@@ -822,6 +842,23 @@ app.whenReady().then(() => {
     broadcastIpCharactersChanged(library)
     void acpHost?.refreshIpSnapshots()
   })
+
+  const skillStore = new SkillStore({
+    bundledDir: resolveUnpackedSkillsDir(__dirname),
+    dataDir: userDataDir,
+  })
+  const unsubscribeSkills = skillStore.onChange((skills) => {
+    broadcastSkillsChanged(skills)
+    // Running sessions keep the skills they started with; new sessions and probes copy the new set.
+    acpHost?.invalidateAgentProbe()
+  })
+  try {
+    await skillStore.materialize()
+  }
+  catch (error) {
+    console.warn(`[skills] failed to build the effective skill set:`, error)
+  }
+  const skillsDir = skillStore.effectiveDir
 
   acpEventBatcher = new AcpEventBatcher({
     batchMs: 16,
@@ -918,6 +955,7 @@ app.whenReady().then(() => {
     dispose: async () => {
       clearBackgroundTimers()
       unsubscribeIpCharacters()
+      unsubscribeSkills()
       try {
         await acpHost?.dispose()
       }
@@ -966,7 +1004,7 @@ app.whenReady().then(() => {
   updateMode = mode
   updateState = createInitialUpdateState(app.getVersion(), mode)
 
-  registerIpc(acpHost, wechatPublisher, aiConfigStore, ipCharacterStore)
+  registerIpc(acpHost, wechatPublisher, aiConfigStore, ipCharacterStore, skillStore)
   mainWindow = createMainWindow()
 
   if (process.platform === `win32`) {

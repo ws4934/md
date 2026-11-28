@@ -43,4 +43,13 @@ export const IPC_CHANNELS = {
   IP_REMOVE: `md:ip:remove`,
   IP_READ_IMAGE: `md:ip:read-image`,
   IP_CHANGED: `md:ip:changed`,
+  SKILLS_LIST: `md:skills:list`,
+  SKILLS_READ: `md:skills:read`,
+  SKILLS_SAVE: `md:skills:save`,
+  SKILLS_CREATE: `md:skills:create`,
+  SKILLS_REMOVE: `md:skills:remove`,
+  SKILLS_RESET: `md:skills:reset`,
+  SKILLS_KEEP_MODIFIED: `md:skills:keep-modified`,
+  SKILLS_SET_ENABLED: `md:skills:set-enabled`,
+  SKILLS_CHANGED: `md:skills:changed`,
 } as const
