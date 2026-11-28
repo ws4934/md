@@ -71,6 +71,16 @@ describe(`blockquote background`, () => {
     expect(css).toContain(`background: transparent;`)
   })
 
+  it(`falls back through functions nested more than one level deep`, () => {
+    const css = processCSS([
+      generateCSSVariables(baseConfig),
+      `blockquote { background: var(\n    --md-blockquote-background,\n    color-mix(in srgb, var(--md-primary-color) 8%, rgba(120, 116, 130, 0.07))\n  ); }`,
+    ].join(`\n\n`))
+
+    expect(css).toContain(`background: color-mix(in srgb, ${baseConfig.primaryColor} 8%, rgba(120, 116, 130, 0.07));`)
+    expect(css).not.toMatch(/var\(\s*--md-/)
+  })
+
   it(`resolves a nested primary colour inside color-mix`, () => {
     const variables = generateCSSVariables({
       ...baseConfig,

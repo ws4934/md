@@ -12,23 +12,69 @@ function extractCSSVariables(css: string): Map<string, string> {
   return vars
 }
 
+/** Index of the `)` closing the `(` at `open`, or -1 when unbalanced. */
+function findClosingParen(text: string, open: number): number {
+  let depth = 0
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === `(`) {
+      depth++
+    }
+    else if (text[i] === `)`) {
+      depth--
+      if (depth === 0)
+        return i
+    }
+  }
+  return -1
+}
+
+function indexOfTopLevelComma(text: string): number {
+  let depth = 0
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === `(`)
+      depth++
+    else if (text[i] === `)`)
+      depth--
+    else if (text[i] === `,` && depth === 0)
+      return i
+  }
+  return -1
+}
+
+/**
+ * One pass of var() substitution. Fallbacks are found by paren matching, so
+ * they may nest functions to any depth, e.g. color-mix(…, rgba(…)).
+ */
+function replaceVarsOnce(css: string, vars: Map<string, string>): string {
+  let out = ``
+  let from = 0
+  for (;;) {
+    const start = css.indexOf(`var(`, from)
+    const end = start === -1 ? -1 : findClosingParen(css, start + 3)
+    if (end === -1)
+      return out + css.slice(from)
+
+    const inner = css.slice(start + 4, end)
+    const comma = indexOfTopLevelComma(inner)
+    const varName = (comma === -1 ? inner : inner.slice(0, comma)).trim()
+    const fallback = comma === -1 ? `` : inner.slice(comma + 1).trim()
+    const val = vars.get(varName)
+    out += css.slice(from, start) + (val ?? (fallback || `var(${varName})`))
+    from = end + 1
+  }
+}
+
 /** Replace var(--xxx) with values from the CSS string (fallbacks & nesting supported) */
 export function processCSS(css: string): string {
   const vars = extractCSSVariables(css)
 
   // Do not override from getComputedStyle — stale injected theme would lag one click behind
-  const varRegex = /var\(\s*(--[\w-]+)\s*(?:,([^()]*(?:\([^()]*\)[^()]*)*))?\)/g
   let result = css
   let prev = ``
   let iterations = 0
   while (result !== prev && iterations < 10) {
     prev = result
-    result = result.replace(varRegex, (_, varName: string, fallback?: string) => {
-      const val = vars.get(varName)
-      if (val !== undefined)
-        return val
-      return fallback ? fallback.trim() : `var(${varName})`
-    })
+    result = replaceVarsOnce(result, vars)
     iterations++
   }
 

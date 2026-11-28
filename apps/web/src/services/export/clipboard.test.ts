@@ -436,3 +436,44 @@ describe(`resolveColorMix`, () => {
     expect(output).not.toContain(`color-mix(`)
   })
 })
+
+describe(`built-in themes on WeChat copy`, () => {
+  const themeDir = path.resolve(__dirname, `../../../../../packages/shared/src/configs/theme-css`)
+  const themes = fs.readdirSync(themeDir).filter(file => file.endsWith(`.css`) && file !== `base.css`).map(file => file.replace(/\.css$/, ``))
+  const sample = [
+    `<LeadQuote>导语</LeadQuote>`,
+    `> 引用`,
+    `正文里有**加粗**、++下划线++、==高亮==和**++重点++**。`,
+    `![图注](https://example.com/a.png)`,
+    `<Divider />`,
+    `<Divider text="后来" />`,
+    `<StatCard value="12500" unit="元" label="每月固定开销" note="房贷 6200" />`,
+    `<CompareCard before="以前" after="现在" />`,
+    `<QuoteCard source="出处">一句话</QuoteCard>`,
+    `<SourceList items='["作者《书名》，2024年"]' />`,
+    `<EndMark />`,
+  ].join(`\n\n`)
+
+  it.each(themes)(`%s leaves no CSS variables or color-mix in the copied HTML`, async (theme) => {
+    const vars = {
+      primaryColor: `#0F4C81`,
+      fontFamily: defaultStyleConfig.fontFamily,
+      fontSize: defaultStyleConfig.fontSize,
+      lineHeight: defaultStyleConfig.lineHeight,
+      blockSpacing: defaultStyleConfig.blockSpacing,
+    }
+    const files = theme === `default` ? [`default.css`] : [`default.css`, `${theme}.css`]
+    const themeCss = files.map(file => fs.readFileSync(path.join(themeDir, file), `utf8`)).join(`\n`)
+    await applyTheme({ themeName: theme, themeCSS: themeCss, variables: vars })
+
+    const root = document.createElement(`div`)
+    root.innerHTML = modifyHtmlContent(sample, initRenderer({ legend: `alt` }))
+    stripInvalidCssForJuice(root)
+    const html = (await getStylesToAdd()) + root.innerHTML
+    const inlined = juice(sanitizeHtmlCssForJuice(html), { inlinePseudoElements: true, preserveImportant: true, resolveCSSVariables: false })
+    const output = applyWeChatCssVarReplacements(inlined, vars)
+
+    expect(output).not.toMatch(/var\(/)
+    expect(output).not.toContain(`color-mix(`)
+  })
+})
