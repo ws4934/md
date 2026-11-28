@@ -128,3 +128,272 @@ hr {
   transform: none;
   margin: calc(3em * var(--md-block-spacing)) auto;
 }
+
+/* ==================== Layout components ==================== */
+/* Lead: centred text sandwiched between two short hairlines */
+.md-lead {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  margin: calc(2.5em * var(--md-block-spacing)) 8px;
+  text-align: center;
+}
+
+.md-lead .md-lead-mark {
+  display: block;
+  width: 24px;
+  height: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 45%, transparent);
+  margin: 0 auto;
+  background: none;
+  font-size: 0;
+}
+
+.md-lead .md-lead-text {
+  margin: 0;
+  padding: 1.3em 0.6em;
+  color: hsl(var(--foreground));
+  font-size: 1.08em;
+  line-height: 2;
+  letter-spacing: 0.12em;
+  text-align: center;
+}
+
+/* Divider: a single hairline; the label floats in whitespace */
+.md-divider {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(3em * var(--md-block-spacing)) 8px;
+  line-height: 1;
+  text-align: center;
+}
+
+.md-divider .md-divider-line {
+  display: inline-block;
+  width: 22%;
+  height: 0;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 22%, transparent);
+  background: none;
+  font-size: 0;
+  vertical-align: middle;
+}
+
+.md-divider .md-divider-dot {
+  display: none;
+}
+
+.md-divider .md-divider-text {
+  display: inline-block;
+  padding-left: 0.35em;
+  margin: 0 16px;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.78em;
+  line-height: 1.6;
+  letter-spacing: 0.35em;
+  vertical-align: middle;
+}
+
+/* Stat: light-weight figure inside a hairline outline */
+.md-stat {
+  padding: 1.6em 1em 1.4em;
+  border: 1px solid color-mix(in srgb, hsl(var(--foreground)) 18%, transparent);
+  border-radius: 0;
+  background: none;
+  margin: calc(2.2em * var(--md-block-spacing)) 8px;
+  text-align: center;
+}
+
+.md-stat .md-stat-value {
+  margin: 0;
+  color: hsl(var(--foreground));
+  line-height: 1.15;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
+.md-stat .md-stat-number {
+  color: hsl(var(--foreground));
+  font-size: 2.6em;
+  font-weight: 300;
+  letter-spacing: 0.04em;
+}
+
+.md-stat .md-stat-unit {
+  margin-left: 4px;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.85em;
+}
+
+.md-stat .md-stat-label {
+  margin: 0.8em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 65%, transparent);
+  font-size: 0.8em;
+  line-height: 1.6;
+  letter-spacing: 0.25em;
+  text-align: center;
+}
+
+.md-stat .md-stat-note {
+  margin: 0.6em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 45%, transparent);
+  font-size: 0.75em;
+  line-height: 1.7;
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+
+/* Compare: no fills; one hairline between the columns */
+.md-compare {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 8px 0;
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(2.2em * var(--md-block-spacing)) 0;
+}
+
+.md-compare .md-compare-col {
+  display: table-cell;
+  width: 50%;
+  padding: 0.2em 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  vertical-align: top;
+}
+
+.md-compare .md-compare-before {
+  padding-right: 0.9em;
+}
+
+.md-compare .md-compare-after {
+  padding-left: 1.1em;
+  border-left: 1px solid color-mix(in srgb, hsl(var(--foreground)) 18%, transparent);
+}
+
+.md-compare .md-compare-title {
+  margin: 0 0 0.6em;
+  font-size: 0.75em;
+  line-height: 1.6;
+  letter-spacing: 0.3em;
+}
+
+.md-compare .md-compare-text {
+  margin: 0;
+  font-size: 0.9em;
+  line-height: 1.9;
+  letter-spacing: 0.06em;
+  text-align: left;
+}
+
+.md-compare-before .md-compare-title,
+.md-compare-before .md-compare-text {
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+}
+
+.md-compare-after .md-compare-title {
+  color: hsl(var(--foreground));
+  font-weight: bold;
+}
+
+.md-compare-after .md-compare-text {
+  color: hsl(var(--foreground));
+}
+
+/* Quote: indented under a single left hairline */
+.md-quote {
+  padding: 0.1em 0 0.1em 1.2em;
+  border: none;
+  border-left: 1px solid color-mix(in srgb, hsl(var(--foreground)) 35%, transparent);
+  border-radius: 0;
+  background: none;
+  margin: calc(2.2em * var(--md-block-spacing)) 8px;
+}
+
+.md-quote .md-quote-text {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 85%, transparent);
+  font-size: 0.98em;
+  line-height: 2;
+  letter-spacing: 0.08em;
+  text-align: left;
+}
+
+.md-quote .md-quote-source {
+  margin: 0.7em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 45%, transparent);
+  font-size: 0.75em;
+  line-height: 1.6;
+  letter-spacing: 0.15em;
+  text-align: left;
+}
+
+/* Sources: quiet footnote block under a short hairline */
+.md-sources {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(3em * var(--md-block-spacing)) 8px calc(1.5em * var(--md-block-spacing));
+}
+
+.md-sources .md-sources-title {
+  display: inline-block;
+  padding: 0.8em 0 0;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 35%, transparent);
+  margin: 0 0 0.4em;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.75em;
+  line-height: 1.8;
+  letter-spacing: 0.3em;
+}
+
+.md-sources .md-sources-item {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 45%, transparent);
+  font-size: 0.75em;
+  line-height: 1.9;
+  letter-spacing: 0.05em;
+  text-align: left;
+  word-break: break-all;
+}
+
+/* End mark: widely spaced small caps between short hairlines */
+.md-end {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(3.5em * var(--md-block-spacing)) 8px calc(2em * var(--md-block-spacing));
+  line-height: 1;
+  text-align: center;
+}
+
+.md-end .md-end-line {
+  display: inline-block;
+  width: 24px;
+  height: 0;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 30%, transparent);
+  background: none;
+  font-size: 0;
+  vertical-align: middle;
+}
+
+.md-end .md-end-text {
+  display: inline-block;
+  padding-left: 0.4em;
+  margin: 0 14px;
+  color: color-mix(in srgb, hsl(var(--foreground)) 45%, transparent);
+  font-size: 0.7em;
+  line-height: 1.6;
+  letter-spacing: 0.4em;
+  vertical-align: middle;
+}

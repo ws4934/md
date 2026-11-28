@@ -127,3 +127,305 @@ hr {
   transform: none;
   margin: calc(2.5em * var(--md-block-spacing)) auto;
 }
+
+/* ==================== Layout components ==================== */
+/* Lead: serif standfirst between a thick-thin rule pair and its mirror */
+.md-lead {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  margin: calc(1em * var(--md-block-spacing)) 8px calc(2em * var(--md-block-spacing));
+  text-align: left;
+}
+
+.md-lead .md-lead-mark {
+  display: block;
+  width: auto;
+  height: 2px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  margin: 0;
+  background: none;
+  font-size: 0;
+}
+
+.md-lead .md-lead-mark-start {
+  border-top: 3px solid var(--md-primary-color);
+  border-bottom: 1px solid var(--md-primary-color);
+}
+
+.md-lead .md-lead-mark-end {
+  border-top: 1px solid var(--md-primary-color);
+  border-bottom: 3px solid var(--md-primary-color);
+}
+
+.md-lead .md-lead-text {
+  margin: 0;
+  padding: 0.85em 0.1em;
+  color: hsl(var(--foreground));
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 1.2em;
+  line-height: 1.7;
+  letter-spacing: 0.04em;
+  text-align: justify;
+}
+
+/* Divider: hairlines around a small accent diamond; the label is set in serif */
+.md-divider {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(2.5em * var(--md-block-spacing)) 8px;
+  line-height: 1;
+  text-align: center;
+}
+
+.md-divider .md-divider-line {
+  display: inline-block;
+  width: 30%;
+  height: 0;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 30%, transparent);
+  background: none;
+  font-size: 0;
+  vertical-align: middle;
+}
+
+.md-divider .md-divider-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 14px;
+  border: none;
+  border-radius: 0;
+  background: var(--md-primary-color);
+  font-size: 0;
+  vertical-align: middle;
+  -webkit-transform: rotate(45deg);
+  transform: rotate(45deg);
+}
+
+.md-divider .md-divider-text {
+  display: inline-block;
+  padding-left: 0.3em;
+  margin: 0 14px;
+  color: var(--md-primary-color);
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 0.9em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.3em;
+  vertical-align: middle;
+}
+
+/* Stat: oversized serif figure over a hairline with the caption below */
+.md-stat {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  margin: calc(2em * var(--md-block-spacing)) 8px;
+  text-align: left;
+}
+
+.md-stat .md-stat-value {
+  margin: 0;
+  padding: 0 0 0.25em;
+  border-bottom: 1px solid hsl(var(--foreground));
+  color: var(--md-primary-color);
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  line-height: 1.1;
+  letter-spacing: 0;
+  text-align: left;
+}
+
+.md-stat .md-stat-number {
+  color: var(--md-primary-color);
+  font-size: 3.2em;
+  font-weight: normal;
+  letter-spacing: 0.01em;
+}
+
+.md-stat .md-stat-unit {
+  margin-left: 6px;
+  color: hsl(var(--foreground));
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 1.1em;
+  font-weight: bold;
+}
+
+.md-stat .md-stat-label {
+  margin: 0.6em 0 0;
+  color: hsl(var(--foreground));
+  font-size: 0.9em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.08em;
+  text-align: left;
+}
+
+.md-stat .md-stat-note {
+  margin: 0.2em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.8em;
+  line-height: 1.7;
+  letter-spacing: 0.04em;
+  text-align: left;
+}
+
+/* Compare: two columns each headed by its own rule; the after rule is thick */
+.md-compare {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 8px 0;
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(2em * var(--md-block-spacing)) 0;
+}
+
+.md-compare .md-compare-col {
+  display: table-cell;
+  width: 50%;
+  padding: 0.55em 0.2em 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  vertical-align: top;
+}
+
+.md-compare .md-compare-before {
+  padding-right: 0.5em;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 45%, transparent);
+}
+
+.md-compare .md-compare-after {
+  padding-left: 0.5em;
+  border-top: 3px solid var(--md-primary-color);
+}
+
+.md-compare .md-compare-title {
+  margin: 0 0 0.35em;
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 1.05em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.12em;
+}
+
+.md-compare .md-compare-text {
+  margin: 0;
+  font-size: 0.9em;
+  line-height: 1.75;
+  letter-spacing: 0.04em;
+  text-align: left;
+}
+
+.md-compare-before .md-compare-title {
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+}
+
+.md-compare-before .md-compare-text {
+  color: color-mix(in srgb, hsl(var(--foreground)) 65%, transparent);
+}
+
+.md-compare-after .md-compare-title {
+  color: var(--md-primary-color);
+}
+
+/* Quote: serif pull quote on a thick accent rule */
+.md-quote {
+  padding: 0.1em 0 0.1em 1em;
+  border: none;
+  border-left: 3px solid var(--md-primary-color);
+  border-radius: 0;
+  background: none;
+  margin: calc(2em * var(--md-block-spacing)) 8px;
+}
+
+.md-quote .md-quote-text {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 1.08em;
+  line-height: 1.75;
+  letter-spacing: 0.04em;
+  text-align: left;
+}
+
+.md-quote .md-quote-source {
+  margin: 0.6em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.78em;
+  line-height: 1.6;
+  letter-spacing: 0.1em;
+  text-align: left;
+}
+
+/* Sources: closing column under a full-width rule */
+.md-sources {
+  padding: 0.7em 0 0;
+  border: none;
+  border-top: 1px solid hsl(var(--foreground));
+  background: none;
+  margin: calc(2.5em * var(--md-block-spacing)) 8px calc(1.5em * var(--md-block-spacing));
+}
+
+.md-sources .md-sources-title {
+  margin: 0 0 0.3em;
+  color: hsl(var(--foreground));
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 0.85em;
+  font-weight: bold;
+  line-height: 1.8;
+  letter-spacing: 0.15em;
+}
+
+.md-sources .md-sources-item {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.8em;
+  line-height: 1.8;
+  letter-spacing: 0.03em;
+  text-align: left;
+  word-break: break-all;
+}
+
+/* End mark: a small solid accent block between long hairlines */
+.md-end {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(3em * var(--md-block-spacing)) 8px calc(1.5em * var(--md-block-spacing));
+  line-height: 1;
+  text-align: center;
+}
+
+.md-end .md-end-line {
+  display: inline-block;
+  width: 28%;
+  height: 0;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 30%, transparent);
+  background: none;
+  font-size: 0;
+  vertical-align: middle;
+}
+
+.md-end .md-end-text {
+  display: inline-block;
+  padding: 0.15em 0.45em 0.15em 0.6em;
+  margin: 0 12px;
+  color: #fff;
+  background: var(--md-primary-color);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 0.7em;
+  font-weight: bold;
+  line-height: 1.5;
+  letter-spacing: 0.15em;
+  vertical-align: middle;
+}

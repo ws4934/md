@@ -108,3 +108,294 @@ hr {
   transform: none;
   margin: calc(2em * var(--md-block-spacing)) 8px;
 }
+
+/* ==================== Layout components ==================== */
+/* Lead: cream block opened by a short thick accent bar */
+.md-lead {
+  padding: 1.3em 1.4em 1.4em;
+  border: none;
+  border-radius: 14px;
+  background: color-mix(in srgb, #f2c27b 22%, transparent);
+  margin: calc(1em * var(--md-block-spacing)) 0 calc(1.8em * var(--md-block-spacing));
+  text-align: left;
+}
+
+.md-lead .md-lead-mark {
+  display: none;
+}
+
+.md-lead .md-lead-mark-start {
+  display: block;
+  width: 40px;
+  height: 6px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  margin: 0 0 0.9em;
+  background: var(--md-primary-color);
+  font-size: 0;
+}
+
+.md-lead .md-lead-text {
+  margin: 0;
+  color: color-mix(in srgb, var(--md-primary-color) 80%, hsl(var(--foreground)));
+  font-size: 1.15em;
+  font-weight: bold;
+  line-height: 1.8;
+  letter-spacing: 0.06em;
+  text-align: left;
+}
+
+/* Divider: dotted honey lines around a short rounded bar */
+.md-divider {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(2.2em * var(--md-block-spacing)) 8px;
+  line-height: 1;
+  text-align: center;
+}
+
+.md-divider .md-divider-line {
+  display: inline-block;
+  width: 22%;
+  height: 0;
+  border: none;
+  border-top: 2px dotted color-mix(in srgb, #c9955a 55%, transparent);
+  background: none;
+  font-size: 0;
+  vertical-align: middle;
+}
+
+.md-divider .md-divider-dot {
+  display: inline-block;
+  width: 20px;
+  height: 5px;
+  margin: 0 10px;
+  border: none;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--md-primary-color) 70%, transparent);
+  font-size: 0;
+  vertical-align: middle;
+}
+
+.md-divider .md-divider-text {
+  display: inline-block;
+  padding: 0.25em 0.85em 0.25em 1em;
+  border-radius: 8px;
+  margin: 0 10px;
+  color: color-mix(in srgb, var(--md-primary-color) 80%, hsl(var(--foreground)));
+  background: color-mix(in srgb, #f2c27b 30%, transparent);
+  font-size: 0.85em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.15em;
+  vertical-align: middle;
+}
+
+/* Stat: cream block with a big accent figure and a dotted rule above the note */
+.md-stat {
+  padding: 1.1em 1.4em 1.2em;
+  border: none;
+  border-radius: 14px;
+  background: color-mix(in srgb, #f2c27b 18%, transparent);
+  margin: calc(1.5em * var(--md-block-spacing)) 0;
+  text-align: left;
+}
+
+.md-stat .md-stat-value {
+  margin: 0;
+  color: var(--md-primary-color);
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  text-align: left;
+}
+
+.md-stat .md-stat-number {
+  color: var(--md-primary-color);
+  font-size: 2.5em;
+  font-weight: bold;
+  letter-spacing: 0.02em;
+}
+
+.md-stat .md-stat-unit {
+  margin-left: 4px;
+  color: color-mix(in srgb, var(--md-primary-color) 80%, hsl(var(--foreground)));
+  font-size: 1em;
+  font-weight: bold;
+}
+
+.md-stat .md-stat-label {
+  margin: 0.35em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 82%, #9a6b3c);
+  font-size: 0.95em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.08em;
+  text-align: left;
+}
+
+.md-stat .md-stat-note {
+  padding: 0.6em 0 0;
+  border-top: 2px dotted color-mix(in srgb, #c9955a 40%, transparent);
+  margin: 0.7em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.8em;
+  line-height: 1.7;
+  letter-spacing: 0.05em;
+  text-align: left;
+}
+
+/* Compare: one cream block split by a dotted rule; titles as tags */
+.md-compare {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  padding: 0;
+  border: none;
+  border-radius: 14px;
+  background: color-mix(in srgb, #f2c27b 16%, transparent);
+  margin: calc(1.5em * var(--md-block-spacing)) 0;
+}
+
+.md-compare .md-compare-col {
+  display: table-cell;
+  width: 50%;
+  padding: 1em 1.1em 1.1em;
+  border: none;
+  background: none;
+  vertical-align: top;
+}
+
+.md-compare .md-compare-after {
+  border-left: 2px dotted color-mix(in srgb, #c9955a 45%, transparent);
+}
+
+.md-compare .md-compare-title {
+  display: inline-block;
+  padding: 0.1em 0.7em 0.1em 0.8em;
+  border-radius: 1em;
+  margin: 0 0 0.6em;
+  font-size: 0.78em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.1em;
+}
+
+.md-compare .md-compare-text {
+  margin: 0;
+  font-size: 0.9em;
+  line-height: 1.75;
+  letter-spacing: 0.05em;
+  text-align: left;
+}
+
+.md-compare-before .md-compare-title {
+  color: color-mix(in srgb, hsl(var(--foreground)) 60%, transparent);
+  background: color-mix(in srgb, #c9955a 18%, transparent);
+}
+
+.md-compare-before .md-compare-text {
+  color: color-mix(in srgb, hsl(var(--foreground)) 60%, #9a6b3c);
+}
+
+.md-compare-after .md-compare-title {
+  color: #fff;
+  background: var(--md-primary-color);
+}
+
+.md-compare-after .md-compare-text {
+  color: color-mix(in srgb, hsl(var(--foreground)) 82%, #9a6b3c);
+}
+
+/* Quote: soft card with a honey outline */
+.md-quote {
+  padding: 1.1em 1.3em;
+  border: 1px solid color-mix(in srgb, #c9955a 35%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, #f2c27b 8%, transparent);
+  margin: calc(1.5em * var(--md-block-spacing)) 0;
+}
+
+.md-quote .md-quote-text {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 82%, #9a6b3c);
+  font-size: 0.98em;
+  line-height: 1.9;
+  letter-spacing: 0.06em;
+  text-align: left;
+}
+
+.md-quote .md-quote-source {
+  margin: 0.5em 0 0;
+  color: color-mix(in srgb, var(--md-primary-color) 80%, hsl(var(--foreground)));
+  font-size: 0.82em;
+  line-height: 1.6;
+  letter-spacing: 0.05em;
+  text-align: right;
+}
+
+/* Sources: small cream footer card */
+.md-sources {
+  padding: 0.9em 1.2em 1em;
+  border: none;
+  border-radius: 12px;
+  background: color-mix(in srgb, #f2c27b 12%, transparent);
+  margin: calc(2.5em * var(--md-block-spacing)) 0 calc(1.5em * var(--md-block-spacing));
+}
+
+.md-sources .md-sources-title {
+  margin: 0 0 0.3em;
+  color: color-mix(in srgb, var(--md-primary-color) 80%, hsl(var(--foreground)));
+  font-size: 0.85em;
+  font-weight: bold;
+  line-height: 1.8;
+  letter-spacing: 0.1em;
+}
+
+.md-sources .md-sources-item {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+  font-size: 0.8em;
+  line-height: 1.8;
+  letter-spacing: 0.03em;
+  text-align: left;
+  word-break: break-all;
+}
+
+/* End mark: honey pill between short dotted lines */
+.md-end {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(3em * var(--md-block-spacing)) 8px calc(1.5em * var(--md-block-spacing));
+  line-height: 1;
+  text-align: center;
+}
+
+.md-end .md-end-line {
+  display: inline-block;
+  width: 40px;
+  height: 0;
+  border: none;
+  border-top: 2px dotted color-mix(in srgb, #c9955a 55%, transparent);
+  background: none;
+  font-size: 0;
+  vertical-align: middle;
+}
+
+.md-end .md-end-text {
+  display: inline-block;
+  padding: 0.2em 0.9em 0.2em 1.15em;
+  border-radius: 2em;
+  margin: 0 10px;
+  color: color-mix(in srgb, #9a6b3c 85%, hsl(var(--foreground)));
+  background: color-mix(in srgb, #f2c27b 35%, transparent);
+  font-size: 0.72em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.25em;
+  vertical-align: middle;
+}

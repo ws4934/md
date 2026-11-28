@@ -108,3 +108,294 @@ hr {
   transform: none;
   margin: calc(2em * var(--md-block-spacing)) 8px;
 }
+
+/* ==================== Layout components ==================== */
+/* Lead: corner brackets around centred accent text */
+.md-lead {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  margin: calc(2em * var(--md-block-spacing)) 8px;
+  text-align: center;
+}
+
+.md-lead .md-lead-mark {
+  display: block;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  font-size: 0;
+}
+
+.md-lead .md-lead-mark-start {
+  margin: 0 auto 0 0;
+  border-top: 2px solid color-mix(in srgb, var(--md-primary-color) 55%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--md-primary-color) 55%, transparent);
+}
+
+.md-lead .md-lead-mark-end {
+  margin: 0 0 0 auto;
+  border-right: 2px solid color-mix(in srgb, var(--md-primary-color) 55%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--md-primary-color) 55%, transparent);
+}
+
+.md-lead .md-lead-text {
+  margin: 0;
+  padding: 0.3em 1.2em;
+  color: color-mix(in srgb, var(--md-primary-color) 78%, hsl(var(--foreground)));
+  font-size: 1.06em;
+  line-height: 1.9;
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+
+/* Divider: dashed lines around a pale ring; the label variant sits in a pill */
+.md-divider {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(2.2em * var(--md-block-spacing)) 8px;
+  line-height: 1;
+  text-align: center;
+}
+
+.md-divider .md-divider-line {
+  display: inline-block;
+  width: 26%;
+  height: 0;
+  border: none;
+  border-top: 1px dashed color-mix(in srgb, var(--md-primary-color) 45%, transparent);
+  background: none;
+  font-size: 0;
+  vertical-align: middle;
+}
+
+.md-divider .md-divider-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--md-primary-color) 70%, transparent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--md-primary-color) 15%, transparent);
+  font-size: 0;
+  vertical-align: middle;
+}
+
+.md-divider .md-divider-text {
+  display: inline-block;
+  padding: 0.25em 0.85em 0.25em 1.05em;
+  border-radius: 2em;
+  margin: 0 12px;
+  color: var(--md-primary-color);
+  background: color-mix(in srgb, var(--md-primary-color) 10%, transparent);
+  font-size: 0.8em;
+  line-height: 1.6;
+  letter-spacing: 0.2em;
+  vertical-align: middle;
+}
+
+/* Stat: centred number on a pale rounded card */
+.md-stat {
+  padding: 1.3em 1em 1.2em;
+  border: none;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--md-primary-color) 7%, transparent);
+  margin: calc(1.5em * var(--md-block-spacing)) 8px;
+  text-align: center;
+}
+
+.md-stat .md-stat-value {
+  margin: 0;
+  color: var(--md-primary-color);
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
+.md-stat .md-stat-number {
+  color: var(--md-primary-color);
+  font-size: 2.4em;
+  font-weight: bold;
+  letter-spacing: 0.02em;
+}
+
+.md-stat .md-stat-unit {
+  margin-left: 4px;
+  color: color-mix(in srgb, var(--md-primary-color) 75%, transparent);
+  font-size: 0.95em;
+}
+
+.md-stat .md-stat-label {
+  margin: 0.5em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 75%, transparent);
+  font-size: 0.9em;
+  line-height: 1.6;
+  letter-spacing: 0.1em;
+  text-align: center;
+}
+
+.md-stat .md-stat-note {
+  display: inline-block;
+  padding: 0.6em 0.6em 0;
+  border-top: 1px dashed color-mix(in srgb, var(--md-primary-color) 40%, transparent);
+  margin: 0.8em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+  font-size: 0.78em;
+  line-height: 1.7;
+  letter-spacing: 0.05em;
+  text-align: center;
+}
+
+/* Compare: two pale cards; the after card takes the accent tint */
+.md-compare {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 8px 0;
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(1.5em * var(--md-block-spacing)) 0;
+}
+
+.md-compare .md-compare-col {
+  display: table-cell;
+  width: 50%;
+  padding: 0.9em 0.9em 1em;
+  border: none;
+  border-radius: 12px;
+  vertical-align: top;
+}
+
+.md-compare .md-compare-before {
+  background: color-mix(in srgb, hsl(var(--foreground)) 4%, transparent);
+}
+
+.md-compare .md-compare-after {
+  background: color-mix(in srgb, var(--md-primary-color) 9%, transparent);
+}
+
+.md-compare .md-compare-title {
+  display: inline-block;
+  padding: 0 0 2px;
+  margin: 0 0 0.5em;
+  font-size: 0.8em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.15em;
+}
+
+.md-compare .md-compare-text {
+  margin: 0;
+  font-size: 0.9em;
+  line-height: 1.75;
+  letter-spacing: 0.05em;
+  text-align: left;
+}
+
+.md-compare-before .md-compare-title {
+  border-bottom: 1px dashed color-mix(in srgb, hsl(var(--foreground)) 35%, transparent);
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+}
+
+.md-compare-before .md-compare-text {
+  color: color-mix(in srgb, hsl(var(--foreground)) 65%, transparent);
+}
+
+.md-compare-after .md-compare-title {
+  border-bottom: 1px dashed var(--md-primary-color);
+  color: var(--md-primary-color);
+}
+
+/* Quote: dashed outline card with the source in accent */
+.md-quote {
+  padding: 1em 1.2em;
+  border: 1px dashed color-mix(in srgb, var(--md-primary-color) 45%, transparent);
+  border-radius: 12px;
+  background: none;
+  margin: calc(1.5em * var(--md-block-spacing)) 8px;
+}
+
+.md-quote .md-quote-text {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 85%, transparent);
+  font-size: 0.95em;
+  line-height: 1.9;
+  letter-spacing: 0.06em;
+  text-align: left;
+}
+
+.md-quote .md-quote-source {
+  margin: 0.6em 0 0;
+  color: var(--md-primary-color);
+  font-size: 0.8em;
+  line-height: 1.6;
+  letter-spacing: 0.05em;
+  text-align: right;
+}
+
+/* Sources: dashed rule; same size and tone as the closing sources line */
+.md-sources {
+  padding: 0.9em 0 0;
+  border: none;
+  border-top: 1px dashed color-mix(in srgb, var(--md-primary-color) 35%, transparent);
+  background: none;
+  margin: calc(2.5em * var(--md-block-spacing)) 8px calc(1.5em * var(--md-block-spacing));
+}
+
+.md-sources .md-sources-title {
+  margin: 0 0 0.4em;
+  color: var(--md-primary-color);
+  font-size: 0.8em;
+  font-weight: bold;
+  line-height: 1.8;
+  letter-spacing: 0.15em;
+}
+
+.md-sources .md-sources-item {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.8em;
+  line-height: 1.8;
+  letter-spacing: 0.03em;
+  text-align: left;
+  word-break: break-all;
+}
+
+/* End mark: letter-spaced accent text between short dashes */
+.md-end {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(3em * var(--md-block-spacing)) 8px calc(1.5em * var(--md-block-spacing));
+  line-height: 1;
+  text-align: center;
+}
+
+.md-end .md-end-line {
+  display: inline-block;
+  width: 36px;
+  height: 0;
+  border: none;
+  border-top: 1px dashed color-mix(in srgb, var(--md-primary-color) 50%, transparent);
+  background: none;
+  font-size: 0;
+  vertical-align: middle;
+}
+
+.md-end .md-end-text {
+  display: inline-block;
+  padding-left: 0.3em;
+  margin: 0 12px;
+  color: var(--md-primary-color);
+  font-size: 0.75em;
+  line-height: 1.6;
+  letter-spacing: 0.3em;
+  vertical-align: middle;
+}
