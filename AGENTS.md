@@ -183,6 +183,6 @@ Reusable workflows live in [`.agents/skills/`](./.agents/skills/) (canonical). C
 | `git-commit`      | Commit changes with Conventional Commits (`/git-commit` or "commit my changes")       |
 | `create-pr`       | Create a GitHub pull request (`/create-pr` or "open a PR")                            |
 | `wechat-svg`      | WeChat SVG whitelist, bubbling-group interaction, paste compatibility (`/wechat-svg`) |
-| `wechat-minsheng` | 公众号「民生写实」选题、6 步框架写稿、封面配图 (`/wechat-minsheng`)                   |
+| `wechat-minsheng` | 公众号「民生写实」选题、6 步框架写稿、排版、封面配图 (`/wechat-minsheng`)             |
 
 Invoke manually: `/skill-name` in Cursor or Claude Code; OpenCode uses the `skill` tool.
