@@ -397,3 +397,275 @@ hr {
   letter-spacing: 0.4em;
   vertical-align: middle;
 }
+
+/* ==================== More layout components ==================== */
+/* Bill: an open hairline table; only the total line is drawn in full ink */
+.md-bill {
+  padding: 0;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 35%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, hsl(var(--foreground)) 35%, transparent);
+  border-radius: 0;
+  background: none;
+  margin: calc(2.2em * var(--md-block-spacing)) 8px;
+}
+
+.md-bill .md-bill-title {
+  padding: 1.1em 0 0.6em 0.3em;
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.75em;
+  line-height: 1.6;
+  letter-spacing: 0.3em;
+  text-align: center;
+}
+
+.md-bill .md-bill-row,
+.md-bill .md-bill-total {
+  display: table;
+  width: 100%;
+  table-layout: auto;
+  padding: 0.7em 0;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 10%, transparent);
+  margin: 0;
+  line-height: 1.6;
+  letter-spacing: 0.08em;
+}
+
+.md-bill .md-bill-title + .md-bill-row {
+  border-top: none;
+}
+
+.md-bill .md-bill-label,
+.md-bill .md-bill-value {
+  display: table-cell;
+  vertical-align: baseline;
+}
+
+.md-bill .md-bill-label {
+  color: color-mix(in srgb, hsl(var(--foreground)) 65%, transparent);
+  font-size: 0.88em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.md-bill .md-bill-value {
+  padding-left: 1em;
+  color: hsl(var(--foreground));
+  font-size: 0.95em;
+  font-weight: 300;
+  letter-spacing: 0.04em;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.md-bill .md-bill-total {
+  padding: 0.9em 0;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 70%, transparent);
+}
+
+.md-bill .md-bill-total .md-bill-label {
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.75em;
+  letter-spacing: 0.3em;
+}
+
+.md-bill .md-bill-total .md-bill-value {
+  font-size: 1.3em;
+  font-weight: 600;
+}
+
+.md-bill .md-bill-note {
+  padding: 0.8em 0 1em;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 10%, transparent);
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 45%, transparent);
+  font-size: 0.75em;
+  line-height: 1.9;
+  letter-spacing: 0.06em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* Bars: 2px ink lines on faint hairline tracks */
+.md-bars {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  margin: calc(2.2em * var(--md-block-spacing)) 8px;
+}
+
+.md-bars .md-bars-title {
+  margin: 0 0 1.4em;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.75em;
+  line-height: 1.6;
+  letter-spacing: 0.3em;
+  text-align: left;
+}
+
+.md-bars .md-bar {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: 0 0 1.2em;
+}
+
+.md-bars .md-bar-head {
+  display: table;
+  width: 100%;
+  margin: 0 0 0.45em;
+  line-height: 1.5;
+  letter-spacing: 0.08em;
+}
+
+.md-bars .md-bar-label,
+.md-bars .md-bar-value {
+  display: table-cell;
+  font-size: 0.85em;
+  vertical-align: baseline;
+}
+
+.md-bars .md-bar-label {
+  color: color-mix(in srgb, hsl(var(--foreground)) 70%, transparent);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.md-bars .md-bar-value {
+  padding-left: 1em;
+  color: hsl(var(--foreground));
+  letter-spacing: 0.04em;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.md-bars .md-bar-track {
+  display: block;
+  height: 2px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  margin: 0;
+  background: color-mix(in srgb, hsl(var(--foreground)) 10%, transparent);
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+}
+
+.md-bars .md-bar-fill {
+  display: block;
+  height: 2px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  margin: 0;
+  background: hsl(var(--foreground));
+  font-size: 0;
+  line-height: 0;
+}
+
+.md-bars .md-bars-note {
+  margin: 1.5em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 45%, transparent);
+  font-size: 0.72em;
+  line-height: 1.8;
+  letter-spacing: 0.08em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* Timeline: no rail; a short hairline opens each entry, whitespace does the rest */
+.md-timeline {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(2.2em * var(--md-block-spacing)) 8px;
+}
+
+.md-timeline .md-timeline-item {
+  padding: 0 0 1.8em;
+  border: none;
+  margin: 0;
+  background: none;
+}
+
+.md-timeline .md-timeline-item:last-child {
+  padding-bottom: 0;
+}
+
+.md-timeline .md-timeline-dot {
+  display: block;
+  width: 20px;
+  height: 1px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  margin: 0 0 0.7em;
+  background: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+}
+
+.md-timeline .md-timeline-time {
+  margin: 0 0 0.35em;
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+  font-size: 0.75em;
+  line-height: 1.6;
+  letter-spacing: 0.25em;
+  text-align: left;
+}
+
+.md-timeline .md-timeline-text {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.95em;
+  line-height: 1.95;
+  letter-spacing: 0.08em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* Term: hairline box; the term is underlined in full ink like a dictionary headword */
+.md-term {
+  padding: 1.5em 1.3em 1.3em;
+  border: 1px solid color-mix(in srgb, hsl(var(--foreground)) 18%, transparent);
+  border-radius: 0;
+  background: none;
+  margin: calc(2.2em * var(--md-block-spacing)) 8px;
+}
+
+.md-term .md-term-name {
+  display: inline-block;
+  padding: 0 0 0.45em;
+  border-bottom: 1px solid hsl(var(--foreground));
+  margin: 0 0 1em;
+  color: hsl(var(--foreground));
+  font-size: 1.05em;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0.25em;
+}
+
+.md-term .md-term-desc {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 85%, transparent);
+  font-size: 0.92em;
+  line-height: 2;
+  letter-spacing: 0.08em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.md-term .md-term-source {
+  margin: 1em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 45%, transparent);
+  font-size: 0.72em;
+  line-height: 1.6;
+  letter-spacing: 0.15em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}

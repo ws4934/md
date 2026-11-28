@@ -399,3 +399,286 @@ hr {
   letter-spacing: 0.25em;
   vertical-align: middle;
 }
+
+/* ==================== More layout components ==================== */
+/* Bill: cream ticket; rose tag on top, dotted honey rules, the total on a honey band */
+.md-bill {
+  padding: 1.2em 1.4em 1.1em;
+  border: none;
+  border-radius: 14px;
+  background: color-mix(in srgb, #f2c27b 18%, transparent);
+  margin: calc(1.5em * var(--md-block-spacing)) 0;
+}
+
+.md-bill .md-bill-title {
+  display: inline-block;
+  padding: 0.15em 0.8em 0.15em 0.95em;
+  border-radius: 1em;
+  margin: 0 0 0.5em;
+  color: #fff;
+  background: var(--md-primary-color);
+  font-size: 0.78em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.15em;
+}
+
+.md-bill .md-bill-row,
+.md-bill .md-bill-total {
+  display: table;
+  width: 100%;
+  table-layout: auto;
+  padding: 0.55em 0;
+  border: none;
+  border-bottom: 2px dotted color-mix(in srgb, #c9955a 35%, transparent);
+  margin: 0;
+  line-height: 1.6;
+  letter-spacing: 0.05em;
+}
+
+.md-bill .md-bill-label,
+.md-bill .md-bill-value {
+  display: table-cell;
+  vertical-align: middle;
+}
+
+.md-bill .md-bill-label {
+  color: color-mix(in srgb, hsl(var(--foreground)) 70%, #9a6b3c);
+  font-size: 0.92em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.md-bill .md-bill-value {
+  padding-left: 1em;
+  color: color-mix(in srgb, hsl(var(--foreground)) 82%, #9a6b3c);
+  font-size: 0.95em;
+  font-weight: bold;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* border-spacing 0 + padding stay inside the 100% width in the table box model */
+.md-bill .md-bill-total {
+  box-sizing: border-box;
+  padding: 0.55em 0.9em;
+  border: none;
+  border-radius: 10px;
+  margin: 0.8em 0 0;
+  background: color-mix(in srgb, #f2c27b 38%, transparent);
+}
+
+.md-bill .md-bill-total .md-bill-label {
+  color: color-mix(in srgb, var(--md-primary-color) 80%, hsl(var(--foreground)));
+  font-weight: bold;
+  letter-spacing: 0.15em;
+}
+
+.md-bill .md-bill-total .md-bill-value {
+  color: var(--md-primary-color);
+  font-size: 1.3em;
+  letter-spacing: 0.02em;
+}
+
+.md-bill .md-bill-note {
+  margin: 0.7em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.78em;
+  line-height: 1.7;
+  letter-spacing: 0.05em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* Bars: cream block with fat rounded bars running from honey into the rose accent */
+.md-bars {
+  padding: 1.2em 1.4em 1.1em;
+  border: none;
+  border-radius: 14px;
+  background: color-mix(in srgb, #f2c27b 14%, transparent);
+  margin: calc(1.5em * var(--md-block-spacing)) 0;
+}
+
+.md-bars .md-bars-title {
+  margin: 0 0 0.9em;
+  color: color-mix(in srgb, var(--md-primary-color) 80%, hsl(var(--foreground)));
+  font-size: 0.95em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.08em;
+  text-align: left;
+}
+
+.md-bars .md-bar {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: 0 0 0.85em;
+}
+
+.md-bars .md-bar-head {
+  display: table;
+  width: 100%;
+  margin: 0 0 0.35em;
+  line-height: 1.5;
+  letter-spacing: 0.05em;
+}
+
+.md-bars .md-bar-label,
+.md-bars .md-bar-value {
+  display: table-cell;
+  font-size: 0.88em;
+  vertical-align: bottom;
+}
+
+.md-bars .md-bar-label {
+  color: color-mix(in srgb, hsl(var(--foreground)) 82%, #9a6b3c);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.md-bars .md-bar-value {
+  padding-left: 1em;
+  color: color-mix(in srgb, var(--md-primary-color) 85%, hsl(var(--foreground)));
+  font-weight: bold;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.md-bars .md-bar-track {
+  display: block;
+  height: 12px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  margin: 0;
+  background: color-mix(in srgb, #c9955a 16%, transparent);
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+}
+
+.md-bars .md-bar-fill {
+  display: block;
+  height: 12px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  margin: 0;
+  background: linear-gradient(90deg, #e8b36e, var(--md-primary-color));
+  font-size: 0;
+  line-height: 0;
+}
+
+.md-bars .md-bars-note {
+  padding: 0.6em 0 0;
+  border-top: 2px dotted color-mix(in srgb, #c9955a 40%, transparent);
+  margin: 1em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.78em;
+  line-height: 1.7;
+  letter-spacing: 0.05em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* Timeline: dotted honey line, rose dots in a honey ring, dates as soft tags */
+.md-timeline {
+  padding: 0 0 0 10px;
+  border: none;
+  background: none;
+  margin: calc(1.5em * var(--md-block-spacing)) 0;
+}
+
+.md-timeline .md-timeline-item {
+  padding: 0 0 1.2em 20px;
+  border: none;
+  border-left: 2px dotted color-mix(in srgb, #c9955a 55%, transparent);
+  margin: 0;
+  background: none;
+}
+
+.md-timeline .md-timeline-item:last-child {
+  padding-bottom: 0;
+  border-left-color: transparent;
+}
+
+/* Negative margins put the dot on the line without position, which WeChat drops */
+.md-timeline .md-timeline-dot {
+  display: block;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border: 3px solid color-mix(in srgb, #f2c27b 70%, transparent);
+  border-radius: 50%;
+  margin: 6px 0 -20px -29px;
+  background: var(--md-primary-color);
+  background-clip: padding-box;
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+}
+
+.md-timeline .md-timeline-time {
+  display: inline-block;
+  padding: 0.1em 0.75em 0.1em 0.8em;
+  border-radius: 1em;
+  margin: 0 0 0.4em;
+  color: color-mix(in srgb, var(--md-primary-color) 85%, hsl(var(--foreground)));
+  background: color-mix(in srgb, #f2c27b 32%, transparent);
+  font-size: 0.78em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.08em;
+}
+
+.md-timeline .md-timeline-text {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 82%, #9a6b3c);
+  font-size: 0.93em;
+  line-height: 1.8;
+  letter-spacing: 0.05em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* Term: cream card; the term sits on a honey marker, the source in rose */
+.md-term {
+  padding: 1.1em 1.3em 1em;
+  border: 1px solid color-mix(in srgb, #c9955a 30%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, #f2c27b 12%, transparent);
+  margin: calc(1.5em * var(--md-block-spacing)) 0;
+}
+
+.md-term .md-term-name {
+  display: inline-block;
+  padding: 0 3px;
+  margin: 0 0 0.45em;
+  color: color-mix(in srgb, var(--md-primary-color) 85%, hsl(var(--foreground)));
+  background-image: linear-gradient(transparent 55%, color-mix(in srgb, #f2c27b 55%, transparent) 55%);
+  font-size: 1.12em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.1em;
+}
+
+.md-term .md-term-desc {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 82%, #9a6b3c);
+  font-size: 0.93em;
+  line-height: 1.85;
+  letter-spacing: 0.05em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.md-term .md-term-source {
+  margin: 0.7em 0 0;
+  color: color-mix(in srgb, var(--md-primary-color) 80%, hsl(var(--foreground)));
+  font-size: 0.8em;
+  line-height: 1.6;
+  letter-spacing: 0.05em;
+  text-align: right;
+  overflow-wrap: anywhere;
+}

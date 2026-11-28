@@ -399,3 +399,288 @@ hr {
   letter-spacing: 0.3em;
   vertical-align: middle;
 }
+
+/* ==================== More layout components ==================== */
+/* Bill: a receipt on a pale tint, dashed lines between entries */
+.md-bill {
+  padding: 1em 1.3em 1.1em;
+  border: 1px dashed color-mix(in srgb, var(--md-primary-color) 45%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--md-primary-color) 5%, transparent);
+  margin: calc(1.5em * var(--md-block-spacing)) 8px;
+  text-align: center;
+}
+
+.md-bill .md-bill-title {
+  display: inline-block;
+  padding: 0.2em 0.9em 0.2em 1.15em;
+  border-radius: 2em;
+  margin: 0 0 0.5em;
+  color: var(--md-primary-color);
+  background: color-mix(in srgb, var(--md-primary-color) 10%, transparent);
+  font-size: 0.8em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.25em;
+}
+
+.md-bill .md-bill-row,
+.md-bill .md-bill-total {
+  display: table;
+  width: 100%;
+  table-layout: auto;
+  padding: 0.55em 0;
+  border: none;
+  border-bottom: 1px dashed color-mix(in srgb, var(--md-primary-color) 28%, transparent);
+  margin: 0;
+  line-height: 1.6;
+  letter-spacing: 0.05em;
+}
+
+.md-bill .md-bill-label,
+.md-bill .md-bill-value {
+  display: table-cell;
+  vertical-align: middle;
+}
+
+.md-bill .md-bill-label {
+  color: color-mix(in srgb, hsl(var(--foreground)) 70%, transparent);
+  font-size: 0.9em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.md-bill .md-bill-value {
+  padding-left: 1em;
+  color: hsl(var(--foreground));
+  font-size: 0.95em;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.md-bill .md-bill-total {
+  padding: 0.8em 0 0.3em;
+  border-bottom: none;
+}
+
+.md-bill .md-bill-total .md-bill-label {
+  color: var(--md-primary-color);
+  font-weight: bold;
+  letter-spacing: 0.15em;
+}
+
+.md-bill .md-bill-total .md-bill-value {
+  color: var(--md-primary-color);
+  font-size: 1.35em;
+  font-weight: bold;
+  letter-spacing: 0.02em;
+}
+
+.md-bill .md-bill-note {
+  padding: 0.7em 0 0;
+  border-top: 1px dashed color-mix(in srgb, var(--md-primary-color) 40%, transparent);
+  margin: 0.5em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+  font-size: 0.78em;
+  line-height: 1.7;
+  letter-spacing: 0.05em;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+/* Bars: rounded pale tracks, the fill fades in from a lighter tint */
+.md-bars {
+  padding: 1.1em 1.3em 1.2em;
+  border: none;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--md-primary-color) 5%, transparent);
+  margin: calc(1.5em * var(--md-block-spacing)) 8px;
+}
+
+.md-bars .md-bars-title {
+  padding: 0 0 0.5em;
+  border-bottom: 1px dashed color-mix(in srgb, var(--md-primary-color) 35%, transparent);
+  margin: 0 0 0.9em;
+  color: var(--md-primary-color);
+  font-size: 0.9em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.1em;
+  text-align: left;
+}
+
+.md-bars .md-bar {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: 0 0 0.8em;
+}
+
+.md-bars .md-bar-head {
+  display: table;
+  width: 100%;
+  margin: 0 0 0.35em;
+  line-height: 1.5;
+  letter-spacing: 0.05em;
+}
+
+.md-bars .md-bar-label,
+.md-bars .md-bar-value {
+  display: table-cell;
+  font-size: 0.85em;
+  vertical-align: bottom;
+}
+
+.md-bars .md-bar-label {
+  color: color-mix(in srgb, hsl(var(--foreground)) 75%, transparent);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.md-bars .md-bar-value {
+  padding-left: 1em;
+  color: var(--md-primary-color);
+  font-weight: bold;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.md-bars .md-bar-track {
+  display: block;
+  height: 8px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  margin: 0;
+  background: color-mix(in srgb, var(--md-primary-color) 12%, transparent);
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+}
+
+.md-bars .md-bar-fill {
+  display: block;
+  height: 8px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  margin: 0;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--md-primary-color) 55%, transparent),
+    var(--md-primary-color)
+  );
+  font-size: 0;
+  line-height: 0;
+}
+
+.md-bars .md-bars-note {
+  margin: 1em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+  font-size: 0.75em;
+  line-height: 1.7;
+  letter-spacing: 0.05em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* Timeline: a dashed accent line with haloed dots; it stops at the last dot */
+.md-timeline {
+  padding: 0 0 0 8px;
+  border: none;
+  background: none;
+  margin: calc(1.5em * var(--md-block-spacing)) 8px;
+}
+
+.md-timeline .md-timeline-item {
+  padding: 0 0 1.2em 18px;
+  border: none;
+  border-left: 1px dashed color-mix(in srgb, var(--md-primary-color) 50%, transparent);
+  margin: 0;
+  background: none;
+}
+
+.md-timeline .md-timeline-item:last-child {
+  padding-bottom: 0;
+  border-left-color: transparent;
+}
+
+/* Negative margins put the dot on the line without position, which WeChat drops */
+.md-timeline .md-timeline-dot {
+  display: block;
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: 3px solid color-mix(in srgb, var(--md-primary-color) 22%, transparent);
+  border-radius: 50%;
+  margin: 4px 0 -17px -25px;
+  background: var(--md-primary-color);
+  background-clip: padding-box;
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+}
+
+.md-timeline .md-timeline-time {
+  margin: 0 0 0.25em;
+  color: var(--md-primary-color);
+  font-size: 0.8em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.1em;
+  text-align: left;
+}
+
+.md-timeline .md-timeline-text {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 85%, transparent);
+  font-size: 0.92em;
+  line-height: 1.8;
+  letter-spacing: 0.05em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* Term: glossary note with the term on a marker stroke and a dashed rule above the source */
+.md-term {
+  padding: 1.1em 1.3em 1em;
+  border: none;
+  border-left: 3px solid color-mix(in srgb, var(--md-primary-color) 45%, transparent);
+  border-radius: 0 12px 12px 0;
+  background: color-mix(in srgb, var(--md-primary-color) 6%, transparent);
+  margin: calc(1.5em * var(--md-block-spacing)) 8px;
+}
+
+.md-term .md-term-name {
+  display: inline-block;
+  padding: 0 2px;
+  margin: 0 0 0.5em;
+  color: color-mix(in srgb, var(--md-primary-color) 85%, hsl(var(--foreground)));
+  background-image: linear-gradient(transparent 60%, color-mix(in srgb, var(--md-primary-color) 22%, transparent) 60%);
+  font-size: 1.1em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.12em;
+}
+
+.md-term .md-term-desc {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 85%, transparent);
+  font-size: 0.92em;
+  line-height: 1.85;
+  letter-spacing: 0.05em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.md-term .md-term-source {
+  padding: 0.6em 0 0;
+  border-top: 1px dashed color-mix(in srgb, var(--md-primary-color) 35%, transparent);
+  margin: 0.8em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+  font-size: 0.78em;
+  line-height: 1.6;
+  letter-spacing: 0.05em;
+  text-align: right;
+  overflow-wrap: anywhere;
+}

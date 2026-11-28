@@ -429,3 +429,295 @@ hr {
   letter-spacing: 0.15em;
   vertical-align: middle;
 }
+
+/* ==================== More layout components ==================== */
+/* Bill: ruled ledger; thick accent rule on top, double rule under the total */
+.md-bill {
+  padding: 0;
+  border: none;
+  border-top: 3px solid var(--md-primary-color);
+  border-radius: 0;
+  background: none;
+  margin: calc(2em * var(--md-block-spacing)) 8px;
+}
+
+.md-bill .md-bill-title {
+  padding: 0.45em 0.1em 0.4em;
+  border-bottom: 1px solid var(--md-primary-color);
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 1.05em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.15em;
+  text-align: left;
+}
+
+.md-bill .md-bill-row,
+.md-bill .md-bill-total {
+  display: table;
+  width: 100%;
+  table-layout: auto;
+  padding: 0.6em 0;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 12%, transparent);
+  margin: 0;
+  line-height: 1.6;
+  letter-spacing: 0.04em;
+}
+
+.md-bill .md-bill-title + .md-bill-row {
+  border-top: none;
+}
+
+.md-bill .md-bill-label,
+.md-bill .md-bill-value {
+  display: table-cell;
+  vertical-align: baseline;
+}
+
+.md-bill .md-bill-label {
+  color: color-mix(in srgb, hsl(var(--foreground)) 75%, transparent);
+  font-size: 0.9em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.md-bill .md-bill-value {
+  padding-left: 1em;
+  color: hsl(var(--foreground));
+  font-family: Georgia, 'Songti SC', STSong, 'Noto Serif SC', serif;
+  font-size: 1em;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.md-bill .md-bill-total {
+  padding: 0.65em 0 0.55em;
+  border-top: 1px solid hsl(var(--foreground));
+  border-bottom: 3px double hsl(var(--foreground));
+}
+
+.md-bill .md-bill-total .md-bill-label {
+  color: hsl(var(--foreground));
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 0.95em;
+  font-weight: bold;
+  letter-spacing: 0.3em;
+}
+
+.md-bill .md-bill-total .md-bill-value {
+  color: var(--md-primary-color);
+  font-size: 1.4em;
+  font-weight: bold;
+  letter-spacing: 0.01em;
+}
+
+.md-bill .md-bill-note {
+  margin: 0.6em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.78em;
+  line-height: 1.7;
+  letter-spacing: 0.04em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* Bars: square-ended accent bars under a ruled serif headline */
+.md-bars {
+  padding: 0;
+  border: none;
+  border-top: 3px solid var(--md-primary-color);
+  border-radius: 0;
+  background: none;
+  margin: calc(2em * var(--md-block-spacing)) 8px;
+}
+
+.md-bars .md-bars-title {
+  padding: 0.45em 0.1em 0.4em;
+  border-bottom: 1px solid var(--md-primary-color);
+  margin: 0 0 1em;
+  color: hsl(var(--foreground));
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 1.05em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.1em;
+  text-align: left;
+}
+
+.md-bars .md-bar {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: 0 0 0.9em;
+}
+
+.md-bars .md-bar-head {
+  display: table;
+  width: 100%;
+  margin: 0 0 0.3em;
+  line-height: 1.5;
+  letter-spacing: 0.05em;
+}
+
+.md-bars .md-bar-label,
+.md-bars .md-bar-value {
+  display: table-cell;
+  vertical-align: baseline;
+}
+
+.md-bars .md-bar-label {
+  color: hsl(var(--foreground));
+  font-size: 0.85em;
+  font-weight: bold;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.md-bars .md-bar-value {
+  padding-left: 1em;
+  color: var(--md-primary-color);
+  font-family: Georgia, 'Songti SC', STSong, 'Noto Serif SC', serif;
+  font-size: 0.95em;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.md-bars .md-bar-track {
+  display: block;
+  height: 10px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  margin: 0;
+  background: color-mix(in srgb, hsl(var(--foreground)) 7%, transparent);
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+}
+
+.md-bars .md-bar-fill {
+  display: block;
+  height: 10px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  margin: 0;
+  background: var(--md-primary-color);
+  font-size: 0;
+  line-height: 0;
+}
+
+.md-bars .md-bars-note {
+  padding: 0.5em 0.1em 0;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 20%, transparent);
+  margin: 1.1em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.75em;
+  line-height: 1.7;
+  letter-spacing: 0.04em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* Timeline: a chronology table; serif dates in a left column, hairlines between entries */
+.md-timeline {
+  padding: 0;
+  border: none;
+  border-top: 3px solid var(--md-primary-color);
+  border-bottom: 1px solid var(--md-primary-color);
+  background: none;
+  margin: calc(2em * var(--md-block-spacing)) 8px;
+}
+
+.md-timeline .md-timeline-item {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  padding: 0;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 12%, transparent);
+  margin: 0;
+  background: none;
+}
+
+.md-timeline .md-timeline-item:first-child {
+  border-top: none;
+}
+
+/* The date column carries the rhythm, so the dot is not drawn */
+.md-timeline .md-timeline-dot {
+  display: none;
+}
+
+.md-timeline .md-timeline-time {
+  display: table-cell;
+  width: 6.4em;
+  padding: 12px 0.8em 12px 0.1em;
+  margin: 0;
+  color: var(--md-primary-color);
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 0.85em;
+  font-weight: bold;
+  line-height: 2;
+  letter-spacing: 0.04em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.md-timeline .md-timeline-text {
+  display: table-cell;
+  padding: 12px 0.1em 12px 0;
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.92em;
+  line-height: 1.85;
+  letter-spacing: 0.04em;
+  text-align: justify;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+/* Term: dictionary entry framed by the thick + thin rule pair */
+.md-term {
+  padding: 0.8em 0.1em 0.9em;
+  border: none;
+  border-top: 3px solid var(--md-primary-color);
+  border-bottom: 1px solid var(--md-primary-color);
+  border-radius: 0;
+  background: none;
+  margin: calc(2em * var(--md-block-spacing)) 8px;
+}
+
+.md-term .md-term-name {
+  margin: 0 0 0.35em;
+  color: var(--md-primary-color);
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 1.35em;
+  font-weight: bold;
+  line-height: 1.5;
+  letter-spacing: 0.08em;
+  text-align: left;
+}
+
+.md-term .md-term-desc {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.95em;
+  line-height: 1.85;
+  letter-spacing: 0.04em;
+  text-align: justify;
+  overflow-wrap: anywhere;
+}
+
+.md-term .md-term-source {
+  margin: 0.7em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.78em;
+  line-height: 1.6;
+  letter-spacing: 0.1em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
