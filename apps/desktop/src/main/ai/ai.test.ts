@@ -12,8 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { API_MODEL_AGENT_ID } from '@md/shared/types'
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { buildDesktopBundles } from '../../../scripts/build'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { generateAndSaveWorkspaceImage } from '../../agents/shared/image-client'
 import { readSkills } from '../../agents/shared/skills'
 import { AcpHost, buildPromptText } from '../acp/host'
@@ -29,11 +28,13 @@ import {
   parseGoogleModelsResponse,
   parseOpenAiModelsResponse,
 } from './remote-models'
+import { WebSearchBridge } from './search-bridge'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DESKTOP_ROOT = path.resolve(__dirname, `../../..`)
 const API_AGENT_SCRIPT = path.join(DESKTOP_ROOT, `dist/agents/api-agent.js`)
 const IMAGE_MCP_SCRIPT = path.join(DESKTOP_ROOT, `dist/agents/image-mcp.js`)
+const SEARCH_MCP_SCRIPT = path.join(DESKTOP_ROOT, `dist/agents/search-mcp.js`)
 const FAKE_AGENT_SCRIPT = path.join(DESKTOP_ROOT, `scripts/fake-acp-agent.mjs`)
 
 // Valid 1x1 red PNG (68 bytes).
@@ -533,10 +534,6 @@ async function startFakeOpenAiServer(apiKey = `sk-test-openai-secret`): Promise<
   }
 }
 
-beforeAll(async () => {
-  await buildDesktopBundles()
-}, 30_000)
-
 afterEach(async () => {
   while (openHosts.length > 0)
     await openHosts.pop()!.dispose()
@@ -922,6 +919,62 @@ describe(`image MCP server & local bridge`, () => {
     }
     finally {
       await client.close()
+    }
+  }, 20_000)
+
+  it(`serves web_search through the bundled md-search MCP server`, async () => {
+    const queries: string[] = []
+    const bridge = new WebSearchBridge({
+      getConfig: async () => ({
+        enabled: true,
+        protocol: `openai-responses`,
+        baseUrl: `http://127.0.0.1:1/v1`,
+        hasApiKey: true,
+        apiKey: `sk-search`,
+        model: `mock-search`,
+        toolType: `web_search`,
+        isConfigured: true,
+      }),
+      search: async ({ query }) => {
+        queries.push(query)
+        return {
+          answer: `Node.js 24 is the active LTS line.`,
+          sources: [{ title: `Node.js releases`, url: `https://nodejs.org/en/about/previous-releases` }],
+          queries: [query],
+        }
+      },
+    })
+    const conn = await bridge.ensureStarted()
+
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [SEARCH_MCP_SCRIPT],
+      env: {
+        ...process.env,
+        MD_SEARCH_BRIDGE_URL: conn.url,
+        MD_SEARCH_BRIDGE_TOKEN: conn.token,
+      } as Record<string, string>,
+    })
+    const client = new McpClient({ name: `test-client`, version: `1.0.0` })
+    try {
+      await client.connect(transport)
+      const tools = await client.listTools()
+      expect(tools.tools.map(t => t.name)).toEqual([`web_search`])
+
+      const callRes = await client.callTool({ name: `web_search`, arguments: { query: `node lts` } })
+      expect(callRes.isError).toBeFalsy()
+      expect((callRes.content as Array<{ text?: string }>)[0].text).toBe(
+        `Node.js 24 is the active LTS line.\n\nSources:\n1. Node.js releases - https://nodejs.org/en/about/previous-releases`,
+      )
+      expect(queries).toEqual([`node lts`])
+
+      const tooLong = await client.callTool({ name: `web_search`, arguments: { query: `x`.repeat(1001) } })
+      expect(tooLong.isError).toBe(true)
+      expect(queries).toHaveLength(1)
+    }
+    finally {
+      await client.close()
+      await bridge.close()
     }
   }, 20_000)
 })

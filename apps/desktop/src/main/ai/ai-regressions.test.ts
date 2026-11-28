@@ -12,8 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { API_MODEL_AGENT_ID } from '@md/shared/types'
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { buildDesktopBundles } from '../../../scripts/build'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { trimMessageHistory } from '../../agents/api-agent/history'
 import { McpStdioClient } from '../../agents/api-agent/mcp-client'
 import { isUnsupportedReasoningError } from '../../agents/api-agent/provider'
@@ -71,16 +70,6 @@ function readBody(req: IncomingMessage): Promise<string> {
 function writeSseChunk(res: ServerResponse, payload: Record<string, unknown>): void {
   res.write(`data: ${JSON.stringify(payload)}\n\n`)
 }
-
-beforeAll(async () => {
-  try {
-    await fs.access(API_AGENT_SCRIPT)
-    await fs.access(IMAGE_MCP_SCRIPT)
-  }
-  catch {
-    await buildDesktopBundles()
-  }
-}, 30_000)
 
 afterEach(async () => {
   generateImageMock.mockReset()
