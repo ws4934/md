@@ -7,7 +7,7 @@ import { modifyHtmlContent } from '@md/core/utils'
 import { defaultStyleConfig } from '@md/shared/configs'
 import juice from 'juice'
 import { describe, expect, it } from 'vitest'
-import { applyWeChatCssVarReplacements, applyWeChatStructureFixes, modifyHtmlStructure, modifyHtmlStructureInPlace, promoteSvgHtmlLabels, sanitizeHtmlCssForJuice, solveWeChatImage, stripInvalidCssForJuice } from './clipboard-dom'
+import { applyWeChatCssVarReplacements, applyWeChatStructureFixes, modifyHtmlStructure, modifyHtmlStructureInPlace, promoteSvgHtmlLabels, resolveColorMix, sanitizeHtmlCssForJuice, solveWeChatImage, stripInvalidCssForJuice } from './clipboard-dom'
 import { getStylesToAdd } from './share-styles'
 
 describe(`modifyHtmlStructure`, () => {
@@ -338,7 +338,7 @@ describe(`applyWeChatStructureFixes`, () => {
 })
 
 describe(`layout components on WeChat copy`, () => {
-  it(`keep their empty decorative elements, sized and coloured by inline styles`, async () => {
+  it(`keep their decorative elements, sized and coloured by inline styles, with a WeChat placeholder`, async () => {
     const vars = {
       primaryColor: `#0F4C81`,
       fontFamily: defaultStyleConfig.fontFamily,
@@ -364,7 +364,10 @@ describe(`layout components on WeChat copy`, () => {
     const decor = root.querySelectorAll(`.md-lead-mark, .md-divider-line, .md-divider-dot, .md-end-line`)
     expect(decor).toHaveLength(7)
     for (const el of decor) {
-      expect(el.childNodes).toHaveLength(0)
+      expect(el.children).toHaveLength(1)
+      expect(el.firstElementChild!.localName).toBe(`svg`)
+      expect(el.firstElementChild!.getAttribute(`style`)).toContain(`width:0`)
+      expect(el.textContent).toBe(``)
       const style = el.getAttribute(`style`) ?? ``
       expect(style).toMatch(/(?:^|;)\s*width:\s*\S/)
       expect(style).toMatch(/(?:^|;)\s*height:\s*\S/)
@@ -372,5 +375,64 @@ describe(`layout components on WeChat copy`, () => {
       expect(style).not.toContain(`var(`)
     }
     expect(root.querySelector(`.md-lead-mark`)!.getAttribute(`style`)).toContain(`#0F4C81`)
+  })
+})
+
+describe(`resolveColorMix`, () => {
+  it(`mixes a color with transparent into rgba`, () => {
+    expect(resolveColorMix(`<p style="background: color-mix(in srgb, #009874 10%, transparent);">x</p>`))
+      .toBe(`<p style="background: rgba(0, 152, 116, 0.1);">x</p>`)
+  })
+
+  it(`mixes two opaque colors into hex and defaults missing percentages`, () => {
+    expect(resolveColorMix(`<p style="color: color-mix(in srgb, #ffffff 50%, #000000);">x</p>`))
+      .toBe(`<p style="color: #808080;">x</p>`)
+    expect(resolveColorMix(`<p style="color: color-mix(in srgb, white, black);">x</p>`))
+      .toBe(`<p style="color: #808080;">x</p>`)
+  })
+
+  it(`resolves nested mixes and mixes inside gradients`, () => {
+    expect(resolveColorMix(`<span style="background-image: linear-gradient(transparent 58%, color-mix(in srgb, color-mix(in srgb, #0F4C81 50%, #ffffff) 20%, transparent) 58%);"></span>`))
+      .toBe(`<span style="background-image: linear-gradient(transparent 58%, rgba(135, 166, 192, 0.2) 58%);"></span>`)
+  })
+
+  it(`accepts rgb() and hsl() arguments`, () => {
+    expect(resolveColorMix(`<p style="color: color-mix(in srgb, rgb(255, 0, 0) 50%, hsl(240 100% 50%));">x</p>`))
+      .toBe(`<p style="color: #800080;">x</p>`)
+  })
+
+  it(`leaves unresolvable mixes and text outside style attributes untouched`, () => {
+    const unresolved = `<p style="color: color-mix(in srgb, hsl(var(--background)) 50%, transparent);">x</p>`
+    expect(resolveColorMix(unresolved)).toBe(unresolved)
+    const code = `<code>color-mix(in srgb, #fff 50%, #000)</code>`
+    expect(resolveColorMix(code)).toBe(code)
+  })
+
+  it(`removes every color-mix from a real theme export`, async () => {
+    const vars = {
+      primaryColor: `#009874`,
+      fontFamily: defaultStyleConfig.fontFamily,
+      fontSize: defaultStyleConfig.fontSize,
+      lineHeight: defaultStyleConfig.lineHeight,
+      blockSpacing: defaultStyleConfig.blockSpacing,
+    }
+    const themeDir = path.resolve(__dirname, `../../../../../packages/shared/src/configs/theme-css`)
+    const themeCss = [`default.css`, `fresh.css`].map(file => fs.readFileSync(path.join(themeDir, file), `utf8`)).join(`\n`)
+    await applyTheme({ themeName: `fresh`, themeCSS: themeCss, variables: vars })
+
+    const root = document.createElement(`div`)
+    root.innerHTML = modifyHtmlContent([
+      `<LeadQuote>导语</LeadQuote>`,
+      `正文里有**加粗**和++下划线++。`,
+      `<StatCard value="12500" unit="元" label="每月固定开销" />`,
+      `<CompareCard before="以前" after="现在" />`,
+    ].join(`\n\n`), initRenderer({}))
+    stripInvalidCssForJuice(root)
+    const html = (await getStylesToAdd()) + root.innerHTML
+    const inlined = juice(sanitizeHtmlCssForJuice(html), { inlinePseudoElements: true, preserveImportant: true, resolveCSSVariables: false })
+    const output = applyWeChatCssVarReplacements(inlined, vars)
+
+    expect(output).toContain(`rgba(0, 152, 116,`)
+    expect(output).not.toContain(`color-mix(`)
   })
 })

@@ -167,12 +167,152 @@ export interface WeChatCssVarValues {
   blockSpacing: string
 }
 
+type Rgba = [number, number, number, number]
+
+const NAMED_COLORS = new Map<string, Rgba>([
+  [`transparent`, [0, 0, 0, 0]],
+  [`white`, [255, 255, 255, 1]],
+  [`black`, [0, 0, 0, 1]],
+])
+
+function parseCssNumber(raw: string, percentScale: number): number {
+  const value = Number.parseFloat(raw)
+  if (!/^-?[\d.]+%?$/.test(raw) || Number.isNaN(value))
+    return Number.NaN
+  return raw.endsWith(`%`) ? value / 100 * percentScale : value
+}
+
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const k = (n: number) => (n + h / 30) % 12
+  const a = s * Math.min(l, 1 - l)
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))
+  return [f(0) * 255, f(8) * 255, f(4) * 255]
+}
+
+/** Parses the concrete colors themes feed into color-mix(); returns null for anything else. */
+function parseCssColor(input: string): Rgba | null {
+  const s = input.trim().toLowerCase()
+  const named = NAMED_COLORS.get(s)
+  if (named)
+    return named
+
+  const hex = /^#([\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/.exec(s)
+  if (hex) {
+    const h = hex[1].length <= 4 ? [...hex[1]].map(c => c + c).join(``) : hex[1]
+    const byte = (i: number) => Number.parseInt(h.slice(i, i + 2), 16)
+    return [byte(0), byte(2), byte(4), h.length === 8 ? byte(6) / 255 : 1]
+  }
+
+  const fn = /^(rgba?|hsla?)\(([^()]*)\)$/.exec(s)
+  if (!fn)
+    return null
+  const parts = fn[2].split(/[\s,/]+/).filter(Boolean)
+  if (parts.length !== 3 && parts.length !== 4)
+    return null
+  const alpha = parts[3] === undefined ? 1 : parseCssNumber(parts[3], 1)
+  let rgb: [number, number, number]
+  if (fn[1].startsWith(`rgb`)) {
+    rgb = [0, 1, 2].map(i => parseCssNumber(parts[i], 255)) as [number, number, number]
+  }
+  else {
+    const hue = Number.parseFloat(parts[0].replace(/deg$/, ``))
+    rgb = hslToRgb(((hue % 360) + 360) % 360, parseCssNumber(parts[1], 1), parseCssNumber(parts[2], 1))
+  }
+  const color: Rgba = [rgb[0], rgb[1], rgb[2], alpha]
+  return color.some(Number.isNaN) ? null : color
+}
+
+/** One color-mix() argument: a color with an optional percentage on either side. */
+function parseMixArg(arg: string): { color: Rgba, pct: number | undefined } | null {
+  const trimmed = arg.trim()
+  const after = /^(.*\S)\s+([\d.]+)%$/.exec(trimmed)
+  const before = /^([\d.]+)%\s+(\S.*)$/.exec(trimmed)
+  const colorText = after ? after[1] : before ? before[2] : trimmed
+  const pctText = after ? after[2] : before ? before[1] : undefined
+  const color = parseCssColor(colorText)
+  const pct = pctText === undefined ? undefined : Number.parseFloat(pctText)
+  if (!color || (pct !== undefined && Number.isNaN(pct)))
+    return null
+  return { color, pct }
+}
+
+function splitTopLevelCommas(text: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === `(`) {
+      depth++
+    }
+    else if (text[i] === `)`) {
+      depth--
+    }
+    else if (text[i] === `,` && depth === 0) {
+      parts.push(text.slice(start, i))
+      start = i + 1
+    }
+  }
+  parts.push(text.slice(start))
+  return parts
+}
+
+function formatRgba([r, g, b, a]: Rgba): string {
+  const channels = [r, g, b].map(v => Math.round(Math.min(255, Math.max(0, v))))
+  if (a >= 1)
+    return `#${channels.map(v => v.toString(16).padStart(2, `0`)).join(``)}`
+  return `rgba(${channels.join(`, `)}, ${Number(Math.max(0, a).toFixed(3))})`
+}
+
+/** CSS Color 5 color-mix() in sRGB with premultiplied alpha; null when the arguments are not concrete colors. */
+function mixSrgb(args: string): string | null {
+  const parts = splitTopLevelCommas(args)
+  if (parts.length !== 2)
+    return null
+  const first = parseMixArg(parts[0])
+  const second = parseMixArg(parts[1])
+  if (!first || !second)
+    return null
+  const p1 = first.pct ?? (second.pct === undefined ? 50 : 100 - second.pct)
+  const p2 = second.pct ?? 100 - p1
+  const sum = p1 + p2
+  if (sum <= 0)
+    return null
+  const [w1, w2] = [p1 / sum, p2 / sum]
+  const alpha = first.color[3] * w1 + second.color[3] * w2
+  const multiplier = Math.min(sum, 100) / 100
+  if (alpha === 0)
+    return formatRgba([0, 0, 0, 0])
+  const channel = (i: number) => (first.color[i] * first.color[3] * w1 + second.color[i] * second.color[3] * w2) / alpha
+  return formatRgba([channel(0), channel(1), channel(2), alpha * multiplier])
+}
+
+// Innermost color-mix() only: its arguments may hold rgb()/hsl() but no further color-mix().
+const INNERMOST_COLOR_MIX = /color-mix\(\s*in\s+srgb\s*,((?:(?!color-mix\()[^()]|\([^()]*\))*)\)/gi
+
+/**
+ * WeChat passes inline color-mix() through untouched, and older WebViews and
+ * its dark-mode color rewriting drop it, so the tints themes build with it
+ * would vanish. Resolve it to plain hex/rgba inside style attributes only.
+ */
+export function resolveColorMix(html: string): string {
+  return html.replace(/style="([^"]*)"/g, (attr, style: string) => {
+    if (!/color-mix\(/i.test(style))
+      return attr
+    let resolved = style
+    for (let previous = ``; previous !== resolved;) {
+      previous = resolved
+      resolved = resolved.replace(INNERMOST_COLOR_MIX, (match, args: string) => mixSrgb(args) ?? match)
+    }
+    return `style="${resolved}"`
+  })
+}
+
 /**
  * Pure string replacements applied right after juice CSS inlining.
  * Safe to run inside a Web Worker (no DOM APIs).
  */
 export function applyWeChatCssVarReplacements(html: string, vars: WeChatCssVarValues): string {
-  return html
+  return resolveColorMix(html
     .replace(/([^-])top:(.*?)em/g, `$1transform: translateY($2em)`)
     .replace(/hsl\(var\(--foreground\)\)/g, `#3f3f3f`)
     .replace(/var\(--blockquote-background\)/g, `#f7f7f7`)
@@ -195,7 +335,7 @@ export function applyWeChatCssVarReplacements(html: string, vars: WeChatCssVarVa
     .replace(
       /<span class="edgeLabel"([^>]*)><p[^>]*>(.*?)<\/p><\/span>/g,
       `<span class="edgeLabel"$1>$2</span>`,
-    )
+    ))
 }
 
 export function modifyHtmlStructureInPlace(root: ParentNode): void {
@@ -290,6 +430,25 @@ export function applyWeChatStructureFixes(root: HTMLElement) {
     el.style.lineHeight = `normal`
     if (ZERO_CSS_LENGTH.test(el.style.fontSize.trim()))
       el.style.fontSize = ``
+  })
+
+  keepEmptyDecorations(root)
+}
+
+const EMPTY_DECORATION_KEEPER = `<svg viewBox="0 0 1 1" style="float:left;line-height:0;width:0;vertical-align:top;"></svg>`
+
+/**
+ * WeChat's editor drops empty <section>/<span> on paste, which erases sized
+ * decorations such as layout-component rules and corner marks. A zero-width
+ * <svg> placeholder (the convention WeChat layout tools use) keeps them.
+ */
+function keepEmptyDecorations(root: HTMLElement) {
+  root.querySelectorAll<HTMLElement>(`section, span`).forEach((el) => {
+    if (el.childNodes.length > 0 || (!el.style.width && !el.style.height))
+      return
+    if (el.closest(`svg, .katex, mjx-container`))
+      return
+    el.insertAdjacentHTML(`beforeend`, EMPTY_DECORATION_KEEPER)
   })
 }
 
