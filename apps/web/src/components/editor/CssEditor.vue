@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ThemeName } from '@md/shared/configs'
+import type { BuiltinThemeName, ThemeName } from '@md/shared/configs'
 import { Check, CheckSquare, CircleHelp, Download, Edit3, Ellipsis, Eye, Plus, X } from '@lucide/vue'
 import { hljs } from '@md/core/renderer'
 import { exportMergedTheme } from '@md/core/theme'
@@ -109,7 +109,7 @@ const isOpenAddDialog = ref(false)
 const isOpenTipsDialog = ref(false)
 
 const addInputVal = ref(``)
-const baseThemeForNew = ref<'blank' | 'default' | 'grace' | 'simple'>('blank')
+const baseThemeForNew = ref<'blank' | BuiltinThemeName>('blank')
 
 async function addTab() {
   if (!(addInputVal.value).trim()) {
@@ -175,7 +175,7 @@ function addHandler() {
 }
 
 const isOpenViewThemeDialog = ref(false)
-const selectedViewTheme = ref<'default' | 'grace' | 'simple'>('default')
+const selectedViewTheme = ref<BuiltinThemeName>('default')
 const highlightedCSS = computed(() => hljs.highlight(themeMap[selectedViewTheme.value], { language: `css` }).value)
 
 const contextMenuTargetId = ref<string | null>(null)
@@ -618,6 +618,18 @@ function exportCurrentTheme() {
                 <SelectItem value="simple">
                   {{ t('cssEditor.basedSimple') }}
                 </SelectItem>
+                <SelectItem value="fresh">
+                  {{ t('cssEditor.basedFresh') }}
+                </SelectItem>
+                <SelectItem value="magazine">
+                  {{ t('cssEditor.basedMagazine') }}
+                </SelectItem>
+                <SelectItem value="warm">
+                  {{ t('cssEditor.basedWarm') }}
+                </SelectItem>
+                <SelectItem value="ink">
+                  {{ t('cssEditor.basedInk') }}
+                </SelectItem>
               </SelectContent>
             </Select>
             <p class="text-xs text-muted-foreground">
@@ -698,6 +710,18 @@ function exportCurrentTheme() {
               </SelectItem>
               <SelectItem value="simple">
                 {{ getThemeLabel(t, 'simple') }}
+              </SelectItem>
+              <SelectItem value="fresh">
+                {{ getThemeLabel(t, 'fresh') }}
+              </SelectItem>
+              <SelectItem value="magazine">
+                {{ getThemeLabel(t, 'magazine') }}
+              </SelectItem>
+              <SelectItem value="warm">
+                {{ getThemeLabel(t, 'warm') }}
+              </SelectItem>
+              <SelectItem value="ink">
+                {{ getThemeLabel(t, 'ink') }}
               </SelectItem>
             </SelectContent>
           </Select>

@@ -203,6 +203,10 @@ export default {
       default: { label: `Classic`, desc: `` },
       grace: { label: `Grace`, desc: `{'@'}brzhang` },
       simple: { label: `Simple`, desc: `{'@'}okooo5km` },
+      fresh: { label: `Fresh`, desc: `Best with Emerald` },
+      magazine: { label: `Magazine`, desc: `Best with Blue` },
+      warm: { label: `Warm`, desc: `Best with Rose` },
+      ink: { label: `Ink`, desc: `Best with Black` },
     },
     fontFamily: {
       sansSerif: { label: `Sans`, desc: `Font123Abc` },

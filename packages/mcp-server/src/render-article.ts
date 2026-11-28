@@ -60,6 +60,10 @@ const themeMap: Record<string, string> = {
   default: loadCSSFile(`default.css`),
   grace: loadCSSFile(`grace.css`),
   simple: loadCSSFile(`simple.css`),
+  fresh: loadCSSFile(`fresh.css`),
+  magazine: loadCSSFile(`magazine.css`),
+  warm: loadCSSFile(`warm.css`),
+  ink: loadCSSFile(`ink.css`),
 }
 
 const hljsCssCache = new Map<string, string>()

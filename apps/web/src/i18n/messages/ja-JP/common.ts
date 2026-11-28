@@ -203,6 +203,10 @@ export default {
       default: { label: `クラシック`, desc: `` },
       grace: { label: `Grace`, desc: `{'@'}brzhang` },
       simple: { label: `シンプル`, desc: `{'@'}okooo5km` },
+      fresh: { label: `爽やか`, desc: `おすすめ色：エメラルド` },
+      magazine: { label: `マガジン`, desc: `おすすめ色：ブルー` },
+      warm: { label: `ぬくもり`, desc: `おすすめ色：ローズ` },
+      ink: { label: `モノトーン`, desc: `おすすめ色：ブラック` },
     },
     fontFamily: {
       sansSerif: { label: `ゴシック`, desc: `Font123Abc` },

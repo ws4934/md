@@ -203,6 +203,10 @@ export default {
       default: { label: `經典`, desc: `` },
       grace: { label: `優雅`, desc: `{'@'}brzhang` },
       simple: { label: `簡潔`, desc: `{'@'}okooo5km` },
+      fresh: { label: `清新`, desc: `推薦配色：翡翠綠` },
+      magazine: { label: `雜誌`, desc: `推薦配色：經典藍` },
+      warm: { label: `暖陽`, desc: `推薦配色：玫瑰金` },
+      ink: { label: `墨白`, desc: `推薦配色：石墨黑` },
     },
     fontFamily: {
       sansSerif: { label: `無襯線`, desc: `字型123Abc` },

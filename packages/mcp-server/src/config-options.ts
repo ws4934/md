@@ -25,6 +25,10 @@ export const themeOptions = [
   { value: `default`, label: `经典`, desc: `` },
   { value: `grace`, label: `优雅`, desc: `@brzhang` },
   { value: `simple`, label: `简洁`, desc: `@okooo5km` },
+  { value: `fresh`, label: `清新`, desc: `` },
+  { value: `magazine`, label: `杂志`, desc: `` },
+  { value: `warm`, label: `暖阳`, desc: `` },
+  { value: `ink`, label: `墨白`, desc: `` },
 ] as const
 
 export const fontFamilyOptions = [

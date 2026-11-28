@@ -26,10 +26,14 @@ const headingStyleEnum = z.enum([`default`, `color-only`, `border-bottom`, `bord
 export const renderMarkdownInputSchema = z.object({
   markdown: z.string().describe(`The Markdown source text to render.`),
   theme: z
-    .enum([`default`, `grace`, `simple`])
+    .enum([`default`, `grace`, `simple`, `fresh`, `magazine`, `warm`, `ink`])
     .optional()
     .default(`default`)
-    .describe(`Visual theme to apply. One of: default (经典), grace (优雅), simple (简洁).`),
+    .describe(
+      `Visual theme to apply. One of: default (经典), grace (优雅), simple (简洁), `
+      + `fresh (清新, best with #009874), magazine (杂志, best with #0F4C81), `
+      + `warm (暖阳, best with #B76E79), ink (墨白, best with #333333).`,
+    ),
   primaryColor: z
     .string()
     .regex(/^#[0-9A-F]{6}$/i, `Must be a valid 6-digit hex color`)
@@ -407,7 +411,7 @@ server.registerTool(
   },
   () => jsonText({
     options: [
-      { name: `theme`, type: `'default' | 'grace' | 'simple'`, default: `default`, description: `Visual theme.` },
+      { name: `theme`, type: `'default' | 'grace' | 'simple' | 'fresh' | 'magazine' | 'warm' | 'ink'`, default: `default`, description: `Visual theme.` },
       { name: `primaryColor`, type: `string (hex)`, default: `#0F4C81`, description: `Primary accent color via --md-primary-color.` },
       { name: `fontFamily`, type: `string`, default: `system sans-serif stack`, description: `CSS font-family. See list_fonts.` },
       { name: `fontSize`, type: `string (px)`, default: `16px`, description: `Base font size. See list_font_sizes.` },
