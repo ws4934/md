@@ -434,3 +434,308 @@ hr {
   letter-spacing: 0.15em;
   vertical-align: middle;
 }
+
+/* ==================== More layout components ==================== */
+/* Bill: an account book page; double frame on rice paper, a vermilion seal for the title */
+.md-bill {
+  padding: 1.2em 1.3em 1.1em;
+  border: 3px double color-mix(in srgb, hsl(var(--foreground)) 30%, transparent);
+  border-radius: 0;
+  background: color-mix(in srgb, #c8b48a 14%, transparent);
+  margin: calc(1.8em * var(--md-block-spacing)) 8px;
+}
+
+/* padding-left exceeds padding-right by the letter-spacing so the text sits centred in the seal */
+.md-bill .md-bill-title {
+  display: table;
+  padding: 0.3em 0.6em 0.3em 0.9em;
+  border: 2px solid color-mix(in srgb, var(--md-primary-color) 70%, #8f2a0a);
+  border-radius: 3px;
+  margin: 0 auto 0.6em;
+  color: color-mix(in srgb, var(--md-primary-color) 70%, #8f2a0a);
+  background: color-mix(in srgb, var(--md-primary-color) 6%, transparent);
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 0.85em;
+  font-weight: bold;
+  line-height: 1.4;
+  letter-spacing: 0.3em;
+  text-align: center;
+  text-indent: 0;
+}
+
+.md-bill .md-bill-row,
+.md-bill .md-bill-total {
+  display: table;
+  box-sizing: border-box;
+  width: 100%;
+  table-layout: auto;
+  padding: 0.55em 0.2em;
+  border: none;
+  border-bottom: 1px solid color-mix(in srgb, hsl(var(--foreground)) 12%, transparent);
+  margin: 0;
+  font-size: 1em;
+  line-height: 1.6;
+  text-indent: 0;
+}
+
+.md-bill .md-bill-label {
+  display: table-cell;
+  padding-right: 1em;
+  color: color-mix(in srgb, hsl(var(--foreground)) 75%, transparent);
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 0.92em;
+  letter-spacing: 0.15em;
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+
+.md-bill .md-bill-value {
+  display: table-cell;
+  color: hsl(var(--foreground));
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 0.95em;
+  letter-spacing: 0.04em;
+  text-align: right;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* Total: closed off by a double rule, the sum in cinnabar like the stat figure */
+.md-bill .md-bill-total {
+  padding: 0.7em 0.2em 0.2em;
+  border-top: 3px double color-mix(in srgb, hsl(var(--foreground)) 40%, transparent);
+  border-bottom: none;
+}
+
+.md-bill .md-bill-total .md-bill-label {
+  color: hsl(var(--foreground));
+  font-weight: bold;
+  letter-spacing: 0.3em;
+}
+
+.md-bill .md-bill-total .md-bill-value {
+  color: color-mix(in srgb, var(--md-primary-color) 70%, #8f2a0a);
+  font-size: 1.45em;
+  font-weight: normal;
+  letter-spacing: 0.04em;
+}
+
+.md-bill .md-bill-note {
+  padding: 0.7em 0 0;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 12%, transparent);
+  margin: 0.6em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-family: 'Kaiti SC', STKaiti, KaiTi, 'Songti SC', STSong, 'Noto Serif SC', serif;
+  font-size: 0.85em;
+  line-height: 1.8;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Bars: a scroll between double rules; cinnabar strips laid in hairline paper slots */
+.md-bars {
+  padding: 1em 0.6em 0.9em;
+  border: none;
+  border-top: 3px double color-mix(in srgb, hsl(var(--foreground)) 35%, transparent);
+  border-bottom: 3px double color-mix(in srgb, hsl(var(--foreground)) 35%, transparent);
+  border-radius: 0;
+  background: none;
+  margin: calc(1.8em * var(--md-block-spacing)) 8px;
+}
+
+.md-bars .md-bars-title {
+  padding-left: 0.3em;
+  margin: 0 0 0.6em;
+  color: hsl(var(--foreground));
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 0.95em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.3em;
+  text-align: center;
+  text-indent: 0;
+}
+
+.md-bars .md-bar {
+  margin: 0.7em 0 0;
+}
+
+.md-bars .md-bar-head {
+  display: table;
+  width: 100%;
+  margin: 0 0 0.3em;
+  line-height: 1.6;
+  text-indent: 0;
+}
+
+.md-bars .md-bar-label {
+  display: table-cell;
+  padding-right: 1em;
+  color: color-mix(in srgb, hsl(var(--foreground)) 80%, transparent);
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 0.88em;
+  letter-spacing: 0.15em;
+  vertical-align: bottom;
+  overflow-wrap: anywhere;
+}
+
+.md-bars .md-bar-value {
+  display: table-cell;
+  color: color-mix(in srgb, var(--md-primary-color) 70%, #8f2a0a);
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 0.92em;
+  font-weight: normal;
+  letter-spacing: 0.04em;
+  text-align: right;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* The slot's padding frames the strip, so the track height equals the fill height */
+.md-bars .md-bar-track {
+  height: 6px;
+  padding: 2px;
+  border: 1px solid color-mix(in srgb, hsl(var(--foreground)) 15%, transparent);
+  border-radius: 0;
+  background: color-mix(in srgb, #c8b48a 16%, transparent);
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+}
+
+.md-bars .md-bar-fill {
+  height: 6px;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--md-primary-color) 70%, #8f2a0a);
+  font-size: 0;
+  line-height: 0;
+}
+
+.md-bars .md-bars-note {
+  margin: 1em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+  font-family: 'Kaiti SC', STKaiti, KaiTi, 'Songti SC', STSong, 'Noto Serif SC', serif;
+  font-size: 0.82em;
+  line-height: 1.7;
+  letter-spacing: 0.04em;
+  text-align: center;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Timeline: a chronicle along a double ink rule, each year stamped with a small
+ * seal square. Base CSS zeroes the first child's top margin, so the dot is
+ * moved down with a transform; its negative bottom margin takes it out of the flow.
+ */
+.md-timeline {
+  padding: 0 0 0 8px;
+  border: none;
+  background: none;
+  margin: calc(1.8em * var(--md-block-spacing)) 8px;
+}
+
+.md-timeline .md-timeline-item {
+  padding: 0 0 1.2em 18px;
+  border: none;
+  border-left: 3px double color-mix(in srgb, hsl(var(--foreground)) 30%, transparent);
+  margin: 0;
+}
+
+.md-timeline .md-timeline-item:last-child {
+  padding-bottom: 0;
+  border-left-color: transparent;
+}
+
+.md-timeline .md-timeline-dot {
+  display: block;
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--md-primary-color) 70%, #8f2a0a);
+  border-radius: 0;
+  margin: 0 0 -9px -24px;
+  background: color-mix(in srgb, var(--md-primary-color) 70%, #8f2a0a);
+  font-size: 0;
+  line-height: 0;
+  -webkit-transform: translateY(8px);
+  transform: translateY(8px);
+}
+
+.md-timeline .md-timeline-time {
+  margin: 0;
+  color: color-mix(in srgb, var(--md-primary-color) 70%, #8f2a0a);
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 0.9em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.12em;
+  text-indent: 0;
+}
+
+.md-timeline .md-timeline-text {
+  margin: 0.3em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 88%, transparent);
+  font-size: 0.95em;
+  line-height: 1.85;
+  letter-spacing: 0.06em;
+  text-align: justify;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Term: the headword opens with a 『 corner and the source closes with a 』 corner */
+.md-term {
+  padding: 1.1em 1.2em 1em;
+  border: none;
+  border-radius: 0;
+  background: color-mix(in srgb, #c8b48a 14%, transparent);
+  margin: calc(1.8em * var(--md-block-spacing)) 8px;
+}
+
+.md-term .md-term-name {
+  display: inline-block;
+  padding: 0.3em 0.3em 0 0.55em;
+  border-top: 4px double color-mix(in srgb, var(--md-primary-color) 70%, #8f2a0a);
+  border-left: 4px double color-mix(in srgb, var(--md-primary-color) 70%, #8f2a0a);
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 1.2em;
+  font-weight: bold;
+  line-height: 1.5;
+  letter-spacing: 0.2em;
+  text-indent: 0;
+}
+
+.md-term .md-term-desc {
+  padding: 0 0.3em;
+  margin: 0.6em 0 0;
+  color: hsl(var(--foreground));
+  font-family: 'Kaiti SC', STKaiti, KaiTi, 'Songti SC', STSong, 'Noto Serif SC', serif;
+  font-size: 1.05em;
+  line-height: 1.9;
+  letter-spacing: 0.04em;
+  text-align: justify;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+}
+
+/* display: table shrink-wraps the signature so margin-left: auto pushes it right */
+.md-term .md-term-source {
+  display: table;
+  padding: 0 0.55em 0.3em 0.3em;
+  border-right: 4px double color-mix(in srgb, var(--md-primary-color) 70%, #8f2a0a);
+  border-bottom: 4px double color-mix(in srgb, var(--md-primary-color) 70%, #8f2a0a);
+  margin: 0.7em 0 0 auto;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-family: 'Songti SC', STSong, 'Noto Serif SC', 'Source Han Serif SC', serif;
+  font-size: 0.8em;
+  line-height: 1.6;
+  letter-spacing: 0.1em;
+  text-align: right;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+}

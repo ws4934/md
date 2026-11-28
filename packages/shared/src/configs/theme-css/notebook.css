@@ -484,3 +484,315 @@ hr {
   -webkit-transform: rotate(-6deg);
   transform: rotate(-6deg);
 }
+
+/* ==================== More layout components ==================== */
+
+/* Bill: a shopping list on journal paper; the title is a strip of tape, rows are dotted leaders */
+.md-bill {
+  box-sizing: border-box;
+  width: 94%;
+  padding: 1px 1.3em 1.1em;
+  border: none;
+  border-radius: 3px;
+  background: color-mix(in srgb, #d6c7a1 24%, transparent);
+  box-shadow: 0 10px 12px -10px rgba(0, 0, 0, 0.3);
+  margin: calc(2em * var(--md-block-spacing)) auto calc(1.8em * var(--md-block-spacing));
+  -webkit-transform: rotate(-0.6deg);
+  transform: rotate(-0.6deg);
+}
+
+.md-bill .md-bill-title {
+  display: table;
+  padding: 0.25em 1.1em 0.25em 1.3em;
+  border-radius: 1px;
+  margin: 0 auto 0.1em;
+  color: color-mix(in srgb, var(--md-primary-color) 40%, hsl(var(--foreground)));
+  background: color-mix(in srgb, var(--md-primary-color) 42%, transparent);
+  font-size: 0.85em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.2em;
+  text-align: center;
+  text-indent: 0;
+  -webkit-transform: translateY(-11px) rotate(-2deg);
+  transform: translateY(-11px) rotate(-2deg);
+}
+
+.md-bill .md-bill-row,
+.md-bill .md-bill-total {
+  display: table;
+  box-sizing: border-box;
+  width: 100%;
+  table-layout: auto;
+  margin: 0;
+  padding: 0.5em 0.1em 0.35em;
+  border-bottom: 2px dotted color-mix(in srgb, var(--md-primary-color) 45%, transparent);
+  line-height: 1.6;
+  text-indent: 0;
+}
+
+/* The label takes the spare width so the value cell (and its marker stroke) hugs the figure */
+.md-bill .md-bill-label {
+  display: table-cell;
+  width: 100%;
+  padding-right: 1em;
+  color: color-mix(in srgb, hsl(var(--foreground)) 90%, var(--md-primary-color));
+  font-size: 0.95em;
+  letter-spacing: 0.06em;
+  vertical-align: bottom;
+  overflow-wrap: anywhere;
+}
+
+.md-bill .md-bill-value {
+  display: table-cell;
+  padding: 0 2px;
+  color: color-mix(in srgb, var(--md-primary-color) 40%, hsl(var(--foreground)));
+  font-size: 0.95em;
+  font-weight: bold;
+  letter-spacing: 0.02em;
+  text-align: right;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* Total: double pen line above, the sum circled in marker */
+.md-bill .md-bill-total {
+  padding: 0.6em 0.1em 0.1em;
+  border-top: 4px double color-mix(in srgb, var(--md-primary-color) 60%, hsl(var(--foreground)));
+  border-bottom: none;
+  margin-top: 0.4em;
+}
+
+.md-bill .md-bill-total .md-bill-label {
+  font-weight: bold;
+  letter-spacing: 0.2em;
+}
+
+.md-bill .md-bill-total .md-bill-value {
+  padding: 0 4px;
+  font-size: 1.3em;
+  background-image: linear-gradient(transparent 58%, color-mix(in srgb, var(--md-primary-color) 45%, transparent) 58%);
+}
+
+.md-bill .md-bill-note {
+  margin: 0.8em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.8em;
+  line-height: 1.75;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Bar chart: strips of striped washi tape laid on a dot-grid journal page */
+.md-bars {
+  padding: 1em 1.1em 1.1em;
+  border: none;
+  border-radius: 3px;
+  background-color: transparent;
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--md-primary-color) 38%, transparent) 1px,
+    transparent 1.2px
+  );
+  background-size: 14px 14px;
+  background-position: 7px 7px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--md-primary-color) 20%, transparent);
+  margin: calc(1.8em * var(--md-block-spacing)) 8px;
+}
+
+.md-bars .md-bars-title {
+  display: inline-block;
+  padding: 0.05em 0.7em 0.05em 0.8em;
+  border-radius: 1px;
+  margin: 0 0 0.4em;
+  color: color-mix(in srgb, var(--md-primary-color) 40%, hsl(var(--foreground)));
+  background: color-mix(in srgb, var(--md-primary-color) 30%, transparent);
+  font-size: 0.85em;
+  font-weight: bold;
+  line-height: 1.7;
+  letter-spacing: 0.12em;
+  text-indent: 0;
+  -webkit-transform: rotate(-1.5deg);
+  transform: rotate(-1.5deg);
+}
+
+.md-bars .md-bar {
+  margin: 0.55em 0 0;
+}
+
+.md-bars .md-bar-head {
+  display: table;
+  width: 100%;
+  margin: 0 0 0.2em;
+  line-height: 1.6;
+  text-indent: 0;
+}
+
+.md-bars .md-bar-label {
+  display: table-cell;
+  color: color-mix(in srgb, hsl(var(--foreground)) 90%, var(--md-primary-color));
+  font-size: 0.88em;
+  letter-spacing: 0.06em;
+  overflow-wrap: anywhere;
+}
+
+.md-bars .md-bar-value {
+  display: table-cell;
+  padding-left: 1em;
+  color: color-mix(in srgb, var(--md-primary-color) 40%, hsl(var(--foreground)));
+  font-size: 0.88em;
+  font-weight: bold;
+  letter-spacing: 0.02em;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.md-bars .md-bar-track {
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: color-mix(in srgb, #d6c7a1 30%, transparent);
+  overflow: hidden;
+}
+
+.md-bars .md-bar-fill {
+  height: 14px;
+  border-radius: 2px;
+  background-color: color-mix(in srgb, var(--md-primary-color) 46%, transparent);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0,
+    transparent 5px,
+    color-mix(in srgb, var(--md-primary-color) 30%, transparent) 5px,
+    color-mix(in srgb, var(--md-primary-color) 30%, transparent) 10px
+  );
+}
+
+.md-bars .md-bars-note {
+  margin: 0.9em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.75em;
+  line-height: 1.7;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Timeline: a stitched line with a scrap of tape at each date. The dot carries a
+ * negative bottom margin so it takes no height; base CSS zeroes the first child's
+ * top margin, so it is moved down with a transform.
+ */
+.md-timeline {
+  padding: 0 0 0 8px;
+  border: none;
+  background: none;
+  margin: calc(1.8em * var(--md-block-spacing)) 8px;
+}
+
+.md-timeline .md-timeline-item {
+  padding: 0 0 1.1em 22px;
+  border: none;
+  border-left: 2px dashed color-mix(in srgb, var(--md-primary-color) 50%, transparent);
+  margin: 0;
+}
+
+.md-timeline .md-timeline-item:last-child {
+  padding-bottom: 0;
+  border-left-color: transparent;
+}
+
+.md-timeline .md-timeline-dot {
+  display: block;
+  width: 16px;
+  height: 9px;
+  padding: 0;
+  border: none;
+  border-radius: 1px;
+  margin: 0 0 -9px -31px;
+  background: color-mix(in srgb, var(--md-primary-color) 55%, transparent);
+  font-size: 0;
+  line-height: 0;
+  -webkit-transform: translateY(9px) rotate(-12deg);
+  transform: translateY(9px) rotate(-12deg);
+}
+
+.md-timeline .md-timeline-time {
+  display: inline-block;
+  padding: 0 3px;
+  margin: 0;
+  color: color-mix(in srgb, var(--md-primary-color) 40%, hsl(var(--foreground)));
+  background-image: linear-gradient(transparent 60%, color-mix(in srgb, var(--md-primary-color) 35%, transparent) 60%);
+  font-size: 0.85em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.08em;
+  text-indent: 0;
+}
+
+.md-timeline .md-timeline-text {
+  margin: 0.25em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 90%, var(--md-primary-color));
+  font-size: 0.92em;
+  line-height: 1.8;
+  letter-spacing: 0.05em;
+  text-align: left;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Term: an index card; the word sits on the card's header rule, the definition on ruled lines */
+.md-term {
+  padding: 0.9em 1.2em 1em;
+  border: none;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--md-primary-color) 7%, transparent);
+  box-shadow: 0 10px 12px -10px rgba(0, 0, 0, 0.3);
+  margin: calc(1.8em * var(--md-block-spacing)) 12px;
+  -webkit-transform: rotate(0.6deg);
+  transform: rotate(0.6deg);
+}
+
+.md-term .md-term-name {
+  padding: 0 0 0.3em;
+  border-bottom: 2px solid color-mix(in srgb, var(--md-primary-color) 65%, transparent);
+  margin: 0 0 0.3em;
+  color: color-mix(in srgb, var(--md-primary-color) 40%, hsl(var(--foreground)));
+  font-size: 1.12em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.12em;
+  text-indent: 0;
+}
+
+/* Ruled lines in the text's own em, one under every line of text */
+.md-term .md-term-desc {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 90%, var(--md-primary-color));
+  background-image: repeating-linear-gradient(
+    transparent 0,
+    transparent calc(2em - 1px),
+    color-mix(in srgb, var(--md-primary-color) 30%, transparent) calc(2em - 1px),
+    color-mix(in srgb, var(--md-primary-color) 30%, transparent) 2em
+  );
+  font-size: 0.95em;
+  line-height: 2;
+  letter-spacing: 0.05em;
+  text-align: left;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+}
+
+.md-term .md-term-source {
+  margin: 0.5em 0 0;
+  color: color-mix(in srgb, var(--md-primary-color) 45%, hsl(var(--foreground)));
+  font-size: 0.78em;
+  line-height: 1.6;
+  letter-spacing: 0.05em;
+  text-align: right;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+}

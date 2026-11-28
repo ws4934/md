@@ -461,3 +461,307 @@ hr {
   letter-spacing: 0.3em;
   vertical-align: middle;
 }
+
+/* ==================== More layout components ==================== */
+/* Bill: a ruled data table; solid accent header, tabular figures, the total on a tinted footer row */
+.md-bill {
+  padding: 0;
+  border: 1px solid color-mix(in srgb, hsl(var(--foreground)) 14%, transparent);
+  border-radius: 0;
+  background: none;
+  margin: calc(1.5em * var(--md-block-spacing)) 8px;
+}
+
+.md-bill .md-bill-title {
+  padding: 0.5em 14px;
+  margin: 0;
+  color: #fff;
+  background: var(--md-primary-color);
+  font-size: 0.8em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.12em;
+  text-indent: 0;
+}
+
+/* border-box keeps the cell padding inside the 100% width */
+.md-bill .md-bill-row,
+.md-bill .md-bill-total {
+  display: table;
+  box-sizing: border-box;
+  width: 100%;
+  table-layout: auto;
+  padding: 0.55em 14px;
+  border: none;
+  border-bottom: 1px solid color-mix(in srgb, hsl(var(--foreground)) 10%, transparent);
+  margin: 0;
+  font-size: 1em;
+  line-height: 1.6;
+  text-indent: 0;
+}
+
+.md-bill .md-bill-label {
+  display: table-cell;
+  padding-right: 1em;
+  color: color-mix(in srgb, hsl(var(--foreground)) 70%, transparent);
+  font-size: 0.88em;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+
+.md-bill .md-bill-value {
+  display: table-cell;
+  color: hsl(var(--foreground));
+  font-family: 'DIN Alternate', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.95em;
+  font-weight: bold;
+  letter-spacing: 0;
+  text-align: right;
+  white-space: nowrap;
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+}
+
+.md-bill .md-bill-total {
+  padding: 0.6em 14px;
+  border-top: 2px solid var(--md-primary-color);
+  border-bottom: none;
+  background: color-mix(in srgb, var(--md-primary-color) 6%, transparent);
+}
+
+.md-bill .md-bill-total .md-bill-label {
+  color: hsl(var(--foreground));
+  font-size: 0.85em;
+  font-weight: bold;
+  letter-spacing: 0.12em;
+}
+
+.md-bill .md-bill-total .md-bill-value {
+  color: var(--md-primary-color);
+  font-size: 1.4em;
+}
+
+.md-bill .md-bill-note {
+  padding: 0.6em 14px 0.7em;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 10%, transparent);
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.75em;
+  line-height: 1.7;
+  letter-spacing: 0.03em;
+  text-align: left;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Bars: chart panel under a top accent rule; square bars on tracks marked at each quarter */
+.md-bars {
+  padding: 0.9em 1.1em 1em;
+  border: none;
+  border-top: 3px solid var(--md-primary-color);
+  border-radius: 0;
+  background: color-mix(in srgb, hsl(var(--foreground)) 3%, transparent);
+  margin: calc(1.5em * var(--md-block-spacing)) 8px;
+}
+
+.md-bars .md-bars-title {
+  margin: 0 0 0.3em;
+  color: hsl(var(--foreground));
+  font-size: 0.88em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.06em;
+  text-indent: 0;
+}
+
+.md-bars .md-bar {
+  margin: 0.65em 0 0;
+}
+
+.md-bars .md-bar-head {
+  display: table;
+  width: 100%;
+  margin: 0 0 0.25em;
+  line-height: 1.5;
+  text-indent: 0;
+}
+
+.md-bars .md-bar-label {
+  display: table-cell;
+  padding-right: 1em;
+  color: color-mix(in srgb, hsl(var(--foreground)) 70%, transparent);
+  font-size: 0.82em;
+  letter-spacing: 0.04em;
+  vertical-align: bottom;
+  overflow-wrap: anywhere;
+}
+
+.md-bars .md-bar-value {
+  display: table-cell;
+  color: hsl(var(--foreground));
+  font-family: 'DIN Alternate', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.92em;
+  font-weight: bold;
+  letter-spacing: 0;
+  text-align: right;
+  white-space: nowrap;
+  vertical-align: bottom;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Quarter gridlines are painted on the track, so they show only where the bar has not reached */
+.md-bars .md-bar-track {
+  height: 10px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background-color: color-mix(in srgb, hsl(var(--foreground)) 7%, transparent);
+  background-image: linear-gradient(
+    90deg,
+    transparent calc(100% - 1px),
+    color-mix(in srgb, hsl(var(--foreground)) 14%, transparent) calc(100% - 1px)
+  );
+  background-size: 25% 100%;
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+}
+
+.md-bars .md-bar-fill {
+  height: 10px;
+  border-radius: 0;
+  background: var(--md-primary-color);
+  font-size: 0;
+  line-height: 0;
+}
+
+.md-bars .md-bars-note {
+  padding: 0.6em 0 0;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 12%, transparent);
+  margin: 0.9em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+  font-size: 0.75em;
+  line-height: 1.7;
+  letter-spacing: 0.03em;
+  text-align: left;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Timeline: milestones on a hairline axis. Each marker is a short accent tick
+ * across the axis beside a tinted date tag. Base CSS zeroes the first child's
+ * top margin, so the tick is moved down with a transform.
+ */
+.md-timeline {
+  padding: 0 0 0 8px;
+  border: none;
+  background: none;
+  margin: calc(1.5em * var(--md-block-spacing)) 8px;
+}
+
+.md-timeline .md-timeline-item {
+  padding: 0 0 1.1em 18px;
+  border: none;
+  border-left: 1px solid color-mix(in srgb, hsl(var(--foreground)) 18%, transparent);
+  margin: 0;
+}
+
+.md-timeline .md-timeline-item:last-child {
+  padding-bottom: 0;
+  border-left-color: transparent;
+}
+
+.md-timeline .md-timeline-dot {
+  display: block;
+  width: 13px;
+  height: 3px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  margin: 0 0 -3px -25px;
+  background: var(--md-primary-color);
+  font-size: 0;
+  line-height: 0;
+  -webkit-transform: translateY(14px);
+  transform: translateY(14px);
+}
+
+.md-timeline .md-timeline-time {
+  display: inline-block;
+  padding: 0.1em 0.5em;
+  border-radius: 2px;
+  margin: 0;
+  color: var(--md-primary-color);
+  background: color-mix(in srgb, var(--md-primary-color) 9%, transparent);
+  font-family: 'DIN Alternate', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.8em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.04em;
+  text-indent: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.md-timeline .md-timeline-text {
+  margin: 0.35em 0 0;
+  color: hsl(var(--foreground));
+  font-size: 0.93em;
+  line-height: 1.75;
+  letter-spacing: 0.03em;
+  text-align: left;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Term: glossary entry with a tinted header row over the definition */
+.md-term {
+  padding: 0;
+  border: 1px solid color-mix(in srgb, hsl(var(--foreground)) 14%, transparent);
+  border-left: 3px solid var(--md-primary-color);
+  border-radius: 0;
+  background: none;
+  margin: calc(1.5em * var(--md-block-spacing)) 8px;
+}
+
+.md-term .md-term-name {
+  padding: 0.5em 14px;
+  border-bottom: 1px solid color-mix(in srgb, hsl(var(--foreground)) 10%, transparent);
+  margin: 0;
+  color: var(--md-primary-color);
+  background: color-mix(in srgb, var(--md-primary-color) 6%, transparent);
+  font-size: 1.05em;
+  font-weight: bold;
+  line-height: 1.5;
+  letter-spacing: 0.06em;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+}
+
+.md-term .md-term-desc {
+  padding: 0.75em 14px 0.85em;
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.93em;
+  line-height: 1.8;
+  letter-spacing: 0.03em;
+  text-align: left;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+}
+
+.md-term .md-term-source {
+  padding: 0 14px 0.75em;
+  margin: -0.2em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+  font-size: 0.75em;
+  line-height: 1.6;
+  letter-spacing: 0.03em;
+  text-align: left;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
