@@ -1,5 +1,8 @@
 import type { ComponentPropDef, CustomComponentDef } from '@md/shared'
 
+/** Paired-tag usage such as `<LeadQuote>text</LeadQuote>`; group 2 is the children. */
+const EXAMPLE_CHILDREN_RE = /^<([A-Z]\w*)(?:\s(?:"[^"]*"|'[^']*'|[^"'>])*)?>([\s\S]*)<\/\1>\s*$/
+
 /** Parse prop="value" / prop='value' pairs from a component usage example. */
 export function parseExampleProps(example: string): Record<string, string> {
   const result: Record<string, string> = {}
@@ -63,6 +66,10 @@ export function getInitialPropValues(def: CustomComponentDef): Record<string, st
   if (def.example) {
     const fromExample = parseExampleProps(def.example)
     Object.assign(values, fromExample)
+    // A `children` prop comes from the text between the tags, not an attribute
+    const children = def.props.some(p => p.name === `children`) ? EXAMPLE_CHILDREN_RE.exec(def.example)?.[2] : undefined
+    if (children !== undefined)
+      values.children = children
   }
   return values
 }
@@ -79,7 +86,8 @@ export function missingRequiredProps(
 
 /**
  * Build a Markdown usage snippet.
- * - With `values`: assemble from prop defs (skip empty optional; keep empty required as placeholder).
+ * - With `values`: assemble from prop defs (skip empty optional; keep empty required as placeholder);
+ *   a `children` value goes between paired tags instead of into an attribute.
  * - Without `values`: prefer `example`, else derive placeholders from prop types/defaults.
  */
 export function buildComponentSnippet(
@@ -88,14 +96,20 @@ export function buildComponentSnippet(
 ): string {
   if (values) {
     const parts: string[] = []
+    let children = ``
     for (const p of def.props) {
       const raw = values[p.name]
       const value = raw === undefined ? `` : raw
       if (value === `` && !p.required)
         continue
-      parts.push(formatAttr(p.name, value === `` ? placeholderForProp(p) : value))
+      const filled = value === `` ? placeholderForProp(p) : value
+      if (p.name === `children`)
+        children = filled
+      else
+        parts.push(formatAttr(p.name, filled))
     }
-    return `<${def.name}${parts.length ? ` ${parts.join(` `)}` : ``} />`
+    const open = `<${def.name}${parts.length ? ` ${parts.join(` `)}` : ``}`
+    return children ? `${open}>${children}</${def.name}>` : `${open} />`
   }
 
   if (def.example)

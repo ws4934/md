@@ -1,6 +1,14 @@
 // @vitest-environment jsdom
+import fs from 'node:fs'
+import path from 'node:path'
+import { initRenderer } from '@md/core/renderer'
+import { applyTheme } from '@md/core/theme'
+import { modifyHtmlContent } from '@md/core/utils'
+import { defaultStyleConfig } from '@md/shared/configs'
+import juice from 'juice'
 import { describe, expect, it } from 'vitest'
-import { applyWeChatStructureFixes, modifyHtmlStructure, promoteSvgHtmlLabels, sanitizeHtmlCssForJuice, solveWeChatImage, stripInvalidCssForJuice } from './clipboard-dom'
+import { applyWeChatCssVarReplacements, applyWeChatStructureFixes, modifyHtmlStructure, modifyHtmlStructureInPlace, promoteSvgHtmlLabels, sanitizeHtmlCssForJuice, solveWeChatImage, stripInvalidCssForJuice } from './clipboard-dom'
+import { getStylesToAdd } from './share-styles'
 
 describe(`modifyHtmlStructure`, () => {
   it(`moves nested lists out of their parent li`, () => {
@@ -326,5 +334,43 @@ describe(`applyWeChatStructureFixes`, () => {
     expect(diagram.style.fontSize).toBe(``)
     expect(root.querySelector(`p`)!.style.lineHeight).toBe(`0`)
     expect((root.querySelector(`.katex`) as HTMLElement).style.lineHeight).toBe(`0`)
+  })
+})
+
+describe(`layout components on WeChat copy`, () => {
+  it(`keep their empty decorative elements, sized and coloured by inline styles`, async () => {
+    const vars = {
+      primaryColor: `#0F4C81`,
+      fontFamily: defaultStyleConfig.fontFamily,
+      fontSize: defaultStyleConfig.fontSize,
+      lineHeight: defaultStyleConfig.lineHeight,
+      blockSpacing: defaultStyleConfig.blockSpacing,
+    }
+    // Vitest stubs `?raw` CSS imports with empty strings, so read the theme file directly
+    const defaultCss = fs.readFileSync(path.resolve(__dirname, `../../../../../packages/shared/src/configs/theme-css/default.css`), `utf8`)
+    await applyTheme({ themeName: `default`, themeCSS: defaultCss, variables: vars })
+
+    const root = document.createElement(`div`)
+    root.innerHTML = modifyHtmlContent([`<LeadQuote>导语</LeadQuote>`, `<Divider />`, `<EndMark />`].join(`\n\n`), initRenderer({}))
+
+    // Same steps as processClipboardContent
+    stripInvalidCssForJuice(root)
+    const html = (await getStylesToAdd()) + root.innerHTML
+    const inlined = juice(sanitizeHtmlCssForJuice(html), { inlinePseudoElements: true, preserveImportant: true, resolveCSSVariables: false })
+    root.innerHTML = applyWeChatCssVarReplacements(inlined, vars)
+    modifyHtmlStructureInPlace(root)
+    applyWeChatStructureFixes(root)
+
+    const decor = root.querySelectorAll(`.md-lead-mark, .md-divider-line, .md-divider-dot, .md-end-line`)
+    expect(decor).toHaveLength(7)
+    for (const el of decor) {
+      expect(el.childNodes).toHaveLength(0)
+      const style = el.getAttribute(`style`) ?? ``
+      expect(style).toMatch(/(?:^|;)\s*width:\s*\S/)
+      expect(style).toMatch(/(?:^|;)\s*height:\s*\S/)
+      expect(style).toMatch(/(?:^|;)\s*background:\s*\S/)
+      expect(style).not.toContain(`var(`)
+    }
+    expect(root.querySelector(`.md-lead-mark`)!.getAttribute(`style`)).toContain(`#0F4C81`)
   })
 })

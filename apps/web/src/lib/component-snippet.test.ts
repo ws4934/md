@@ -21,6 +21,17 @@ const tipDef: CustomComponentDef = {
   example: `<TipBlock type="info" title="提示" content="这是一条提示信息" />`,
 }
 
+const quoteDef: CustomComponentDef = {
+  id: `test-quote`,
+  name: `QuoteCard`,
+  template: ``,
+  props: [
+    { name: `children`, required: true },
+    { name: `source` },
+  ],
+  example: `<QuoteCard source="读者">一句话</QuoteCard>`,
+}
+
 describe(`parseExampleProps`, () => {
   it(`parses double-quoted props`, () => {
     expect(parseExampleProps(`<TipBlock type="info" content="hello" />`)).toEqual({
@@ -100,6 +111,13 @@ describe(`getInitialPropValues`, () => {
       d: `d`,
     })
   })
+
+  it(`reads children from the text between paired tags`, () => {
+    expect(getInitialPropValues(quoteDef)).toEqual({
+      children: `一句话`,
+      source: `读者`,
+    })
+  })
 })
 
 describe(`missingRequiredProps`, () => {
@@ -136,6 +154,17 @@ describe(`buildComponentSnippet`, () => {
       type: `info`,
       content: ``,
     })).toBe(`<TipBlock type="info" content="content" />`)
+  })
+
+  it(`writes children between paired tags`, () => {
+    expect(buildComponentSnippet(quoteDef, {
+      children: `一句话`,
+      source: ``,
+    })).toBe(`<QuoteCard>一句话</QuoteCard>`)
+    expect(buildComponentSnippet(quoteDef, {
+      children: `一句话`,
+      source: `读者`,
+    })).toBe(`<QuoteCard source="读者">一句话</QuoteCard>`)
   })
 
   it(`formats values that contain double quotes`, () => {

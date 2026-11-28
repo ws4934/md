@@ -369,6 +369,63 @@ export default {
           color: `標籤主色調（hex）`,
         },
       },
+      LeadQuote: {
+        description: `導語元件，用醒目的引言開篇或點題`,
+        props: {
+          children: `導語文字（寫在標籤之間）`,
+        },
+      },
+      Divider: {
+        description: `分隔線元件，分隔文章的不同層次，可帶文字`,
+        props: {
+          text: `分隔文字（可選，留空顯示圓點）`,
+        },
+      },
+      StatCard: {
+        description: `數據卡片元件，用大號數字突顯關鍵數據`,
+        props: {
+          value: `數值`,
+          unit: `單位（可選）`,
+          label: `數據說明`,
+          note: `補充備註（可選）`,
+        },
+      },
+      CompareCard: {
+        description: `對比卡片元件，左右兩欄對照前後或兩種做法`,
+        props: {
+          beforeTitle: `左欄標題`,
+          before: `左欄內容`,
+          afterTitle: `右欄標題`,
+          after: `右欄內容`,
+        },
+        propDefaults: {
+          beforeTitle: `以前`,
+          afterTitle: `現在`,
+        },
+      },
+      QuoteCard: {
+        description: `金句卡片元件，單獨突顯一句關鍵的話`,
+        props: {
+          children: `金句文字（寫在標籤之間）`,
+          source: `出處（可選）`,
+        },
+      },
+      SourceList: {
+        description: `參考資料元件，在文末列出引用來源`,
+        props: {
+          title: `標題`,
+          items: `JSON 字串陣列，每項一條來源`,
+        },
+        propDefaults: {
+          title: `參考資料`,
+        },
+      },
+      EndMark: {
+        description: `結束標記元件，標示文章結尾`,
+        props: {
+          text: `結束文字`,
+        },
+      },
       Emoji: {
         description: `行內表情貼紙，從系統或「我的表情」插入`,
         props: {

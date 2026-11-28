@@ -369,6 +369,63 @@ export default {
           color: `Tag accent color (hex)`,
         },
       },
+      LeadQuote: {
+        description: `Lead quote that opens or frames the article`,
+        props: {
+          children: `Quote text (written between the tags)`,
+        },
+      },
+      Divider: {
+        description: `Divider between article sections, with an optional label`,
+        props: {
+          text: `Label (optional; shows a dot when empty)`,
+        },
+      },
+      StatCard: {
+        description: `Data card that highlights a key number`,
+        props: {
+          value: `Number`,
+          unit: `Unit (optional)`,
+          label: `What the number means`,
+          note: `Extra note (optional)`,
+        },
+      },
+      CompareCard: {
+        description: `Two-column card comparing before and after, or two options`,
+        props: {
+          beforeTitle: `Left column title`,
+          before: `Left column text`,
+          afterTitle: `Right column title`,
+          after: `Right column text`,
+        },
+        propDefaults: {
+          beforeTitle: `Before`,
+          afterTitle: `Now`,
+        },
+      },
+      QuoteCard: {
+        description: `Quote card that sets apart one key sentence`,
+        props: {
+          children: `Quote text (written between the tags)`,
+          source: `Source (optional)`,
+        },
+      },
+      SourceList: {
+        description: `Reference list for the sources at the end of the article`,
+        props: {
+          title: `Title`,
+          items: `JSON string array, one source per item`,
+        },
+        propDefaults: {
+          title: `References`,
+        },
+      },
+      EndMark: {
+        description: `End mark that closes the article`,
+        props: {
+          text: `End text`,
+        },
+      },
       Emoji: {
         description: `Inline sticker from the built-in pack or My Emoji`,
         props: {

@@ -369,6 +369,63 @@ export default {
           color: `标签主色调（hex）`,
         },
       },
+      LeadQuote: {
+        description: `导语组件，用醒目的引言开篇或点题`,
+        props: {
+          children: `导语文字（写在标签之间）`,
+        },
+      },
+      Divider: {
+        description: `分隔线组件，分隔文章的不同层次，可带文字`,
+        props: {
+          text: `分隔文字（可选，留空显示圆点）`,
+        },
+      },
+      StatCard: {
+        description: `数据卡片组件，用大号数字突出关键数据`,
+        props: {
+          value: `数值`,
+          unit: `单位（可选）`,
+          label: `数据说明`,
+          note: `补充备注（可选）`,
+        },
+      },
+      CompareCard: {
+        description: `对比卡片组件，左右两栏对照前后或两种做法`,
+        props: {
+          beforeTitle: `左栏标题`,
+          before: `左栏内容`,
+          afterTitle: `右栏标题`,
+          after: `右栏内容`,
+        },
+        propDefaults: {
+          beforeTitle: `以前`,
+          afterTitle: `现在`,
+        },
+      },
+      QuoteCard: {
+        description: `金句卡片组件，单独突出一句关键的话`,
+        props: {
+          children: `金句文字（写在标签之间）`,
+          source: `出处（可选）`,
+        },
+      },
+      SourceList: {
+        description: `参考资料组件，在文末列出引用来源`,
+        props: {
+          title: `标题`,
+          items: `JSON 字符串数组，每项一条来源`,
+        },
+        propDefaults: {
+          title: `参考资料`,
+        },
+      },
+      EndMark: {
+        description: `结束标记组件，标示文章结尾`,
+        props: {
+          text: `结束文字`,
+        },
+      },
       Emoji: {
         description: `行内表情贴纸，从系统或「我的表情」插入`,
         props: {

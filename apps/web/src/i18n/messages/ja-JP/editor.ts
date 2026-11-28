@@ -369,6 +369,63 @@ export default {
           color: `タグアクセント色（hex）`,
         },
       },
+      LeadQuote: {
+        description: `冒頭や要点を印象的な一文で示すリード`,
+        props: {
+          children: `リード文（タグの間に記述）`,
+        },
+      },
+      Divider: {
+        description: `記事の区切りを示す区切り線（ラベルは任意）`,
+        props: {
+          text: `ラベル（任意、空欄なら点を表示）`,
+        },
+      },
+      StatCard: {
+        description: `重要な数値を大きく見せるデータカード`,
+        props: {
+          value: `数値`,
+          unit: `単位（任意）`,
+          label: `数値の説明`,
+          note: `補足（任意）`,
+        },
+      },
+      CompareCard: {
+        description: `以前と現在、または二つの案を左右で比べる比較カード`,
+        props: {
+          beforeTitle: `左列の見出し`,
+          before: `左列の本文`,
+          afterTitle: `右列の見出し`,
+          after: `右列の本文`,
+        },
+        propDefaults: {
+          beforeTitle: `以前`,
+          afterTitle: `現在`,
+        },
+      },
+      QuoteCard: {
+        description: `重要な一文を目立たせる引用カード`,
+        props: {
+          children: `引用文（タグの間に記述）`,
+          source: `出典（任意）`,
+        },
+      },
+      SourceList: {
+        description: `記事の末尾に出典を並べる参考資料リスト`,
+        props: {
+          title: `見出し`,
+          items: `JSON 文字列配列（1 項目に 1 出典）`,
+        },
+        propDefaults: {
+          title: `参考資料`,
+        },
+      },
+      EndMark: {
+        description: `記事の終わりを示すエンドマーク`,
+        props: {
+          text: `終了テキスト`,
+        },
+      },
       Emoji: {
         description: `内蔵パックまたはマイ絵文字から挿入するインラインスタンプ`,
         props: {

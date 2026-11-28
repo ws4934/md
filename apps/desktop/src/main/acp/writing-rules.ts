@@ -24,7 +24,15 @@ Extended syntax supported by this editor (use it where it helps the reader, do n
   <QRCodeBlock url="https://..." text="..." />
   <TableBlock headers='["A","B"]' rows='[["1","2"]]' caption="..." />
   <InfoGrid items='[{"label":"...","value":"..."}]' cols="2" />
-  <BadgeGroup tags='["...","..."]' />`
+  <BadgeGroup tags='["...","..."]' />
+- Layout components (styled by the theme; LeadQuote and QuoteCard wrap one line of plain text between their tags):
+  <LeadQuote>...</LeadQuote>
+  <Divider text="..." />
+  <StatCard value="..." unit="..." label="..." note="..." />
+  <CompareCard beforeTitle="..." before="..." afterTitle="..." after="..." />
+  <QuoteCard source="...">...</QuoteCard>
+  <SourceList items='["...","..."]' />
+  <EndMark />`
 
 export function buildArticleWritingRules(options?: { imageGenEnabled?: boolean }): string {
   if (!options?.imageGenEnabled)

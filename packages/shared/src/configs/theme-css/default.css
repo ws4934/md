@@ -578,3 +578,243 @@ td {
   line-height: 1;
   vertical-align: super;
 }
+
+/* ==================== Layout components ==================== */
+/*
+ * md-* blocks from the built-in layout components (LeadQuote, Divider, StatCard,
+ * CompareCard, QuoteCard, SourceList, EndMark). Every theme inherits these rules.
+ * WeChat keeps only inline styles: no ::before/::after and no flex/grid, and the
+ * empty decorative spans/sections carry their own size and colour.
+ * text-indent: 0 keeps the "indent paragraphs" setting out of the cards.
+ */
+
+/* Lead quote: centred text between two short accent bars */
+.md-lead {
+  margin: calc(2em * var(--md-block-spacing)) 8px;
+  text-align: center;
+}
+
+.md-lead-mark {
+  width: 32px;
+  height: 3px;
+  margin: 0 auto;
+  border-radius: 2px;
+  background: var(--md-primary-color);
+}
+
+.md-lead-text {
+  margin: 0.9em 0;
+  color: hsl(var(--foreground));
+  font-size: 1.1em;
+  line-height: 1.8;
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-indent: 0;
+}
+
+/* Divider: hairlines around an accent dot or a short label */
+.md-divider {
+  margin: calc(2.5em * var(--md-block-spacing)) 8px;
+  line-height: 1;
+  text-align: center;
+}
+
+.md-divider-line {
+  display: inline-block;
+  width: 20%;
+  height: 1px;
+  background: color-mix(in srgb, hsl(var(--foreground)) 20%, transparent);
+  vertical-align: middle;
+}
+
+.md-divider-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 12px;
+  border-radius: 50%;
+  background: var(--md-primary-color);
+  vertical-align: middle;
+}
+
+/* padding-left balances the trailing letter-spacing so the label stays centred */
+.md-divider-text {
+  display: inline-block;
+  padding-left: 0.2em;
+  margin: 0 12px;
+  color: var(--md-primary-color);
+  font-size: 0.85em;
+  letter-spacing: 0.2em;
+  vertical-align: middle;
+}
+
+/* Stat card: big accent number on a pale tint */
+.md-stat {
+  padding: 1.2em 1em;
+  border-radius: 8px;
+  margin: calc(1.5em * var(--md-block-spacing)) 0;
+  background: color-mix(in srgb, var(--md-primary-color) 6%, transparent);
+  text-align: center;
+}
+
+.md-stat-value {
+  margin: 0;
+  color: var(--md-primary-color);
+  line-height: 1.2;
+  letter-spacing: 0;
+  text-align: center;
+  text-indent: 0;
+}
+
+.md-stat-number {
+  font-size: 2.4em;
+  font-weight: bold;
+}
+
+.md-stat-unit {
+  margin-left: 4px;
+}
+
+.md-stat-label {
+  margin: 0.5em 0 0;
+  color: hsl(var(--foreground));
+  font-size: 0.95em;
+  letter-spacing: 0.1em;
+  text-align: center;
+  text-indent: 0;
+}
+
+.md-stat-note {
+  margin: 0.3em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+  font-size: 0.8em;
+  letter-spacing: 0.05em;
+  text-align: center;
+  text-indent: 0;
+}
+
+/* Compare card: table cells (not flex) so the two columns survive WeChat paste */
+.md-compare {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  border-radius: 8px;
+  margin: calc(1.5em * var(--md-block-spacing)) 0;
+  background: color-mix(in srgb, hsl(var(--foreground)) 4%, transparent);
+}
+
+.md-compare-col {
+  display: table-cell;
+  width: 50%;
+  padding: 0.9em 1em;
+  vertical-align: top;
+}
+
+.md-compare-after {
+  border-left: 1px solid color-mix(in srgb, hsl(var(--foreground)) 10%, transparent);
+}
+
+.md-compare-title {
+  margin: 0 0 0.4em;
+  font-size: 0.85em;
+  letter-spacing: 0.1em;
+  text-indent: 0;
+}
+
+.md-compare-text {
+  margin: 0;
+  font-size: 0.95em;
+  line-height: 1.7;
+  letter-spacing: 0.05em;
+  text-indent: 0;
+}
+
+.md-compare-before .md-compare-title,
+.md-compare-before .md-compare-text {
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+}
+
+.md-compare-after .md-compare-title {
+  color: var(--md-primary-color);
+  font-weight: bold;
+}
+
+.md-compare-after .md-compare-text {
+  color: hsl(var(--foreground));
+}
+
+/* Quote card: key sentence under an accent top rule */
+.md-quote {
+  padding: 1em 1.2em;
+  border-top: 3px solid var(--md-primary-color);
+  margin: calc(1.5em * var(--md-block-spacing)) 0;
+  background: color-mix(in srgb, hsl(var(--foreground)) 4%, transparent);
+}
+
+.md-quote-text {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 1.05em;
+  line-height: 1.8;
+  letter-spacing: 0.08em;
+  text-indent: 0;
+}
+
+.md-quote-source {
+  margin: 0.6em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+  font-size: 0.8em;
+  letter-spacing: 0.05em;
+  text-align: right;
+  text-indent: 0;
+}
+
+/* Source list: small muted notes under a hairline */
+.md-sources {
+  padding-top: 0.8em;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 15%, transparent);
+  margin: calc(2.5em * var(--md-block-spacing)) 8px calc(1.5em * var(--md-block-spacing));
+}
+
+.md-sources-title {
+  margin: 0 0 0.4em;
+  color: var(--md-primary-color);
+  font-size: 0.85em;
+  letter-spacing: 0.1em;
+  text-indent: 0;
+}
+
+.md-sources-item {
+  margin: 0.2em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.8em;
+  line-height: 1.7;
+  letter-spacing: 0.03em;
+  text-indent: 0;
+  word-break: break-all;
+}
+
+/* End mark: letter-spaced text between two short hairlines */
+.md-end {
+  margin: calc(3em * var(--md-block-spacing)) 8px calc(1.5em * var(--md-block-spacing));
+  line-height: 1;
+  text-align: center;
+}
+
+.md-end-line {
+  display: inline-block;
+  width: 40px;
+  height: 1px;
+  background: color-mix(in srgb, hsl(var(--foreground)) 25%, transparent);
+  vertical-align: middle;
+}
+
+.md-end-text {
+  display: inline-block;
+  padding-left: 0.25em;
+  margin: 0 12px;
+  color: color-mix(in srgb, hsl(var(--foreground)) 45%, transparent);
+  font-size: 0.75em;
+  letter-spacing: 0.25em;
+  vertical-align: middle;
+}

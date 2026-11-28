@@ -3,6 +3,7 @@ import type { CustomComponentDef } from '@md/shared'
 import { previewComponent } from '@md/core/extensions'
 import { sanitizeHtml } from '@md/core/utils'
 import { buildComponentSnippet, getInitialPropValues } from '@/lib/component-snippet'
+import { scopeThemeCss } from '@/services/export/share-styles'
 
 const props = defineProps<{
   def: CustomComponentDef
@@ -56,6 +57,10 @@ const previewHtml = computed(() => {
 })
 
 const snippetPreview = computed(() => buildComponentSnippet(props.def, { ...values }))
+
+// Layout components only carry md-* classes; reuse the active theme, remapped from #output to the preview
+const styleTag = `style` as const
+const previewThemeCss = scopeThemeCss(document.querySelector(`#md-theme`)?.textContent ?? ``, `.component-preview-output`)
 </script>
 
 <template>
@@ -116,10 +121,12 @@ const snippetPreview = computed(() => buildComponentSnippet(props.def, { ...valu
       <p class="text-xs font-medium text-muted-foreground mb-1.5">
         {{ t('common.preview') }}
       </p>
-      <div
-        class="rounded-lg border bg-background px-3 py-2.5 text-sm leading-relaxed overflow-auto max-h-48"
-        v-html="previewHtml"
-      />
+      <div class="component-preview-output rounded-lg border bg-background px-3 py-2.5 text-sm leading-relaxed overflow-auto max-h-48">
+        <component :is="styleTag" v-if="previewThemeCss">
+          {{ previewThemeCss }}
+        </component>
+        <section v-html="previewHtml" />
+      </div>
     </div>
 
     <div>
