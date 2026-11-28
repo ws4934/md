@@ -363,7 +363,7 @@ hr {
   line-height: 1.9;
   letter-spacing: 0.05em;
   text-align: left;
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 /* End mark: widely spaced small caps between short hairlines */

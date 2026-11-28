@@ -791,7 +791,7 @@ td {
   line-height: 1.7;
   letter-spacing: 0.03em;
   text-indent: 0;
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 /* End mark: letter-spaced text between two short hairlines */

@@ -365,7 +365,7 @@ hr {
   line-height: 1.8;
   letter-spacing: 0.03em;
   text-align: left;
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 /* End mark: letter-spaced accent text between short dashes */
