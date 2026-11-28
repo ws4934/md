@@ -178,11 +178,20 @@ Reusable workflows live in [`.agents/skills/`](./.agents/skills/) (canonical). C
 .claude/skills/<name> → ../../.agents/skills/<name>
 ```
 
-| Skill             | When to use                                                                           |
-| ----------------- | ------------------------------------------------------------------------------------- |
-| `git-commit`      | Commit changes with Conventional Commits (`/git-commit` or "commit my changes")       |
-| `create-pr`       | Create a GitHub pull request (`/create-pr` or "open a PR")                            |
-| `wechat-svg`      | WeChat SVG whitelist, bubbling-group interaction, paste compatibility (`/wechat-svg`) |
-| `wechat-minsheng` | 公众号「民生写实」选题、6 步框架写稿、排版、封面配图 (`/wechat-minsheng`)             |
+| Skill             | When to use                                                                             |
+| ----------------- | --------------------------------------------------------------------------------------- |
+| `git-commit`      | Commit changes with Conventional Commits (`/git-commit` or "commit my changes")         |
+| `create-pr`       | Create a GitHub pull request (`/create-pr` or "open a PR")                              |
+| `wechat-svg`      | WeChat SVG whitelist, bubbling-group interaction, paste compatibility (`/wechat-svg`)   |
+| `wechat-minsheng` | 公众号「民生写实」入口：选题、找材料、排版、配图，写作交给下面两个 (`/wechat-minsheng`) |
+| `khazix-writer`   | 公众号长文的结构和手法（第三方，原样收录）                                              |
+| `human-writing`   | 中文写作的真实性、材料门槛、文字禁令和改稿（第三方，原样收录）                          |
 
 Invoke manually: `/skill-name` in Cursor or Claude Code; OpenCode uses the `skill` tool.
+
+`wechat-minsheng`、`khazix-writer`、`human-writing` 由 `apps/desktop/scripts/build.ts` 的 `BUNDLED_SKILLS` 打进桌面端。两个第三方 skill 不改上游文件，升级时整个目录替换，并更新下表的版本：
+
+| Skill           | 上游                                                                                   | 版本               | 许可 |
+| --------------- | -------------------------------------------------------------------------------------- | ------------------ | ---- |
+| `khazix-writer` | [KKKKhazix/khazix-skills](https://github.com/KKKKhazix/khazix-skills) `khazix-writer/` | commit `76fc0f8`   | MIT  |
+| `human-writing` | [KKKKhazix/human-writing](https://github.com/KKKKhazix/human-writing) `human-writing/` | 1.2.0（`288297b`） | MIT  |

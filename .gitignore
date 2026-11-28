@@ -60,6 +60,8 @@ web-ext.config.ts
 !.claude/skills/git-commit
 !.claude/skills/wechat-svg
 !.claude/skills/wechat-minsheng
+!.claude/skills/khazix-writer
+!.claude/skills/human-writing
 
 # vite-plugin-pwa dev output
 dev-dist

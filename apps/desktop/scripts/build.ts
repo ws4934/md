@@ -8,7 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, `..`)
 
 // Repo skills (`.agents/skills/<name>`) shipped to desktop agents; dev-only skills stay out.
-const BUNDLED_SKILLS = [`wechat-minsheng`]
+const BUNDLED_SKILLS = [`wechat-minsheng`, `khazix-writer`, `human-writing`]
 
 const ESM_CJS_SHIM_BANNER = `import { createRequire as __mdCreateRequire } from 'node:module'; const require = __mdCreateRequire(import.meta.url);`
 
