@@ -8,7 +8,8 @@ import { readNdjsonLines } from '../shared/ndjson'
 
 const MCP_PROTOCOL_VERSION = `2024-11-05`
 const STARTUP_TIMEOUT_MS = 10_000
-const TOOL_CALL_TIMEOUT_MS = 120_000
+// Web search may fail over across up to 5 providers at ~45 s each; image generation is also slow.
+const TOOL_CALL_TIMEOUT_MS = 240_000
 const CLOSE_GRACE_MS = 500
 const MAX_TOOL_LIST_PAGES = 10
 const MAX_STDERR_TAIL_CHARS = 2_048

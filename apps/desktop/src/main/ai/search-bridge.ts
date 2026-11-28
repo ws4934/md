@@ -7,7 +7,7 @@ import http from 'node:http'
 import { MAX_SEARCH_QUERY_CHARS } from '../../agents/shared/search-client'
 import { readJsonBody, sendJson, tokensEqual } from './image-bridge'
 import { redactSecret } from './sanitize'
-import { searchWeb } from './search-service'
+import { searchWithFailover } from './search-service'
 
 export interface WebSearchBridgeOptions {
   getConfig: () => Promise<ResolvedWebSearchConfig>
@@ -33,18 +33,24 @@ export class WebSearchBridge {
   private startPromise: Promise<ImageBridgeConnectionInfo> | null = null
   private connectionInfo: ImageBridgeConnectionInfo | null = null
   private activeRequests = 0
+  /** Provider id -> time until which a failed provider is skipped; lives for the app run. */
+  private readonly cooldowns = new Map<string, number>()
 
   constructor(options: WebSearchBridgeOptions) {
     this.getConfig = options.getConfig
     this.searchImpl = options.search ?? (({ config, query, abortSignal }) =>
-      searchWeb({
-        baseUrl: config.baseUrl,
-        apiKey: config.apiKey,
-        model: config.model,
+      searchWithFailover({
+        providers: config.providers.filter(p => p.isUsable),
         query,
         abortSignal,
+        cooldowns: this.cooldowns,
       }))
     this.token = randomBytes(32).toString(`hex`)
+  }
+
+  /** Called after the provider list is saved, so a fixed provider is not skipped for the rest of its cooldown. */
+  resetCooldowns(): void {
+    this.cooldowns.clear()
   }
 
   async ensureStarted(): Promise<ImageBridgeConnectionInfo> {
@@ -146,7 +152,7 @@ export class WebSearchBridge {
     catch (error) {
       if (!res.writableEnded) {
         const rawMessage = error instanceof Error ? error.message : String(error)
-        sendJson(res, 502, { error: redactSecret(rawMessage, config?.apiKey) })
+        sendJson(res, 502, { error: redactSecret(rawMessage, ...(config?.providers.map(p => p.apiKey) ?? [])) })
       }
     }
     finally {

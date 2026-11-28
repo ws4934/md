@@ -8,12 +8,13 @@ import type {
   DesktopWebSearchConfig,
   DesktopWebSearchConfigUpdate,
   DesktopWebSearchProtocol,
+  DesktopWebSearchProvider,
 } from '@md/shared/types'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { DEFAULT_PROTOCOL_BASE_URLS, DESKTOP_WEB_SEARCH_PROTOCOLS } from '@md/shared/types'
+import { DEFAULT_PROTOCOL_BASE_URLS, DESKTOP_WEB_SEARCH_PROTOCOLS, MAX_WEB_SEARCH_PROVIDERS } from '@md/shared/types'
 import { isValidHttpBaseUrl, validateHttpBaseUrl } from './sanitize'
 
 export interface SecretCipher {
@@ -46,12 +47,19 @@ interface StoredImageGenRecord {
   quality: string
 }
 
-interface StoredWebSearchRecord {
+interface StoredWebSearchProviderRecord {
+  id: string
+  name: string
   enabled: boolean
   protocol: DesktopWebSearchProtocol
   baseUrl: string
   apiKey?: StoredSecret | null
   model: string
+}
+
+interface StoredWebSearchRecord {
+  enabled: boolean
+  providers: StoredWebSearchProviderRecord[]
 }
 
 interface StoredAiConfigFile {
@@ -71,8 +79,15 @@ export interface ResolvedImageGenConfig extends DesktopImageGenConfig {
   isConfigured: boolean
 }
 
-export interface ResolvedWebSearchConfig extends DesktopWebSearchConfig {
+export interface ResolvedWebSearchProvider extends DesktopWebSearchProvider {
   apiKey: string
+  /** Enabled with base URL, key, and model. */
+  isUsable: boolean
+}
+
+export interface ResolvedWebSearchConfig {
+  enabled: boolean
+  providers: ResolvedWebSearchProvider[]
   isConfigured: boolean
 }
 
@@ -87,6 +102,8 @@ export interface AiConfigStoreOptions {
 const VALID_PROTOCOLS = new Set<DesktopAiProtocol>([`openai-compatible`, `anthropic`, `google`])
 const VALID_WEB_SEARCH_PROTOCOLS = new Set<string>(DESKTOP_WEB_SEARCH_PROTOCOLS)
 const DEFAULT_WEB_SEARCH_MODEL = `gpt-5-mini`
+/** Id given to the provider migrated from the single-provider config, so it stays stable across restarts. */
+const LEGACY_WEB_SEARCH_PROVIDER_ID = `default`
 
 function createDefaultModelApiRecord(): StoredModelApiRecord {
   return {
@@ -112,13 +129,47 @@ function createDefaultImageGenRecord(): StoredImageGenRecord {
 }
 
 function createDefaultWebSearchRecord(): StoredWebSearchRecord {
+  return { enabled: false, providers: [] }
+}
+
+function parseStoredWebSearchProvider(raw: Record<string, unknown> | undefined, id: string, enabled: boolean): StoredWebSearchProviderRecord {
   return {
-    enabled: false,
-    protocol: `openai-responses`,
-    baseUrl: `https://api.openai.com/v1`,
-    apiKey: null,
-    model: DEFAULT_WEB_SEARCH_MODEL,
+    id,
+    name: typeof raw?.name === `string` ? raw.name.trim() : ``,
+    enabled,
+    protocol: VALID_WEB_SEARCH_PROTOCOLS.has(raw?.protocol as string) ? raw!.protocol as DesktopWebSearchProtocol : `openai-responses`,
+    // An invalid stored URL becomes empty rather than a default host, so a saved key is never sent elsewhere.
+    baseUrl: typeof raw?.baseUrl === `string` ? normalizeBaseUrl(raw.baseUrl, ``) : ``,
+    apiKey: isStoredSecret(raw?.apiKey) ? raw.apiKey : null,
+    model: typeof raw?.model === `string` ? raw.model.trim() : DEFAULT_WEB_SEARCH_MODEL,
   }
+}
+
+function parseStoredWebSearch(raw: unknown): StoredWebSearchRecord {
+  const rec = typeof raw === `object` && raw !== null ? raw as Record<string, unknown> : undefined
+  if (!rec)
+    return createDefaultWebSearchRecord()
+  const enabled = rec.enabled === true
+  // Single-provider shape: { enabled, protocol, baseUrl, apiKey, model }.
+  if (!Array.isArray(rec.providers)) {
+    const isLegacy = [`baseUrl`, `apiKey`, `model`].some(key => key in rec)
+    return {
+      enabled,
+      providers: isLegacy ? [parseStoredWebSearchProvider(rec, LEGACY_WEB_SEARCH_PROVIDER_ID, true)] : [],
+    }
+  }
+  const seenIds = new Set<string>()
+  const providers: StoredWebSearchProviderRecord[] = []
+  for (const item of rec.providers) {
+    if (typeof item !== `object` || item === null || providers.length >= MAX_WEB_SEARCH_PROVIDERS)
+      continue
+    const p = item as Record<string, unknown>
+    const rawId = typeof p.id === `string` ? p.id.trim() : ``
+    const id = rawId && !seenIds.has(rawId) ? rawId : randomUUID()
+    seenIds.add(id)
+    providers.push(parseStoredWebSearchProvider(p, id, p.enabled !== false))
+  }
+  return { enabled, providers }
 }
 
 function normalizeBaseUrl(raw: string, fallback: string): string {
@@ -254,7 +305,6 @@ export class AiConfigStore {
           : (enabledModels[0] ?? ``)
 
         const rawImage = parsed.imageGen
-        const rawSearch = parsed.webSearch
         this.data = {
           version: 1,
           modelApi: {
@@ -282,15 +332,7 @@ export class AiConfigStore {
             size: typeof rawImage?.size === `string` && rawImage.size.trim() ? rawImage.size.trim() : `1024x1024`,
             quality: typeof rawImage?.quality === `string` && rawImage.quality.trim() ? rawImage.quality.trim() : `auto`,
           },
-          webSearch: {
-            enabled: rawSearch?.enabled === true,
-            protocol: VALID_WEB_SEARCH_PROTOCOLS.has(rawSearch?.protocol as string) ? rawSearch!.protocol : `openai-responses`,
-            baseUrl: typeof rawSearch?.baseUrl === `string`
-              ? normalizeBaseUrl(rawSearch.baseUrl, `https://api.openai.com/v1`)
-              : `https://api.openai.com/v1`,
-            apiKey: isStoredSecret(rawSearch?.apiKey) ? rawSearch.apiKey : null,
-            model: typeof rawSearch?.model === `string` ? rawSearch.model.trim() : DEFAULT_WEB_SEARCH_MODEL,
-          },
+          webSearch: parseStoredWebSearch(parsed.webSearch),
         }
       }
       catch {
@@ -356,13 +398,17 @@ export class AiConfigStore {
 
   private toPublicWebSearch(): DesktopWebSearchConfig {
     const rec = this.data.webSearch
-    const hasApiKey = Boolean(this.decryptSecret(rec.apiKey).trim())
     return {
       enabled: rec.enabled,
-      protocol: rec.protocol,
-      baseUrl: rec.baseUrl,
-      hasApiKey,
-      model: rec.model,
+      providers: rec.providers.map(p => ({
+        id: p.id,
+        name: p.name,
+        enabled: p.enabled,
+        protocol: p.protocol,
+        baseUrl: p.baseUrl,
+        hasApiKey: Boolean(this.decryptSecret(p.apiKey).trim()),
+        model: p.model,
+      })),
     }
   }
 
@@ -404,12 +450,14 @@ export class AiConfigStore {
   async getResolvedWebSearchConfig(): Promise<ResolvedWebSearchConfig> {
     await this.ensureLoaded()
     const pub = this.toPublicWebSearch()
-    const apiKey = this.decryptSecret(this.data.webSearch.apiKey).trim()
-    const isConfigured = Boolean(pub.enabled && apiKey && pub.baseUrl.trim() && pub.model.trim())
+    const providers = pub.providers.map((p, i) => {
+      const apiKey = this.decryptSecret(this.data.webSearch.providers[i].apiKey).trim()
+      return { ...p, apiKey, isUsable: Boolean(p.enabled && apiKey && p.baseUrl.trim() && p.model.trim()) }
+    })
     return {
-      ...pub,
-      apiKey,
-      isConfigured,
+      enabled: pub.enabled,
+      providers,
+      isConfigured: pub.enabled && providers.some(p => p.isUsable),
     }
   }
 
@@ -526,25 +574,34 @@ export class AiConfigStore {
     return this.toPublicImageGen()
   }
 
-  async updateWebSearchConfig(patch: DesktopWebSearchConfigUpdate): Promise<DesktopWebSearchConfig> {
+  async updateWebSearchConfig(update: DesktopWebSearchConfigUpdate): Promise<DesktopWebSearchConfig> {
     await this.ensureLoaded()
-    const prev = this.data.webSearch
+    const prevById = new Map(this.data.webSearch.providers.map(p => [p.id, p]))
+    const usedIds = new Set<string>()
 
-    const nextBaseUrl = patch.baseUrl !== undefined
-      ? (patch.baseUrl.trim() ? validateHttpBaseUrl(patch.baseUrl) : ``)
-      : prev.baseUrl
-
-    // Clear the saved key when switching to a different origin without supplying a new key.
-    const nextApiKey = patch.apiKey !== undefined
-      ? this.encryptSecret(patch.apiKey)
-      : (hasBaseUrlOriginChanged(prev.baseUrl, nextBaseUrl) ? null : prev.apiKey)
+    const providers = update.providers.map((p): StoredWebSearchProviderRecord => {
+      const prev = p.id && !usedIds.has(p.id) ? prevById.get(p.id) : undefined
+      const id = prev?.id ?? randomUUID()
+      usedIds.add(id)
+      const baseUrl = p.baseUrl.trim() ? validateHttpBaseUrl(p.baseUrl) : ``
+      // Clear the saved key when switching to a different origin without supplying a new key.
+      const apiKey = p.apiKey !== undefined
+        ? this.encryptSecret(p.apiKey)
+        : (prev && !hasBaseUrlOriginChanged(prev.baseUrl, baseUrl) ? prev.apiKey : null)
+      return {
+        id,
+        name: p.name.trim(),
+        enabled: p.enabled,
+        protocol: VALID_WEB_SEARCH_PROTOCOLS.has(p.protocol) ? p.protocol : `openai-responses`,
+        baseUrl,
+        apiKey,
+        model: p.model.trim(),
+      }
+    })
 
     this.data.webSearch = {
-      enabled: patch.enabled ?? prev.enabled,
-      protocol: patch.protocol && VALID_WEB_SEARCH_PROTOCOLS.has(patch.protocol) ? patch.protocol : prev.protocol,
-      baseUrl: nextBaseUrl,
-      apiKey: nextApiKey,
-      model: patch.model !== undefined ? patch.model.trim() : prev.model,
+      enabled: update.enabled,
+      providers: providers.slice(0, MAX_WEB_SEARCH_PROVIDERS),
     }
 
     await this.persist()

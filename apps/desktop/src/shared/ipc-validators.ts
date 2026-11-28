@@ -13,8 +13,9 @@ import type {
   DesktopTestWebSearchParams,
   DesktopWebSearchConfigUpdate,
   DesktopWebSearchProtocol,
+  DesktopWebSearchProviderUpdate,
 } from '@md/shared/types'
-import { DESKTOP_WEB_SEARCH_PROTOCOLS } from '@md/shared/types'
+import { DESKTOP_WEB_SEARCH_PROTOCOLS, MAX_WEB_SEARCH_PROVIDERS } from '@md/shared/types'
 
 const VALID_AI_PROTOCOLS = new Set<DesktopAiProtocol>([`openai-compatible`, `anthropic`, `google`])
 const VALID_WEB_SEARCH_PROTOCOLS = new Set<string>(DESKTOP_WEB_SEARCH_PROTOCOLS)
@@ -31,6 +32,7 @@ const MAX_SECRET_CHARS = 4096
 const MAX_PATH_CHARS = 4096
 const MAX_PROMPT_TEST_CHARS = 8000
 const MAX_SEARCH_TEST_QUERY_CHARS = 1000
+const MAX_PROVIDER_NAME_CHARS = 64
 const MAX_PROMPT_TEXT_CHARS = 1024 * 1024
 const MAX_ARTICLE_CONTENT_CHARS = 10 * 1024 * 1024
 const MAX_ARGS_COUNT = 64
@@ -219,28 +221,41 @@ export function validateTestImageGenParams(raw: unknown): DesktopTestImageGenPar
   }
 }
 
+function validateWebSearchProviderUpdate(raw: unknown, label: string): DesktopWebSearchProviderUpdate {
+  const obj = assertPlainObject(raw, label)
+  if (typeof obj.enabled !== `boolean`)
+    throw new TypeError(`${label}.enabled must be a boolean`)
+  if (typeof obj.protocol !== `string` || !VALID_WEB_SEARCH_PROTOCOLS.has(obj.protocol))
+    throw new Error(`Invalid web search protocol`)
+  const baseUrl = assertString(obj.baseUrl, `${label}.baseUrl`, { maxLength: MAX_URL_CHARS })
+  if (baseUrl.trim() && !/^https?:\/\//i.test(baseUrl.trim()))
+    throw new Error(`${label}.baseUrl must start with http:// or https://`)
+  const id = obj.id !== undefined ? validateIdArg(obj.id, `${label}.id`) : undefined
+  const apiKey = assertOptionalString(obj.apiKey, `${label}.apiKey`, MAX_SECRET_CHARS)
+  return {
+    ...(id !== undefined ? { id } : {}),
+    name: assertString(obj.name, `${label}.name`, { maxLength: MAX_PROVIDER_NAME_CHARS }),
+    enabled: obj.enabled,
+    protocol: obj.protocol as DesktopWebSearchProtocol,
+    baseUrl,
+    ...(apiKey !== undefined ? { apiKey } : {}),
+    model: assertString(obj.model, `${label}.model`, { maxLength: MAX_MODEL_ID_CHARS }),
+  }
+}
+
 export function validateWebSearchConfigUpdate(raw: unknown): DesktopWebSearchConfigUpdate {
-  const obj = assertPlainObject(raw, `patch`)
-  const out: DesktopWebSearchConfigUpdate = {}
-
-  if (obj.enabled !== undefined) {
-    if (typeof obj.enabled !== `boolean`)
-      throw new TypeError(`enabled must be a boolean`)
-    out.enabled = obj.enabled
-  }
-  if (obj.protocol !== undefined) {
-    if (typeof obj.protocol !== `string` || !VALID_WEB_SEARCH_PROTOCOLS.has(obj.protocol))
-      throw new Error(`Invalid web search protocol`)
-    out.protocol = obj.protocol as DesktopWebSearchProtocol
-  }
-  if (obj.baseUrl !== undefined)
-    out.baseUrl = assertString(obj.baseUrl, `baseUrl`, { maxLength: MAX_URL_CHARS })
-  if (obj.apiKey !== undefined)
-    out.apiKey = assertString(obj.apiKey, `apiKey`, { maxLength: MAX_SECRET_CHARS })
-  if (obj.model !== undefined)
-    out.model = assertString(obj.model, `model`, { maxLength: MAX_MODEL_ID_CHARS })
-
-  return out
+  const obj = assertPlainObject(raw, `config`)
+  if (typeof obj.enabled !== `boolean`)
+    throw new TypeError(`enabled must be a boolean`)
+  if (!Array.isArray(obj.providers))
+    throw new TypeError(`providers must be an array`)
+  if (obj.providers.length > MAX_WEB_SEARCH_PROVIDERS)
+    throw new RangeError(`At most ${MAX_WEB_SEARCH_PROVIDERS} web search providers are allowed`)
+  const providers = obj.providers.map((p, i) => validateWebSearchProviderUpdate(p, `providers[${i}]`))
+  const ids = providers.flatMap(p => p.id ?? [])
+  if (new Set(ids).size !== ids.length)
+    throw new Error(`Web search provider ids must be unique`)
+  return { enabled: obj.enabled, providers }
 }
 
 export function validateTestWebSearchParams(raw: unknown): DesktopTestWebSearchParams | undefined {
@@ -249,6 +264,7 @@ export function validateTestWebSearchParams(raw: unknown): DesktopTestWebSearchP
   const obj = assertPlainObject(raw, `params`)
   return {
     query: assertOptionalString(obj.query, `query`, MAX_SEARCH_TEST_QUERY_CHARS),
+    providerId: obj.providerId !== undefined ? validateIdArg(obj.providerId, `providerId`) : undefined,
     baseUrl: assertOptionalString(obj.baseUrl, `baseUrl`, MAX_URL_CHARS),
     apiKey: assertOptionalString(obj.apiKey, `apiKey`, MAX_SECRET_CHARS),
     model: assertOptionalString(obj.model, `model`, MAX_MODEL_ID_CHARS),

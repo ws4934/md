@@ -58,18 +58,28 @@ describe(`ipc-validators`, () => {
     })
     expect(() => validateImageGenConfigUpdate([])).toThrow(TypeError)
 
+    const searchProvider = { name: `Main`, enabled: true, protocol: `openai-responses`, baseUrl: `https://s.example/v1`, model: `gpt-5-mini` }
     expect(validateWebSearchConfigUpdate({
       enabled: true,
-      protocol: `openai-responses`,
-      model: `gpt-5-mini`,
+      providers: [{ ...searchProvider, id: `p1`, apiKey: `sk-x` }, searchProvider],
     })).toEqual({
       enabled: true,
-      protocol: `openai-responses`,
-      model: `gpt-5-mini`,
+      providers: [{ ...searchProvider, id: `p1`, apiKey: `sk-x` }, searchProvider],
     })
-    expect(() => validateWebSearchConfigUpdate({ enabled: `yes` })).toThrow(TypeError)
-    expect(() => validateWebSearchConfigUpdate({ protocol: `chat-completions` })).toThrow(/protocol/i)
-    expect(() => validateWebSearchConfigUpdate({ apiKey: `k`.repeat(4097) })).toThrow(RangeError)
+    expect(validateWebSearchConfigUpdate({ enabled: false, providers: [{ ...searchProvider, baseUrl: `` }] }).providers[0].baseUrl).toBe(``)
+    expect(() => validateWebSearchConfigUpdate({ enabled: `yes`, providers: [] })).toThrow(TypeError)
+    expect(() => validateWebSearchConfigUpdate({ enabled: true })).toThrow(/providers/)
+    expect(() => validateWebSearchConfigUpdate({ enabled: true, providers: Array.from({ length: 6 }).fill(searchProvider) })).toThrow(RangeError)
+    expect(() => validateWebSearchConfigUpdate({ enabled: true, providers: [{ ...searchProvider, protocol: `chat-completions` }] })).toThrow(/protocol/i)
+    expect(() => validateWebSearchConfigUpdate({ enabled: true, providers: [{ ...searchProvider, baseUrl: `file:///etc` }] })).toThrow(/http/)
+    expect(() => validateWebSearchConfigUpdate({ enabled: true, providers: [{ ...searchProvider, apiKey: `k`.repeat(4097) }] })).toThrow(RangeError)
+    expect(() => validateWebSearchConfigUpdate({ enabled: true, providers: [{ ...searchProvider, name: `n`.repeat(65) }] })).toThrow(RangeError)
+    expect(() => validateWebSearchConfigUpdate({ enabled: true, providers: [{ ...searchProvider, enabled: 1 }] })).toThrow(TypeError)
+    expect(() => validateWebSearchConfigUpdate({ enabled: true, providers: [{ ...searchProvider, id: `` }] })).toThrow(/empty/)
+    expect(() => validateWebSearchConfigUpdate({ enabled: true, providers: [{ ...searchProvider, id: `p1` }, { ...searchProvider, id: `p1` }] })).toThrow(/unique/)
+    expect(() => validateWebSearchConfigUpdate({ enabled: true, providers: [null] })).toThrow(TypeError)
+    expect(validateTestWebSearchParams({ providerId: `p1` })).toMatchObject({ providerId: `p1` })
+    expect(() => validateTestWebSearchParams({ providerId: 7 })).toThrow(TypeError)
     expect(validateTestWebSearchParams(undefined)).toBeUndefined()
     expect(validateTestWebSearchParams({ query: `node` })).toMatchObject({ query: `node` })
     expect(() => validateTestWebSearchParams({ query: `x`.repeat(1001) })).toThrow(RangeError)

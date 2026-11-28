@@ -6,7 +6,8 @@ export interface BridgeWebSearchResult {
   queries: string[]
 }
 
-const DEFAULT_BRIDGE_TIMEOUT_MS = 100_000
+// The main process may fail over across up to 5 providers at 45 s each.
+const DEFAULT_BRIDGE_TIMEOUT_MS = 240_000
 const MAX_BRIDGE_RESPONSE_BYTES = 1024 * 1024
 
 export async function searchViaBridge(params: {

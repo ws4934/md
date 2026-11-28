@@ -927,11 +927,17 @@ describe(`image MCP server & local bridge`, () => {
     const bridge = new WebSearchBridge({
       getConfig: async () => ({
         enabled: true,
-        protocol: `openai-responses`,
-        baseUrl: `http://127.0.0.1:1/v1`,
-        hasApiKey: true,
-        apiKey: `sk-search`,
-        model: `mock-search`,
+        providers: [{
+          id: `p1`,
+          name: ``,
+          enabled: true,
+          protocol: `openai-responses`,
+          baseUrl: `http://127.0.0.1:1/v1`,
+          hasApiKey: true,
+          apiKey: `sk-search`,
+          model: `mock-search`,
+          isUsable: true,
+        }],
         isConfigured: true,
       }),
       search: async ({ query }) => {

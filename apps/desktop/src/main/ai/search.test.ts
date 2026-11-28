@@ -4,11 +4,11 @@ import { Buffer } from 'node:buffer'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { formatWebSearchResult } from '../../agents/shared/search-client'
 import { AiConfigStore } from './config-store'
 import { WebSearchBridge } from './search-bridge'
-import { buildWebSearchRequestBody, parseWebSearchResponse, searchWeb } from './search-service'
+import { buildWebSearchRequestBody, parseWebSearchResponse, PROVIDER_COOLDOWN_MS, searchWeb, searchWithFailover } from './search-service'
 
 const tempDirs: string[] = []
 const openBridges: WebSearchBridge[] = []
@@ -267,72 +267,305 @@ describe(`searchWeb`, () => {
 })
 
 describe(`web search config`, () => {
-  it(`encrypts the key, never exposes it publicly, and requires enabled + key + model`, async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), `md-search-cfg-`))
+  async function makeConfigPath(prefix: string) {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix))
     tempDirs.push(dir)
-    const configPath = path.join(dir, `ai-config.json`)
+    return path.join(dir, `ai-config.json`)
+  }
+
+  const provider = (overrides: Record<string, unknown> = {}) => ({
+    name: ``,
+    enabled: true,
+    protocol: `openai-responses` as const,
+    baseUrl: `https://a.example/v1`,
+    model: `m`,
+    ...overrides,
+  })
+
+  it(`encrypts each provider key, never exposes keys publicly, and requires the switch plus one usable provider`, async () => {
+    const configPath = await makeConfigPath(`md-search-cfg-`)
     const cipher = createMockSafeStorage()
     const scopes: string[] = []
     const store = new AiConfigStore({ configPath, cipher, onChange: scope => scopes.push(scope) })
 
-    const initial = (await store.getPublicConfigs()).webSearch
-    expect(initial).toEqual({
-      enabled: false,
-      protocol: `openai-responses`,
-      baseUrl: `https://api.openai.com/v1`,
-      hasApiKey: false,
-      model: `gpt-5-mini`,
-    })
+    expect((await store.getPublicConfigs()).webSearch).toEqual({ enabled: false, providers: [] })
 
-    const saved = await store.updateWebSearchConfig({ apiKey: `sk-search-secret` })
-    expect(saved.hasApiKey).toBe(true)
-    expect(`apiKey` in saved).toBe(false)
+    const saved = await store.updateWebSearchConfig({
+      enabled: false,
+      providers: [
+        provider({ name: `Primary`, apiKey: `sk-search-a` }),
+        provider({ baseUrl: `https://b.example/v1/`, apiKey: `sk-search-b` }),
+      ],
+    })
     expect(scopes).toEqual([`webSearch`])
+    expect(saved.providers.map(p => [p.name, p.baseUrl, p.hasApiKey])).toEqual([
+      [`Primary`, `https://a.example/v1`, true],
+      [``, `https://b.example/v1`, true],
+    ])
+    expect(saved.providers[0].id).toMatch(/\S/)
+    expect(saved.providers[0].id).not.toBe(saved.providers[1].id)
+    expect(JSON.stringify(saved)).not.toMatch(/sk-search|apiKey/)
     expect(await store.isWebSearchConfigured()).toBe(false)
 
-    await store.updateWebSearchConfig({ enabled: true })
+    const [idA, idB] = saved.providers.map(p => p.id)
+    await store.updateWebSearchConfig({ enabled: true, providers: [provider({ id: idA }), provider({ id: idB, baseUrl: `https://b.example/v1` })] })
     expect(await store.isWebSearchConfigured()).toBe(true)
     const rawOnDisk = await fs.readFile(configPath, `utf8`)
-    expect(rawOnDisk).not.toContain(`sk-search-secret`)
+    expect(rawOnDisk).not.toContain(`sk-search-a`)
+    expect(rawOnDisk).not.toContain(`sk-search-b`)
 
     const reloaded = new AiConfigStore({ configPath, cipher })
     const resolved = await reloaded.getResolvedWebSearchConfig()
-    expect(resolved).toMatchObject({ enabled: true, apiKey: `sk-search-secret`, isConfigured: true })
-    expect(`apiKey` in (await reloaded.getPublicConfigs()).webSearch).toBe(false)
+    expect(resolved.isConfigured).toBe(true)
+    expect(resolved.providers.map(p => [p.id, p.apiKey, p.isUsable])).toEqual([[idA, `sk-search-a`, true], [idB, `sk-search-b`, true]])
 
-    await reloaded.updateWebSearchConfig({ model: `  ` })
+    // Reorder by id keeps each key; empty string clears, a new origin without a key drops it, unknown ids are new.
+    const next = await reloaded.updateWebSearchConfig({
+      enabled: true,
+      providers: [
+        provider({ id: idB, baseUrl: `https://b.example/v1`, apiKey: `` }),
+        provider({ id: idA, baseUrl: `https://moved.example/v1` }),
+        provider({ id: `made-up`, apiKey: `sk-search-c` }),
+      ],
+    })
+    expect(next.providers.map(p => p.hasApiKey)).toEqual([false, false, true])
+    expect(next.providers.slice(0, 2).map(p => p.id)).toEqual([idB, idA])
+    expect(next.providers[2].id).not.toBe(`made-up`)
+    expect((await reloaded.getResolvedWebSearchConfig()).providers.map(p => p.isUsable)).toEqual([false, false, true])
+
+    // Disabled, keyless, or model-less providers are not usable.
+    await reloaded.updateWebSearchConfig({
+      enabled: true,
+      providers: [provider({ id: next.providers[2].id, enabled: false })],
+    })
     expect(await reloaded.isWebSearchConfigured()).toBe(false)
-
-    // Moving to another origin without a new key drops the saved key.
-    const moved = await reloaded.updateWebSearchConfig({ model: `m`, baseUrl: `https://other.example/v1` })
-    expect(moved.hasApiKey).toBe(false)
-    await expect(reloaded.updateWebSearchConfig({ baseUrl: `ftp://x` })).rejects.toThrow()
+    await reloaded.updateWebSearchConfig({ enabled: true, providers: [provider({ id: next.providers[2].id, model: ` ` })] })
+    expect(await reloaded.isWebSearchConfigured()).toBe(false)
+    await expect(reloaded.updateWebSearchConfig({ enabled: true, providers: [provider({ baseUrl: `ftp://x` })] })).rejects.toThrow()
   })
 
-  it(`falls back to defaults for invalid stored values`, async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), `md-search-cfg-bad-`))
-    tempDirs.push(dir)
-    const configPath = path.join(dir, `ai-config.json`)
-    await fs.writeFile(configPath, JSON.stringify({ version: 1, webSearch: { enabled: `yes`, protocol: `x`, baseUrl: `nope`, apiKey: `plain-string` } }))
-    const store = new AiConfigStore({ configPath, cipher: createMockSafeStorage() })
+  it(`migrates the single-provider config into a one-item list and keeps its encrypted key`, async () => {
+    const configPath = await makeConfigPath(`md-search-cfg-legacy-`)
+    const cipher = createMockSafeStorage()
+    const encrypted = cipher.encryptString(`sk-legacy`).toString(`base64`)
+    await fs.writeFile(configPath, JSON.stringify({
+      version: 1,
+      webSearch: {
+        enabled: true,
+        protocol: `openai-responses`,
+        baseUrl: `https://legacy.example/v1`,
+        apiKey: { encoding: `safeStorage`, value: encrypted },
+        model: `legacy-model`,
+      },
+    }))
+
+    const store = new AiConfigStore({ configPath, cipher })
     expect((await store.getPublicConfigs()).webSearch).toEqual({
-      enabled: false,
-      protocol: `openai-responses`,
-      baseUrl: `https://api.openai.com/v1`,
-      hasApiKey: false,
-      model: `gpt-5-mini`,
+      enabled: true,
+      providers: [{
+        id: `default`,
+        name: ``,
+        enabled: true,
+        protocol: `openai-responses`,
+        baseUrl: `https://legacy.example/v1`,
+        hasApiKey: true,
+        model: `legacy-model`,
+      }],
     })
+    const resolved = await store.getResolvedWebSearchConfig()
+    expect(resolved.isConfigured).toBe(true)
+    expect(resolved.providers[0].apiKey).toBe(`sk-legacy`)
+
+    // Saving writes the new shape and keeps the migrated key under the same id.
+    await store.updateWebSearchConfig({ enabled: true, providers: [provider({ id: `default`, baseUrl: `https://legacy.example/v1`, model: `legacy-model` })] })
+    const onDisk = JSON.parse(await fs.readFile(configPath, `utf8`)).webSearch
+    expect(onDisk.providers[0]).toMatchObject({ id: `default`, apiKey: { encoding: `safeStorage`, value: encrypted } })
+    expect(`baseUrl` in onDisk).toBe(false)
+  })
+
+  it(`sanitizes invalid stored values`, async () => {
+    const configPath = await makeConfigPath(`md-search-cfg-bad-`)
+    await fs.writeFile(configPath, JSON.stringify({
+      version: 1,
+      webSearch: {
+        enabled: `yes`,
+        providers: [
+          { id: `a`, protocol: `x`, baseUrl: `nope`, apiKey: `plain-string`, enabled: false },
+          null,
+          { id: `a`, baseUrl: `https://ok.example/v1/`, model: ` m ` },
+          ...Array.from({ length: 6 }, () => ({})),
+        ],
+      },
+    }))
+    const store = new AiConfigStore({ configPath, cipher: createMockSafeStorage() })
+    const { webSearch } = await store.getPublicConfigs()
+    expect(webSearch.enabled).toBe(false)
+    expect(webSearch.providers).toHaveLength(5)
+    expect(webSearch.providers[0]).toEqual({ id: `a`, name: ``, enabled: false, protocol: `openai-responses`, baseUrl: ``, hasApiKey: false, model: `gpt-5-mini` })
+    expect(webSearch.providers[1]).toMatchObject({ enabled: true, baseUrl: `https://ok.example/v1`, model: `m` })
+    expect(new Set(webSearch.providers.map(p => p.id)).size).toBe(5)
+
+    await fs.writeFile(configPath, JSON.stringify({ version: 1, webSearch: { enabled: true } }))
+    expect((await new AiConfigStore({ configPath }).getPublicConfigs()).webSearch).toEqual({ enabled: true, providers: [] })
+  })
+})
+
+describe(`searchWithFailover`, () => {
+  const okPayload = (answer: string) => ({ output: [message(answer, [citation(`https://s.example/1`, `S1`)])] })
+  const providers = [
+    { id: `a`, name: `Alpha`, baseUrl: `https://a.example/v1`, apiKey: `sk-alpha-secret`, model: `m` },
+    { id: `b`, name: ``, baseUrl: `https://b.example/v1`, apiKey: `sk-bravo-secret`, model: `m` },
+    { id: `c`, name: `Charlie`, baseUrl: `https://c.example/v1`, apiKey: `sk-charlie-secret`, model: `m` },
+  ]
+
+  /** Each host answers with the given status (or throws for `network`); records hit order. */
+  function fakeFetch(behavior: Record<string, number | `network` | `empty`>, hits: string[]): typeof fetch {
+    return async (input) => {
+      const host = new URL(String(input)).host
+      hits.push(host)
+      const mode = behavior[host] ?? 200
+      if (mode === `network`)
+        throw new TypeError(`fetch failed`)
+      if (mode === `empty`)
+        return new Response(JSON.stringify({ output: [] }), { status: 200 })
+      if (mode !== 200)
+        return new Response(JSON.stringify({ error: { message: `rejected key sk-${host[0] === `a` ? `alpha` : `bravo`}-secret` } }), { status: mode })
+      return new Response(JSON.stringify(okPayload(`from ${host}`)), { status: 200 })
+    }
+  }
+
+  it(`returns the first provider's result unchanged without touching the rest`, async () => {
+    const hits: string[] = []
+    const cooldowns = new Map<string, number>()
+    const result = await searchWithFailover({ providers, query: `q`, cooldowns, fetchImpl: fakeFetch({}, hits) })
+    expect(result).toEqual({ answer: `from a.example`, sources: [{ title: `S1`, url: `https://s.example/1` }], queries: [] })
+    expect(hits).toEqual([`a.example`])
+    expect(cooldowns.size).toBe(0)
+  })
+
+  it(`moves down the list on network errors, non-2xx, and empty results, then cools failed providers down`, async () => {
+    let now = 1_000
+    const cooldowns = new Map<string, number>()
+    for (const failure of [`network`, 401, 429, 503, `empty`] as const) {
+      const hits: string[] = []
+      cooldowns.clear()
+      const result = await searchWithFailover({
+        providers,
+        query: `q`,
+        cooldowns,
+        now: () => now,
+        fetchImpl: fakeFetch({ 'a.example': failure }, hits),
+      })
+      expect(result.answer, String(failure)).toBe(`from b.example`)
+      expect(hits).toEqual([`a.example`, `b.example`])
+      expect([...cooldowns]).toEqual([[`a`, now + PROVIDER_COOLDOWN_MS]])
+    }
+
+    // While cooling down, `a` is skipped even though it would now succeed.
+    const hits: string[] = []
+    expect((await searchWithFailover({ providers, query: `q`, cooldowns, now: () => now, fetchImpl: fakeFetch({}, hits) })).answer).toBe(`from b.example`)
+    expect(hits).toEqual([`b.example`])
+
+    // After the cooldown it is first in line again and success clears its entry.
+    now += PROVIDER_COOLDOWN_MS + 1
+    hits.length = 0
+    expect((await searchWithFailover({ providers, query: `q`, cooldowns, now: () => now, fetchImpl: fakeFetch({}, hits) })).answer).toBe(`from a.example`)
+    expect(hits).toEqual([`a.example`])
+    expect(cooldowns.has(`a`)).toBe(false)
+  })
+
+  it(`tries every provider in order when all of them are cooling down`, async () => {
+    const now = 5_000
+    const cooldowns = new Map(providers.map(p => [p.id, now + 60_000]))
+    const hits: string[] = []
+    const result = await searchWithFailover({
+      providers,
+      query: `q`,
+      cooldowns,
+      now: () => now,
+      fetchImpl: fakeFetch({ 'a.example': 500 }, hits),
+    })
+    expect(result.answer).toBe(`from b.example`)
+    expect(hits).toEqual([`a.example`, `b.example`])
+    expect(cooldowns.has(`b`)).toBe(false)
+  })
+
+  it(`throws one redacted error naming every provider when all fail`, async () => {
+    const hits: string[] = []
+    const cooldowns = new Map<string, number>()
+    const error = await searchWithFailover({
+      providers,
+      query: `q`,
+      cooldowns,
+      fetchImpl: fakeFetch({ 'a.example': 401, 'b.example': 401, 'c.example': `network` }, hits),
+    }).catch((e: Error) => e)
+    expect(hits).toEqual([`a.example`, `b.example`, `c.example`])
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe(
+      `Web search failed on every provider tried: Alpha: HTTP 401: rejected key ***; b.example: HTTP 401: rejected key ***; Charlie: fetch failed`,
+    )
+    expect([...cooldowns.keys()]).toEqual([`a`, `b`, `c`])
+    await expect(searchWithFailover({ providers: [], query: `q`, cooldowns })).rejects.toThrow(/No usable/)
+  })
+
+  it(`stops on a caller abort without trying other providers or cooling down`, async () => {
+    const controller = new AbortController()
+    const hits: string[] = []
+    const cooldowns = new Map<string, number>()
+    const pending = searchWithFailover({
+      providers,
+      query: `q`,
+      cooldowns,
+      abortSignal: controller.signal,
+      fetchImpl: (input, init) => {
+        hits.push(new URL(String(input)).host)
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener(`abort`, () => reject(init.signal!.reason))
+        })
+      },
+    })
+    controller.abort()
+    await expect(pending).rejects.toThrow()
+    expect(hits).toEqual([`a.example`])
+    expect(cooldowns.size).toBe(0)
+  })
+
+  it(`fails over when a provider times out`, async () => {
+    const hits: string[] = []
+    const result = await searchWithFailover({
+      providers,
+      query: `q`,
+      cooldowns: new Map(),
+      timeoutMs: 20,
+      fetchImpl: (input, init) => {
+        const host = new URL(String(input)).host
+        hits.push(host)
+        if (host !== `a.example`)
+          return fakeFetch({}, [])(input, init)
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener(`abort`, () => reject(init.signal!.reason))
+        })
+      },
+    })
+    expect(result.answer).toBe(`from b.example`)
+    expect(hits).toEqual([`a.example`, `b.example`])
   })
 })
 
 describe(`web search bridge`, () => {
   const configured = {
     enabled: true,
-    protocol: `openai-responses` as const,
-    baseUrl: `https://s.example/v1`,
-    hasApiKey: true,
-    apiKey: `sk-bridge-secret`,
-    model: `m`,
+    providers: [{
+      id: `p1`,
+      name: ``,
+      enabled: true,
+      protocol: `openai-responses` as const,
+      baseUrl: `https://s.example/v1`,
+      hasApiKey: true,
+      apiKey: `sk-bridge-secret`,
+      model: `m`,
+      isUsable: true,
+    }],
     isConfigured: true,
   }
 
@@ -387,6 +620,62 @@ describe(`web search bridge`, () => {
     const failed = await post({ query: `q` })
     expect(failed.status).toBe(502)
     expect((await failed.json()).error).toBe(`upstream rejected ***`)
+  })
+
+  it(`fails over across usable providers only, honors cooldown reset, and redacts every key`, async () => {
+    const realFetch = globalThis.fetch
+    const hosts: string[] = []
+    let upStatus = 200
+    vi.stubGlobal(`fetch`, async (input: string, init: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.hostname === `127.0.0.1`)
+        return realFetch(input, init)
+      hosts.push(url.host)
+      const status = url.host === `down.example` ? 503 : upStatus
+      if (status !== 200)
+        return new Response(JSON.stringify({ error: { message: `failed for ${(init.headers as Record<string, string>).Authorization}` } }), { status })
+      return new Response(JSON.stringify({ output: [message(`from ${url.host}`)] }), { status: 200 })
+    })
+    const base = { ...configured.providers[0], name: `` }
+    const config = {
+      ...configured,
+      providers: [
+        { ...base, id: `off`, baseUrl: `https://off.example/v1`, apiKey: `sk-off-secret`, enabled: false, isUsable: false },
+        { ...base, id: `down`, baseUrl: `https://down.example/v1`, apiKey: `sk-down-secret` },
+        { ...base, id: `up`, name: `Up`, baseUrl: `https://up.example/v1`, apiKey: `sk-up-secret` },
+      ],
+    }
+    try {
+      const bridge = new WebSearchBridge({ getConfig: async () => config })
+      openBridges.push(bridge)
+      const conn = await bridge.ensureStarted()
+      const post = () => realFetch(conn.url, {
+        method: `POST`,
+        headers: { 'Content-Type': `application/json`, 'Authorization': `Bearer ${conn.token}` },
+        body: JSON.stringify({ query: `q` }),
+      })
+
+      const first = await post()
+      expect(await first.json()).toEqual({ answer: `from up.example`, sources: [], queries: [] })
+      expect(hosts).toEqual([`down.example`, `up.example`])
+
+      hosts.length = 0
+      await post()
+      expect(hosts).toEqual([`up.example`])
+
+      bridge.resetCooldowns()
+      hosts.length = 0
+      upStatus = 429
+      const failed = await post()
+      expect(failed.status).toBe(502)
+      expect(hosts).toEqual([`down.example`, `up.example`])
+      expect((await failed.json()).error).toBe(
+        `Web search failed on every provider tried: down.example: HTTP 503: failed for Bearer ***; Up: HTTP 429: failed for Bearer ***`,
+      )
+    }
+    finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it(`limits concurrent searches`, async () => {

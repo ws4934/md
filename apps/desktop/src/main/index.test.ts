@@ -1,5 +1,5 @@
 import type { McpServer } from '@agentclientprotocol/sdk/unstable'
-import type { AcpAgentStatus, AcpHostEvent, AcpProbeResult, DesktopSkill } from '@md/shared/types'
+import type { AcpAgentStatus, AcpHostEvent, AcpProbeResult, DesktopSkill, DesktopWebSearchConfig } from '@md/shared/types'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -264,10 +264,23 @@ describe(`desktop main index wiring`, () => {
 
     expect(await names()).toEqual([])
 
-    // A saved key alone is not enough: the section must be enabled.
-    await invokeIpc(IPC_CHANNELS.AI_UPDATE_WEB_SEARCH, { apiKey: `sk-search-main`, model: `gpt-5-mini` })
+    const update = async (config: unknown) => invokeIpc<DesktopWebSearchConfig>(IPC_CHANNELS.AI_UPDATE_WEB_SEARCH, config)
+    const provider = { name: ``, enabled: true, protocol: `openai-responses`, baseUrl: `https://api.openai.com/v1`, model: `gpt-5-mini` }
+
+    // A usable provider alone is not enough: the section must be enabled.
+    const first = await update({ enabled: false, providers: [{ ...provider, name: `Main`, apiKey: `sk-search-main` }] })
+    const mainId = first.providers[0].id
     expect(await names()).toEqual([])
-    await invokeIpc(IPC_CHANNELS.AI_UPDATE_WEB_SEARCH, { enabled: true })
+    // Enabled with only a disabled provider is still not configured.
+    await update({ enabled: true, providers: [{ ...provider, id: mainId, enabled: false }] })
+    expect(await names()).toEqual([])
+
+    const saved = await update({
+      enabled: true,
+      providers: [{ ...provider, id: mainId }, { ...provider, baseUrl: `https://backup.example/v1`, apiKey: `sk-search-backup` }],
+    })
+    const backupId = saved.providers[1].id
+    expect(saved.providers.map(p => p.hasApiKey)).toEqual([true, true])
     expect(await names()).toEqual([`md-search`])
 
     await invokeIpc(IPC_CHANNELS.AI_UPDATE_IMAGE_GEN, { baseUrl: `https://api.openai.com/v1`, apiKey: `sk-img-main`, model: `gpt-image-1` })
@@ -275,39 +288,53 @@ describe(`desktop main index wiring`, () => {
     expect(servers.map(server => server.name)).toEqual([`md-image`, `md-search`])
     const searchEnv = (servers[1] as { env: Array<{ name: string, value: string }> }).env
     expect(searchEnv.map(e => e.name)).toEqual([`ELECTRON_RUN_AS_NODE`, `MD_SEARCH_BRIDGE_URL`, `MD_SEARCH_BRIDGE_TOKEN`])
-    expect(JSON.stringify(servers)).not.toContain(`sk-search-main`)
+    expect(JSON.stringify(servers)).not.toMatch(/sk-search-(?:main|backup)/)
 
-    await invokeIpc(IPC_CHANNELS.AI_UPDATE_WEB_SEARCH, { enabled: false })
+    await update({ enabled: false, providers: [{ ...provider, id: mainId }, { ...provider, id: backupId, baseUrl: `https://backup.example/v1` }] })
     expect(await names()).toEqual([`md-image`])
+    await expect(update({ enabled: true, providers: [{ ...provider, id: `x` }, { ...provider, id: `x` }] })).rejects.toThrow(/unique/)
 
-    const configs = await invokeIpc<{ webSearch: Record<string, unknown> }>(IPC_CHANNELS.AI_GET_CONFIGS)
-    expect(configs.webSearch).toMatchObject({ enabled: false, hasApiKey: true })
-    expect(`apiKey` in configs.webSearch).toBe(false)
+    const configs = await invokeIpc<{ webSearch: DesktopWebSearchConfig }>(IPC_CHANNELS.AI_GET_CONFIGS)
+    expect(configs.webSearch.enabled).toBe(false)
+    expect(configs.webSearch.providers.map(p => [p.id, p.hasApiKey])).toEqual([[mainId, true], [backupId, true]])
+    expect(JSON.stringify(configs.webSearch)).not.toMatch(/apiKey|sk-search/)
 
-    // Test connection runs one query through the (stubbed) provider and reports the source count or a redacted error.
+    // Test connection runs one query through a single (stubbed) provider and reports the source count or a redacted error.
     const requests: string[] = []
     vi.stubGlobal(`fetch`, async (input: string, init: RequestInit) => {
-      requests.push(`${input} ${JSON.parse(String(init.body)).tools[0].type}`)
       const auth = (init.headers as Record<string, string>).Authorization
-      if (auth !== `Bearer sk-search-main`)
+      requests.push(`${new URL(input).host} ${auth}`)
+      const sourcesByAuth: Record<string, number> = { 'Bearer sk-search-main': 2, 'Bearer sk-search-backup': 1 }
+      const count = sourcesByAuth[auth]
+      if (!count)
         return new Response(JSON.stringify({ error: { message: `bad key ${auth}` } }), { status: 401 })
       return new Response(JSON.stringify({
-        output: [{ type: `message`, content: [{ type: `output_text`, text: `ok`, annotations: [
-          { type: `url_citation`, url: `https://a.example/`, title: `A` },
-          { type: `url_citation`, url: `https://b.example/`, title: `B` },
-        ] }] }],
+        output: [{ type: `message`, content: [{ type: `output_text`, text: `ok`, annotations: Array.from({ length: count }, (_, i) => (
+          { type: `url_citation`, url: `https://${i}.example/`, title: `S${i}` }
+        )) }] }],
       }), { status: 200 })
     })
+    const test = (params: unknown) => invokeIpc<{ ok: boolean, sourceCount?: number, error?: string }>(IPC_CHANNELS.AI_TEST_WEB_SEARCH, params)
     try {
-      expect(await invokeIpc(IPC_CHANNELS.AI_TEST_WEB_SEARCH, {}))
-        .toEqual({ ok: true, sourceCount: 2 })
-      const failed = await invokeIpc<{ ok: boolean, error?: string }>(IPC_CHANNELS.AI_TEST_WEB_SEARCH, { apiKey: `sk-wrong-key` })
-      expect(failed.ok).toBe(false)
-      expect(failed.error).toMatch(/^HTTP 401/)
-      expect(failed.error).not.toContain(`sk-wrong-key`)
+      expect(await test({ providerId: mainId })).toEqual({ ok: true, sourceCount: 2 })
+      expect(await test({ providerId: backupId })).toEqual({ ok: true, sourceCount: 1 })
+
+      const wrongKey = await test({ providerId: mainId, apiKey: `sk-wrong-key` })
+      expect(wrongKey.ok).toBe(false)
+      expect(wrongKey.error).toMatch(/^HTTP 401/)
+      expect(wrongKey.error).not.toContain(`sk-wrong-key`)
+
+      // A saved key never follows the form to another origin, and an unsaved provider must bring its own key.
+      expect((await test({ providerId: mainId, baseUrl: `https://evil.example/v1` })).error).toMatch(/not fully configured/)
+      expect((await test({ baseUrl: `https://api.openai.com/v1`, model: `gpt-5-mini` })).error).toMatch(/not fully configured/)
+      expect((await test({ providerId: `unknown`, baseUrl: `https://api.openai.com/v1`, model: `gpt-5-mini` })).error).toMatch(/not fully configured/)
+      expect(await test({ baseUrl: `https://fresh.example/v1`, apiKey: `sk-search-backup`, model: `m` })).toEqual({ ok: true, sourceCount: 1 })
+
       expect(requests).toEqual([
-        `https://api.openai.com/v1/responses web_search`,
-        `https://api.openai.com/v1/responses web_search`,
+        `api.openai.com Bearer sk-search-main`,
+        `backup.example Bearer sk-search-backup`,
+        `api.openai.com Bearer sk-wrong-key`,
+        `fresh.example Bearer sk-search-backup`,
       ])
     }
     finally {

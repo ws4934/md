@@ -207,6 +207,7 @@ declare module 'vue' {
     Separator: typeof import('./src/components/ui/separator/Separator.vue')['default']
     ShareDialog: typeof import('./src/components/editor/editor-header/ShareDialog.vue')['default']
     SidebarAIToolbar: typeof import('./src/components/ai/SidebarAIToolbar.vue')['default']
+    SkillSettings: typeof import('./src/components/agent/SkillSettings.vue')['default']
     SlashCommandMenu: typeof import('./src/components/editor/SlashCommandMenu.vue')['default']
     Sonner: typeof import('./src/components/ui/sonner/Sonner.vue')['default']
     StyleDropdown: typeof import('./src/components/editor/editor-header/StyleDropdown.vue')['default']

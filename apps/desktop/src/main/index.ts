@@ -483,19 +483,22 @@ function registerIpc(
     let usedApiKey = ``
     try {
       const params = validateTestWebSearchParams(rawParams)
-      const saved = await configStore.getResolvedWebSearchConfig()
-      const baseUrl = params?.baseUrl?.trim() || saved.baseUrl
+      // Without a known provider id this tests an unsaved provider, which must bring its own key.
+      const saved = params?.providerId
+        ? (await configStore.getResolvedWebSearchConfig()).providers.find(p => p.id === params.providerId)
+        : undefined
+      const baseUrl = params?.baseUrl?.trim() || saved?.baseUrl || ``
       const apiKey = resolveEffectiveApiKey({
         explicitApiKey: params?.apiKey,
-        savedApiKey: saved.apiKey,
+        savedApiKey: saved?.apiKey ?? ``,
         requestedBaseUrl: baseUrl,
-        savedBaseUrl: saved.baseUrl,
+        savedBaseUrl: saved?.baseUrl ?? ``,
       })
       usedApiKey = apiKey
       const result = await searchWeb({
         baseUrl,
         apiKey,
-        model: params?.model?.trim() || saved.model,
+        model: params?.model?.trim() || saved?.model || ``,
         query: params?.query?.trim() || `What is the latest stable version of Node.js?`,
       })
       return { ok: true, sourceCount: result.sources.length }
@@ -869,6 +872,8 @@ app.whenReady().then(async () => {
         acpHost?.invalidateAgentProbe(API_MODEL_AGENT_ID)
         void acpHost?.refreshAgentAvailability()
       }
+      if (scope === `webSearch`)
+        webSearchBridge?.resetCooldowns()
     },
   })
   imageGenBridge = new ImageGenBridge({

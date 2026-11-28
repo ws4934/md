@@ -22,7 +22,10 @@ export interface SearchWebParams {
   fetchImpl?: typeof fetch
 }
 
-const DEFAULT_SEARCH_TIMEOUT_MS = 90_000
+/** Per provider, so a dead provider does not stall the failover chain for long. */
+export const DEFAULT_SEARCH_TIMEOUT_MS = 45_000
+/** How long a failed provider is skipped by later searches while another provider is available. */
+export const PROVIDER_COOLDOWN_MS = 5 * 60_000
 const MAX_SEARCH_RESPONSE_BYTES = 4 * 1024 * 1024
 const MAX_ANSWER_CHARS = 20_000
 const MAX_SOURCES = 20
@@ -242,4 +245,71 @@ export async function searchWeb(params: SearchWebParams): Promise<WebSearchResul
       wrapped.name = error.name
     throw wrapped
   }
+}
+
+export interface WebSearchProviderTarget {
+  id: string
+  name: string
+  baseUrl: string
+  apiKey: string
+  model: string
+}
+
+function providerLabel(provider: WebSearchProviderTarget): string {
+  if (provider.name.trim())
+    return provider.name.trim()
+  try {
+    return new URL(provider.baseUrl).host
+  }
+  catch {
+    return provider.baseUrl || provider.id
+  }
+}
+
+/**
+ * Tries `providers` in order until one returns a result. A failed provider is put on
+ * `cooldowns` (provider id -> retry-after timestamp) and skipped by later calls, unless
+ * every provider is cooling down, in which case all are tried in order again.
+ * A caller abort stops the chain immediately.
+ */
+export async function searchWithFailover(params: {
+  providers: WebSearchProviderTarget[]
+  query: string
+  cooldowns: Map<string, number>
+  abortSignal?: AbortSignal
+  timeoutMs?: number
+  now?: () => number
+  fetchImpl?: typeof fetch
+}): Promise<WebSearchResult> {
+  const now = params.now ?? Date.now
+  const startedAt = now()
+  const ready = params.providers.filter(p => !((params.cooldowns.get(p.id) ?? 0) > startedAt))
+  const order = ready.length > 0 ? ready : params.providers
+  if (order.length === 0)
+    throw new Error(`No usable web search provider is configured`)
+
+  const failures: string[] = []
+  for (const provider of order) {
+    try {
+      const result = await searchWeb({
+        baseUrl: provider.baseUrl,
+        apiKey: provider.apiKey,
+        model: provider.model,
+        query: params.query,
+        abortSignal: params.abortSignal,
+        timeoutMs: params.timeoutMs,
+        fetchImpl: params.fetchImpl,
+      })
+      params.cooldowns.delete(provider.id)
+      return result
+    }
+    catch (error) {
+      if (params.abortSignal?.aborted)
+        throw error
+      params.cooldowns.set(provider.id, now() + PROVIDER_COOLDOWN_MS)
+      failures.push(`${providerLabel(provider)}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  const message = `Web search failed on every provider tried: ${failures.join(`; `)}`
+  throw new Error(redactSecret(message, ...params.providers.map(p => p.apiKey)))
 }
