@@ -31,6 +31,10 @@ Extended syntax supported by this editor (use it where it helps the reader, do n
   <StatCard value="..." unit="..." label="..." note="..." />
   <CompareCard beforeTitle="..." before="..." afterTitle="..." after="..." />
   <QuoteCard source="...">...</QuoteCard>
+  <BillCard title="..." items='[{"label":"...","value":"..."}]' totalLabel="..." total="..." note="..." />
+  <BarChart title="..." items='[{"label":"...","value":123}]' unit="..." note="..." />  (value must be a non-negative number; add "display":"..." to show custom text)
+  <Timeline items='[{"time":"...","text":"..."}]' />
+  <TermCard term="..." desc="..." source="..." />
   <SourceList items='["...","..."]' />
   <EndMark />`
 

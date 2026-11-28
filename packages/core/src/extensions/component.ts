@@ -186,6 +186,59 @@ export const BUILT_IN_COMPONENTS: CustomComponentDef[] = [
     example: `<QuoteCard source="一位做了十二年会计的读者">每个月还完房贷剩下的那点，才是自己的日子。</QuoteCard>`,
   },
   {
+    id: `builtin-bill-card`,
+    name: `BillCard`,
+    description: `账单卡片组件，像小票一样逐项列出一笔账和合计`,
+    builtIn: true,
+    props: [
+      { name: `title`, description: `标题`, default: `一笔账` },
+      { name: `items`, description: `JSON 数组，每项含 label、value 字段`, required: true, type: `array` },
+      { name: `totalLabel`, description: `合计说明`, default: `合计` },
+      { name: `total`, description: `合计金额`, required: true },
+      { name: `note`, description: `来源或假设说明（可选）` },
+    ],
+    template: `<section class="md-bill"><p class="md-bill-title">{{title}}</p>{{#each items}}<p class="md-bill-row"><span class="md-bill-label">{{item.label}}</span><span class="md-bill-value">{{item.value}}</span></p>{{/each}}<p class="md-bill-total"><span class="md-bill-label">{{totalLabel}}</span><span class="md-bill-value">{{total}}</span></p>{{#if note}}<p class="md-bill-note">{{note}}</p>{{/if}}</section>`,
+    example: `<BillCard title="每个月的固定开销" items='[{"label":"房贷","value":"6200 元"},{"label":"孩子","value":"2800 元"},{"label":"吃穿水电","value":"3500 元"}]' total="12500 元" note="按一家三口、二线城市估算" />`,
+  },
+  {
+    id: `builtin-bar-chart`,
+    name: `BarChart`,
+    description: `条形图组件，用横向条形对比几个数字`,
+    builtIn: true,
+    props: [
+      { name: `title`, description: `标题（可选）` },
+      { name: `items`, description: `JSON 数组，每项含 label、value（数字），可选 display（显示文字）`, required: true, type: `array` },
+      { name: `unit`, description: `单位（可选，未写 display 时接在数值后）` },
+      { name: `note`, description: `来源说明（可选）` },
+    ],
+    template: ``,
+    example: `<BarChart title="一线城市月均房租" items='[{"label":"北京","value":4800},{"label":"上海","value":4600},{"label":"深圳","value":4100},{"label":"广州","value":3000}]' unit="元" note="数据为示例" />`,
+  },
+  {
+    id: `builtin-timeline`,
+    name: `Timeline`,
+    description: `时间线组件，按时间列出一件事的几个节点`,
+    builtIn: true,
+    props: [
+      { name: `items`, description: `JSON 数组，每项含 time、text 字段`, required: true, type: `array` },
+    ],
+    template: `<section class="md-timeline">{{#each items}}<section class="md-timeline-item"><span class="md-timeline-dot"></span><p class="md-timeline-time">{{item.time}}</p><p class="md-timeline-text">{{item.text}}</p></section>{{/each}}</section>`,
+    example: `<Timeline items='[{"time":"2016 年","text":"全面二孩政策实施"},{"time":"2021 年","text":"三孩政策出台"},{"time":"2025 年","text":"发放育儿补贴"}]' />`,
+  },
+  {
+    id: `builtin-term-card`,
+    name: `TermCard`,
+    description: `名词卡片组件，给一种感受或一个概念起名并解释`,
+    builtIn: true,
+    props: [
+      { name: `term`, description: `名词`, required: true },
+      { name: `desc`, description: `解释`, required: true },
+      { name: `source`, description: `出处（可选）` },
+    ],
+    template: `<section class="md-term"><p class="md-term-name">{{term}}</p><p class="md-term-desc">{{desc}}</p>{{#if source}}<p class="md-term-source">{{source}}</p>{{/if}}</section>`,
+    example: `<TermCard term="收入焦虑" desc="手里有存款，心里还是慌，总觉得下个月的收入说没就没。" source="一位读者的说法" />`,
+  },
+  {
     id: `builtin-source-list`,
     name: `SourceList`,
     description: `参考资料组件，在文末列出引用来源`,
@@ -347,9 +400,39 @@ function renderInfoGrid(props: Record<string, string>): string {
   return html
 }
 
+interface BarItem { label?: unknown, value: number, display?: unknown }
+
+function isBarItem(item: unknown): item is BarItem {
+  const value = (item as BarItem | null)?.value
+  return typeof item === `object` && typeof value === `number` && Number.isFinite(value) && value >= 0
+}
+
+/** Bar widths are data, so they are the one inline style; everything else comes from md-* classes. */
+function renderBarChart(props: Record<string, string>): string {
+  let items: unknown
+  try { items = JSON.parse(props.items || `[]`) }
+  catch { items = null }
+  if (!Array.isArray(items) || items.length === 0 || !items.every(isBarItem))
+    return `<p style="color:#f00;font-size:12px;">[BarChart: items must be a JSON array of {"label","value"} with non-negative numeric values]</p>`
+
+  const max = Math.max(...items.map(item => item.value))
+  let html = `<section class="md-bars">`
+  if (props.title)
+    html += `<p class="md-bars-title">${escapeHtml(props.title)}</p>`
+  for (const item of items) {
+    const width = item.value > 0 ? Math.max(2, Math.round(item.value / max * 1000) / 10) : 0
+    const shown = item.display != null && item.display !== `` ? String(item.display) : `${item.value}${props.unit ?? ``}`
+    html += `<section class="md-bar"><p class="md-bar-head"><span class="md-bar-label">${escapeHtml(String(item.label ?? ``))}</span><span class="md-bar-value">${escapeHtml(shown)}</span></p><section class="md-bar-track"><section class="md-bar-fill" style="width: ${width}%"></section></section></section>`
+  }
+  if (props.note)
+    html += `<p class="md-bars-note">${escapeHtml(props.note)}</p>`
+  return `${html}</section>`
+}
+
 const SPECIAL_RENDERERS: Record<string, (props: Record<string, string>) => string> = {
   TableBlock: renderTableBlock,
   InfoGrid: renderInfoGrid,
+  BarChart: renderBarChart,
 }
 
 // TipBlock type colors

@@ -410,6 +410,43 @@ export default {
           source: `出典（任意）`,
         },
       },
+      BillCard: {
+        description: `レシートのように明細と合計を並べる家計カード`,
+        props: {
+          title: `見出し`,
+          items: `JSON 配列（各項目に label と value）`,
+          totalLabel: `合計の見出し`,
+          total: `合計金額`,
+          note: `出典・前提の注記（任意）`,
+        },
+        propDefaults: {
+          title: `家計の内訳`,
+          totalLabel: `合計`,
+        },
+      },
+      BarChart: {
+        description: `横棒でいくつかの数値を比べる棒グラフ`,
+        props: {
+          title: `見出し（任意）`,
+          items: `JSON 配列（各項目に label、数値の value、任意の display）`,
+          unit: `単位（任意。display がないとき数値の後ろに付く）`,
+          note: `出典の注記（任意）`,
+        },
+      },
+      Timeline: {
+        description: `出来事の節目を時系列で並べるタイムライン`,
+        props: {
+          items: `JSON 配列（各項目に time と text）`,
+        },
+      },
+      TermCard: {
+        description: `ある感覚や概念に名前を付けて説明する用語カード`,
+        props: {
+          term: `用語`,
+          desc: `説明`,
+          source: `出典（任意）`,
+        },
+      },
       SourceList: {
         description: `記事の末尾に出典を並べる参考資料リスト`,
         props: {

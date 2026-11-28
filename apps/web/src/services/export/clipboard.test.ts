@@ -450,6 +450,10 @@ describe(`built-in themes on WeChat copy`, () => {
     `<StatCard value="12500" unit="元" label="每月固定开销" note="房贷 6200" />`,
     `<CompareCard before="以前" after="现在" />`,
     `<QuoteCard source="出处">一句话</QuoteCard>`,
+    `<BillCard items='[{"label":"房贷","value":"6200 元"},{"label":"孩子","value":"2800 元"}]' total="9000 元" note="按一家三口估算" />`,
+    `<BarChart title="房租" items='[{"label":"北京","value":4800},{"label":"广州","value":3000}]' unit="元" note="示例" />`,
+    `<Timeline items='[{"time":"2016 年","text":"二孩"},{"time":"2021 年","text":"三孩"}]' />`,
+    `<TermCard term="收入焦虑" desc="说没就没" source="读者" />`,
     `<SourceList items='["作者《书名》，2024年"]' />`,
     `<EndMark />`,
   ].join(`\n\n`)
@@ -475,5 +479,21 @@ describe(`built-in themes on WeChat copy`, () => {
 
     expect(output).not.toMatch(/var\(/)
     expect(output).not.toContain(`color-mix(`)
+
+    // Data-driven bar widths survive inlining, and sized empty decorations get the WeChat placeholder
+    root.innerHTML = output
+    modifyHtmlStructureInPlace(root)
+    applyWeChatStructureFixes(root)
+    const fills = [...root.querySelectorAll<HTMLElement>(`.md-bar-fill`)]
+    expect(fills.map(el => el.style.width)).toEqual([`100%`, `62.5%`])
+    const decor = root.querySelectorAll<HTMLElement>(`.md-bar-fill, .md-timeline-dot`)
+    expect(decor).toHaveLength(4)
+    for (const el of decor) {
+      expect(el.children).toHaveLength(1)
+      expect(el.firstElementChild!.localName).toBe(`svg`)
+      expect(el.textContent).toBe(``)
+      expect(el.style.height).not.toBe(``)
+      expect(el.getAttribute(`style`)).toMatch(/(?:^|;)\s*background(?:-color)?:\s*\S/)
+    }
   })
 })

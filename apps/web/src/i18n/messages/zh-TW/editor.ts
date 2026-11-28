@@ -410,6 +410,43 @@ export default {
           source: `出處（可選）`,
         },
       },
+      BillCard: {
+        description: `帳單卡片元件，像收據一樣逐項列出一筆帳和合計`,
+        props: {
+          title: `標題`,
+          items: `JSON 陣列，每項含 label、value 欄位`,
+          totalLabel: `合計說明`,
+          total: `合計金額`,
+          note: `來源或假設說明（可選）`,
+        },
+        propDefaults: {
+          title: `一筆帳`,
+          totalLabel: `合計`,
+        },
+      },
+      BarChart: {
+        description: `長條圖元件，用橫向長條對比幾個數字`,
+        props: {
+          title: `標題（可選）`,
+          items: `JSON 陣列，每項含 label、value（數字），可選 display（顯示文字）`,
+          unit: `單位（可選，未寫 display 時接在數值後）`,
+          note: `來源說明（可選）`,
+        },
+      },
+      Timeline: {
+        description: `時間軸元件，按時間列出一件事的幾個節點`,
+        props: {
+          items: `JSON 陣列，每項含 time、text 欄位`,
+        },
+      },
+      TermCard: {
+        description: `名詞卡片元件，為一種感受或一個概念命名並解釋`,
+        props: {
+          term: `名詞`,
+          desc: `解釋`,
+          source: `出處（可選）`,
+        },
+      },
       SourceList: {
         description: `參考資料元件，在文末列出引用來源`,
         props: {

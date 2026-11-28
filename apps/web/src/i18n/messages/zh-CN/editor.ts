@@ -410,6 +410,43 @@ export default {
           source: `出处（可选）`,
         },
       },
+      BillCard: {
+        description: `账单卡片组件，像小票一样逐项列出一笔账和合计`,
+        props: {
+          title: `标题`,
+          items: `JSON 数组，每项含 label、value 字段`,
+          totalLabel: `合计说明`,
+          total: `合计金额`,
+          note: `来源或假设说明（可选）`,
+        },
+        propDefaults: {
+          title: `一笔账`,
+          totalLabel: `合计`,
+        },
+      },
+      BarChart: {
+        description: `条形图组件，用横向条形对比几个数字`,
+        props: {
+          title: `标题（可选）`,
+          items: `JSON 数组，每项含 label、value（数字），可选 display（显示文字）`,
+          unit: `单位（可选，未写 display 时接在数值后）`,
+          note: `来源说明（可选）`,
+        },
+      },
+      Timeline: {
+        description: `时间线组件，按时间列出一件事的几个节点`,
+        props: {
+          items: `JSON 数组，每项含 time、text 字段`,
+        },
+      },
+      TermCard: {
+        description: `名词卡片组件，给一种感受或一个概念起名并解释`,
+        props: {
+          term: `名词`,
+          desc: `解释`,
+          source: `出处（可选）`,
+        },
+      },
       SourceList: {
         description: `参考资料组件，在文末列出引用来源`,
         props: {

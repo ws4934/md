@@ -410,6 +410,43 @@ export default {
           source: `Source (optional)`,
         },
       },
+      BillCard: {
+        description: `Receipt-style bill that itemizes an account and its total`,
+        props: {
+          title: `Title`,
+          items: `JSON array; each item has label and value`,
+          totalLabel: `Total label`,
+          total: `Total amount`,
+          note: `Source or assumption note (optional)`,
+        },
+        propDefaults: {
+          title: `The bill`,
+          totalLabel: `Total`,
+        },
+      },
+      BarChart: {
+        description: `Bar chart that compares a few numbers with horizontal bars`,
+        props: {
+          title: `Title (optional)`,
+          items: `JSON array; each item has label, a numeric value and an optional display text`,
+          unit: `Unit (optional, appended to the value when display is absent)`,
+          note: `Source note (optional)`,
+        },
+      },
+      Timeline: {
+        description: `Timeline that lists the dated steps of a story`,
+        props: {
+          items: `JSON array; each item has time and text`,
+        },
+      },
+      TermCard: {
+        description: `Term card that names and explains a feeling or concept`,
+        props: {
+          term: `Term`,
+          desc: `Explanation`,
+          source: `Source (optional)`,
+        },
+      },
       SourceList: {
         description: `Reference list for the sources at the end of the article`,
         props: {
