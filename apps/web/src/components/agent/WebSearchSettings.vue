@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import type { DesktopWebSearchConfig, DesktopWebSearchProtocol, DesktopWebSearchToolType } from '@md/shared/types'
+import type { DesktopWebSearchConfig, DesktopWebSearchProtocol } from '@md/shared/types'
 import { Info, Loader2, Search } from '@lucide/vue'
-import { DESKTOP_WEB_SEARCH_PROTOCOLS, DESKTOP_WEB_SEARCH_TOOL_TYPES } from '@md/shared/types'
+import { DESKTOP_WEB_SEARCH_PROTOCOLS } from '@md/shared/types'
 import PanelSelect from '@/components/shared/panel-dialog/PanelSelect.vue'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -19,7 +19,6 @@ const hasSavedKey = ref(false)
 const apiKeyInput = ref(``)
 const clearSavedKey = ref(false)
 const model = ref(DEFAULT_MODEL)
-const toolType = ref<DesktopWebSearchToolType>(`web_search`)
 
 const isSaving = ref(false)
 const isTesting = ref(false)
@@ -34,8 +33,6 @@ const PROTOCOL_LABELS: Record<DesktopWebSearchProtocol, string> = {
 
 const protocolOptions = DESKTOP_WEB_SEARCH_PROTOCOLS.map(value => ({ value, label: PROTOCOL_LABELS[value] }))
 
-const toolTypeOptions = DESKTOP_WEB_SEARCH_TOOL_TYPES.map(value => ({ value, label: value }))
-
 const effectiveHasKey = computed(() =>
   Boolean(apiKeyInput.value.trim()) || (hasSavedKey.value && !clearSavedKey.value),
 )
@@ -48,7 +45,6 @@ function applyLoadedConfig(cfg: DesktopWebSearchConfig) {
   apiKeyInput.value = ``
   clearSavedKey.value = false
   model.value = cfg.model || DEFAULT_MODEL
-  toolType.value = cfg.toolType
 }
 
 onMounted(async () => {
@@ -79,11 +75,6 @@ function onProtocolChange(next: string) {
   protocol.value = next as DesktopWebSearchProtocol
 }
 
-function onToolTypeChange(next: string) {
-  markEdited()
-  toolType.value = next as DesktopWebSearchToolType
-}
-
 function onApiKeyUpdate(next: string) {
   markEdited()
   apiKeyInput.value = next
@@ -111,7 +102,6 @@ async function saveConfig() {
         ? { apiKey: `` }
         : (apiKeyInput.value.trim() ? { apiKey: apiKeyInput.value.trim() } : {})),
       model: model.value.trim(),
-      toolType: toolType.value,
     })
     applyLoadedConfig(updated)
     toast.success(t(`common.saveSuccess`))
@@ -140,7 +130,6 @@ async function runTestSearch() {
       baseUrl: baseUrl.value.trim(),
       apiKey: apiKeyInput.value.trim() || undefined,
       model: model.value.trim(),
-      toolType: toolType.value,
     })
     if (isUnmounted)
       return
@@ -247,21 +236,6 @@ async function runTestSearch() {
           @input="markEdited"
         >
       </label>
-    </div>
-
-    <div class="flex items-center justify-between gap-4 border-b py-3" style="border-color: var(--dt-line)">
-      <div class="min-w-0 space-y-0.5">
-        <Label>{{ t('agent.webSearch.toolTypeLabel') }}</Label>
-        <p class="text-xs" style="color: var(--dt-ink3)">
-          {{ t('agent.webSearch.toolTypeHint') }}
-        </p>
-      </div>
-      <PanelSelect
-        :model-value="toolType"
-        :options="toolTypeOptions"
-        trigger-class="w-[180px]"
-        @update:model-value="onToolTypeChange"
-      />
     </div>
 
     <div

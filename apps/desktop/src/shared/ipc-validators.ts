@@ -13,13 +13,11 @@ import type {
   DesktopTestWebSearchParams,
   DesktopWebSearchConfigUpdate,
   DesktopWebSearchProtocol,
-  DesktopWebSearchToolType,
 } from '@md/shared/types'
-import { DESKTOP_WEB_SEARCH_PROTOCOLS, DESKTOP_WEB_SEARCH_TOOL_TYPES } from '@md/shared/types'
+import { DESKTOP_WEB_SEARCH_PROTOCOLS } from '@md/shared/types'
 
 const VALID_AI_PROTOCOLS = new Set<DesktopAiProtocol>([`openai-compatible`, `anthropic`, `google`])
 const VALID_WEB_SEARCH_PROTOCOLS = new Set<string>(DESKTOP_WEB_SEARCH_PROTOCOLS)
-const VALID_WEB_SEARCH_TOOL_TYPES = new Set<string>(DESKTOP_WEB_SEARCH_TOOL_TYPES)
 const VALID_PERMISSION_LEVELS = new Set<AcpPermissionLevel>([`ask`, `auto_edits`, `plan`, `bypass`])
 const VALID_PERMISSION_DECISIONS = new Set<AcpPermissionDecision>([`allow_once`, `allow_always`, `reject`])
 const FORBIDDEN_OBJECT_KEYS = new Set([`__proto__`, `constructor`, `prototype`])
@@ -221,12 +219,6 @@ export function validateTestImageGenParams(raw: unknown): DesktopTestImageGenPar
   }
 }
 
-function assertWebSearchToolType(value: unknown): DesktopWebSearchToolType {
-  if (typeof value !== `string` || !VALID_WEB_SEARCH_TOOL_TYPES.has(value))
-    throw new Error(`Invalid web search tool type`)
-  return value as DesktopWebSearchToolType
-}
-
 export function validateWebSearchConfigUpdate(raw: unknown): DesktopWebSearchConfigUpdate {
   const obj = assertPlainObject(raw, `patch`)
   const out: DesktopWebSearchConfigUpdate = {}
@@ -247,8 +239,6 @@ export function validateWebSearchConfigUpdate(raw: unknown): DesktopWebSearchCon
     out.apiKey = assertString(obj.apiKey, `apiKey`, { maxLength: MAX_SECRET_CHARS })
   if (obj.model !== undefined)
     out.model = assertString(obj.model, `model`, { maxLength: MAX_MODEL_ID_CHARS })
-  if (obj.toolType !== undefined)
-    out.toolType = assertWebSearchToolType(obj.toolType)
 
   return out
 }
@@ -262,7 +252,6 @@ export function validateTestWebSearchParams(raw: unknown): DesktopTestWebSearchP
     baseUrl: assertOptionalString(obj.baseUrl, `baseUrl`, MAX_URL_CHARS),
     apiKey: assertOptionalString(obj.apiKey, `apiKey`, MAX_SECRET_CHARS),
     model: assertOptionalString(obj.model, `model`, MAX_MODEL_ID_CHARS),
-    toolType: obj.toolType === undefined ? undefined : assertWebSearchToolType(obj.toolType),
   }
 }
 

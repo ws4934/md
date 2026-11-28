@@ -239,8 +239,6 @@ export default {
       protocolLabel: `協定`,
       protocolHint: `目前支援 OpenAI Responses 協定（/responses + web_search 工具）`,
       modelLabel: `搜尋模型`,
-      toolTypeLabel: `工具類型`,
-      toolTypeHint: `服務商只支援舊名稱時選 web_search_preview`,
       configRequired: `請填寫 Base URL、API Key 與搜尋模型`,
       testSearch: `測試搜尋`,
       testing: `搜尋中…`,

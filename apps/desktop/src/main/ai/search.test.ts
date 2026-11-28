@@ -177,7 +177,6 @@ describe(`searchWeb`, () => {
       baseUrl: `https://search.example/v1/`,
       apiKey: `sk-search`,
       model: `gpt-5-mini`,
-      toolType: `web_search_preview`,
       query: `  latest node  `,
       fetchImpl,
     })
@@ -186,8 +185,8 @@ describe(`searchWeb`, () => {
     expect(calls[0].url).toBe(`https://search.example/v1/responses`)
     expect((calls[0].init?.headers as Record<string, string>).Authorization).toBe(`Bearer sk-search`)
     const body = JSON.parse(String(calls[0].init?.body))
-    expect(body).toEqual(buildWebSearchRequestBody({ model: `gpt-5-mini`, toolType: `web_search_preview`, query: `latest node`, includeSources: true }))
-    expect(body.tools).toEqual([{ type: `web_search_preview` }])
+    expect(body).toEqual(buildWebSearchRequestBody({ model: `gpt-5-mini`, toolType: `web_search`, query: `latest node`, includeSources: true }))
+    expect(body.tools).toEqual([{ type: `web_search` }])
     expect(body.include).toEqual([`web_search_call.action.sources`])
     expect(body.input).toContain(`Query: latest node`)
   })
@@ -202,11 +201,33 @@ describe(`searchWeb`, () => {
       return new Response(JSON.stringify(okPayload), { status: 200 })
     }
 
-    const result = await searchWeb({ baseUrl: `https://s.example/v1`, apiKey: `sk-x`, model: `m`, toolType: `web_search`, query: `q`, fetchImpl })
+    const result = await searchWeb({ baseUrl: `https://s.example/v1`, apiKey: `sk-x`, model: `m`, query: `q`, fetchImpl })
     expect(result.answer).toBe(`Answer`)
     expect(bodies).toHaveLength(2)
     expect(bodies[0].include).toBeDefined()
     expect(`include` in bodies[1]).toBe(false)
+  })
+
+  it(`falls back to web_search_preview when the provider rejects the tool name`, async () => {
+    const bodies: Array<Record<string, unknown>> = []
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body))
+      bodies.push(body)
+      const [tool] = body.tools as Array<{ type: string }>
+      if (body.include)
+        return new Response(JSON.stringify({ error: { message: `Unknown parameter: 'include'.`, param: `include` } }), { status: 400 })
+      if (tool.type === `web_search`)
+        return new Response(JSON.stringify({ error: { message: `Invalid value: 'web_search'. Supported values are: 'web_search_preview'.`, param: `tools[0].type` } }), { status: 400 })
+      return new Response(JSON.stringify(okPayload), { status: 200 })
+    }
+
+    const result = await searchWeb({ baseUrl: `https://s.example/v1`, apiKey: `sk-x`, model: `m`, query: `q`, fetchImpl })
+    expect(result.answer).toBe(`Answer`)
+    expect(bodies.map(body => [(body.tools as Array<{ type: string }>)[0].type, `include` in body])).toEqual([
+      [`web_search`, true],
+      [`web_search`, false],
+      [`web_search_preview`, false],
+    ])
   })
 
   it(`does not retry other errors and redacts the API key`, async () => {
@@ -215,14 +236,14 @@ describe(`searchWeb`, () => {
       calls += 1
       return new Response(JSON.stringify({ error: { message: `Invalid key sk-secret-search-key for model` } }), { status: 401 })
     }
-    await expect(searchWeb({ baseUrl: `https://s.example/v1`, apiKey: `sk-secret-search-key`, model: `m`, toolType: `web_search`, query: `q`, fetchImpl }))
+    await expect(searchWeb({ baseUrl: `https://s.example/v1`, apiKey: `sk-secret-search-key`, model: `m`, query: `q`, fetchImpl }))
       .rejects
       .toThrow(/^HTTP 401: Invalid key \*\*\* for model$/)
     expect(calls).toBe(1)
   })
 
   it(`rejects empty results, non-JSON bodies, missing config, and aborts`, async () => {
-    const base = { baseUrl: `https://s.example/v1`, apiKey: `sk-x`, model: `m`, toolType: `web_search` as const, query: `q` }
+    const base = { baseUrl: `https://s.example/v1`, apiKey: `sk-x`, model: `m`, query: `q` }
     await expect(searchWeb({ ...base, fetchImpl: async () => new Response(JSON.stringify({ output: [] }), { status: 200 }) }))
       .rejects
       .toThrow(/no answer or sources/)
@@ -261,10 +282,9 @@ describe(`web search config`, () => {
       baseUrl: `https://api.openai.com/v1`,
       hasApiKey: false,
       model: `gpt-5-mini`,
-      toolType: `web_search`,
     })
 
-    const saved = await store.updateWebSearchConfig({ apiKey: `sk-search-secret`, toolType: `web_search_preview` })
+    const saved = await store.updateWebSearchConfig({ apiKey: `sk-search-secret` })
     expect(saved.hasApiKey).toBe(true)
     expect(`apiKey` in saved).toBe(false)
     expect(scopes).toEqual([`webSearch`])
@@ -277,7 +297,7 @@ describe(`web search config`, () => {
 
     const reloaded = new AiConfigStore({ configPath, cipher })
     const resolved = await reloaded.getResolvedWebSearchConfig()
-    expect(resolved).toMatchObject({ enabled: true, apiKey: `sk-search-secret`, toolType: `web_search_preview`, isConfigured: true })
+    expect(resolved).toMatchObject({ enabled: true, apiKey: `sk-search-secret`, isConfigured: true })
     expect(`apiKey` in (await reloaded.getPublicConfigs()).webSearch).toBe(false)
 
     await reloaded.updateWebSearchConfig({ model: `  ` })
@@ -293,7 +313,7 @@ describe(`web search config`, () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), `md-search-cfg-bad-`))
     tempDirs.push(dir)
     const configPath = path.join(dir, `ai-config.json`)
-    await fs.writeFile(configPath, JSON.stringify({ version: 1, webSearch: { enabled: `yes`, protocol: `x`, toolType: `y`, baseUrl: `nope`, apiKey: `plain-string` } }))
+    await fs.writeFile(configPath, JSON.stringify({ version: 1, webSearch: { enabled: `yes`, protocol: `x`, baseUrl: `nope`, apiKey: `plain-string` } }))
     const store = new AiConfigStore({ configPath, cipher: createMockSafeStorage() })
     expect((await store.getPublicConfigs()).webSearch).toEqual({
       enabled: false,
@@ -301,7 +321,6 @@ describe(`web search config`, () => {
       baseUrl: `https://api.openai.com/v1`,
       hasApiKey: false,
       model: `gpt-5-mini`,
-      toolType: `web_search`,
     })
   })
 })
@@ -314,7 +333,6 @@ describe(`web search bridge`, () => {
     hasApiKey: true,
     apiKey: `sk-bridge-secret`,
     model: `m`,
-    toolType: `web_search` as const,
     isConfigured: true,
   }
 

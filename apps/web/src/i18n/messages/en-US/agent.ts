@@ -239,8 +239,6 @@ export default {
       protocolLabel: `Protocol`,
       protocolHint: `Currently supports the OpenAI Responses API (/responses with the web_search tool)`,
       modelLabel: `Search model`,
-      toolTypeLabel: `Tool type`,
-      toolTypeHint: `Choose web_search_preview if your provider only supports the older name`,
       configRequired: `Please provide Base URL, API Key, and search model`,
       testSearch: `Test search`,
       testing: `Searching…`,

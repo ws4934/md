@@ -73,11 +73,6 @@ export type DesktopWebSearchProtocol = `openai-responses`
 
 export const DESKTOP_WEB_SEARCH_PROTOCOLS = [`openai-responses`] as const satisfies readonly DesktopWebSearchProtocol[]
 
-/** Responses API hosted tool type; some providers only accept the older preview name. */
-export type DesktopWebSearchToolType = `web_search` | `web_search_preview`
-
-export const DESKTOP_WEB_SEARCH_TOOL_TYPES = [`web_search`, `web_search_preview`] as const satisfies readonly DesktopWebSearchToolType[]
-
 export interface DesktopWebSearchConfig {
   enabled: boolean
   protocol: DesktopWebSearchProtocol
@@ -85,7 +80,6 @@ export interface DesktopWebSearchConfig {
   /** Renderer never receives raw API keys; only whether one is saved in the main process. */
   hasApiKey: boolean
   model: string
-  toolType: DesktopWebSearchToolType
 }
 
 export interface DesktopWebSearchConfigUpdate {
@@ -95,7 +89,6 @@ export interface DesktopWebSearchConfigUpdate {
   /** Non-empty sets/replaces the key, empty string clears it, undefined keeps the existing key. */
   apiKey?: string
   model?: string
-  toolType?: DesktopWebSearchToolType
 }
 
 export interface DesktopAiConfigs {
@@ -143,7 +136,6 @@ export interface DesktopTestWebSearchParams {
   baseUrl?: string
   apiKey?: string
   model?: string
-  toolType?: DesktopWebSearchToolType
 }
 
 export interface DesktopTestWebSearchResult {

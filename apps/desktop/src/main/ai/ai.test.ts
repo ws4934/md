@@ -932,7 +932,6 @@ describe(`image MCP server & local bridge`, () => {
         hasApiKey: true,
         apiKey: `sk-search`,
         model: `mock-search`,
-        toolType: `web_search`,
         isConfigured: true,
       }),
       search: async ({ query }) => {

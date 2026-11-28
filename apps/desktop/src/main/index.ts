@@ -496,7 +496,6 @@ function registerIpc(
         baseUrl,
         apiKey,
         model: params?.model?.trim() || saved.model,
-        toolType: params?.toolType ?? saved.toolType,
         query: params?.query?.trim() || `What is the latest stable version of Node.js?`,
       })
       return { ok: true, sourceCount: result.sources.length }

@@ -8,13 +8,12 @@ import type {
   DesktopWebSearchConfig,
   DesktopWebSearchConfigUpdate,
   DesktopWebSearchProtocol,
-  DesktopWebSearchToolType,
 } from '@md/shared/types'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { DEFAULT_PROTOCOL_BASE_URLS, DESKTOP_WEB_SEARCH_PROTOCOLS, DESKTOP_WEB_SEARCH_TOOL_TYPES } from '@md/shared/types'
+import { DEFAULT_PROTOCOL_BASE_URLS, DESKTOP_WEB_SEARCH_PROTOCOLS } from '@md/shared/types'
 import { isValidHttpBaseUrl, validateHttpBaseUrl } from './sanitize'
 
 export interface SecretCipher {
@@ -53,7 +52,6 @@ interface StoredWebSearchRecord {
   baseUrl: string
   apiKey?: StoredSecret | null
   model: string
-  toolType: DesktopWebSearchToolType
 }
 
 interface StoredAiConfigFile {
@@ -88,7 +86,6 @@ export interface AiConfigStoreOptions {
 
 const VALID_PROTOCOLS = new Set<DesktopAiProtocol>([`openai-compatible`, `anthropic`, `google`])
 const VALID_WEB_SEARCH_PROTOCOLS = new Set<string>(DESKTOP_WEB_SEARCH_PROTOCOLS)
-const VALID_WEB_SEARCH_TOOL_TYPES = new Set<string>(DESKTOP_WEB_SEARCH_TOOL_TYPES)
 const DEFAULT_WEB_SEARCH_MODEL = `gpt-5-mini`
 
 function createDefaultModelApiRecord(): StoredModelApiRecord {
@@ -121,7 +118,6 @@ function createDefaultWebSearchRecord(): StoredWebSearchRecord {
     baseUrl: `https://api.openai.com/v1`,
     apiKey: null,
     model: DEFAULT_WEB_SEARCH_MODEL,
-    toolType: `web_search`,
   }
 }
 
@@ -294,7 +290,6 @@ export class AiConfigStore {
               : `https://api.openai.com/v1`,
             apiKey: isStoredSecret(rawSearch?.apiKey) ? rawSearch.apiKey : null,
             model: typeof rawSearch?.model === `string` ? rawSearch.model.trim() : DEFAULT_WEB_SEARCH_MODEL,
-            toolType: VALID_WEB_SEARCH_TOOL_TYPES.has(rawSearch?.toolType as string) ? rawSearch!.toolType : `web_search`,
           },
         }
       }
@@ -368,7 +363,6 @@ export class AiConfigStore {
       baseUrl: rec.baseUrl,
       hasApiKey,
       model: rec.model,
-      toolType: rec.toolType,
     }
   }
 
@@ -551,7 +545,6 @@ export class AiConfigStore {
       baseUrl: nextBaseUrl,
       apiKey: nextApiKey,
       model: patch.model !== undefined ? patch.model.trim() : prev.model,
-      toolType: patch.toolType && VALID_WEB_SEARCH_TOOL_TYPES.has(patch.toolType) ? patch.toolType : prev.toolType,
     }
 
     await this.persist()

@@ -41,7 +41,6 @@ export class WebSearchBridge {
         baseUrl: config.baseUrl,
         apiKey: config.apiKey,
         model: config.model,
-        toolType: config.toolType,
         query,
         abortSignal,
       }))

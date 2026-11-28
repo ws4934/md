@@ -239,8 +239,6 @@ export default {
       protocolLabel: `プロトコル`,
       protocolHint: `現在は OpenAI Responses プロトコル（/responses と web_search ツール）に対応`,
       modelLabel: `検索モデル`,
-      toolTypeLabel: `ツールの種類`,
-      toolTypeHint: `プロバイダーが旧名称のみ対応の場合は web_search_preview を選択`,
       configRequired: `Base URL・API キー・検索モデルを入力してください`,
       testSearch: `テスト検索`,
       testing: `検索中…`,

@@ -299,14 +299,14 @@ describe(`desktop main index wiring`, () => {
       }), { status: 200 })
     })
     try {
-      expect(await invokeIpc(IPC_CHANNELS.AI_TEST_WEB_SEARCH, { toolType: `web_search_preview` }))
+      expect(await invokeIpc(IPC_CHANNELS.AI_TEST_WEB_SEARCH, {}))
         .toEqual({ ok: true, sourceCount: 2 })
       const failed = await invokeIpc<{ ok: boolean, error?: string }>(IPC_CHANNELS.AI_TEST_WEB_SEARCH, { apiKey: `sk-wrong-key` })
       expect(failed.ok).toBe(false)
       expect(failed.error).toMatch(/^HTTP 401/)
       expect(failed.error).not.toContain(`sk-wrong-key`)
       expect(requests).toEqual([
-        `https://api.openai.com/v1/responses web_search_preview`,
+        `https://api.openai.com/v1/responses web_search`,
         `https://api.openai.com/v1/responses web_search`,
       ])
     }

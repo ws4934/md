@@ -1,4 +1,3 @@
-import type { DesktopWebSearchToolType } from '@md/shared/types'
 import { readBoundedResponseText } from './remote-models'
 import { redactSecret, validateHttpBaseUrl } from './sanitize'
 
@@ -17,7 +16,6 @@ export interface SearchWebParams {
   baseUrl: string
   apiKey: string
   model: string
-  toolType: DesktopWebSearchToolType
   query: string
   abortSignal?: AbortSignal
   timeoutMs?: number
@@ -65,9 +63,12 @@ function normalizeSourceUrl(raw: unknown): string | null {
   }
 }
 
+/** Responses API hosted tool; `web_search_preview` is the older name some providers still require. */
+export type WebSearchToolType = `web_search` | `web_search_preview`
+
 export function buildWebSearchRequestBody(params: {
   model: string
-  toolType: DesktopWebSearchToolType
+  toolType: WebSearchToolType
   query: string
   includeSources: boolean
 }): Record<string, unknown> {
@@ -184,7 +185,7 @@ export async function searchWeb(params: SearchWebParams): Promise<WebSearchResul
     ? AbortSignal.any([timeoutSignal, params.abortSignal])
     : timeoutSignal
 
-  const post = async (includeSources: boolean) => {
+  const post = async (toolType: WebSearchToolType, includeSources: boolean) => {
     const response = await fetchImpl(`${baseUrl}/responses`, {
       method: `POST`,
       headers: {
@@ -192,7 +193,7 @@ export async function searchWeb(params: SearchWebParams): Promise<WebSearchResul
         'Content-Type': `application/json`,
         'Accept': `application/json`,
       },
-      body: JSON.stringify(buildWebSearchRequestBody({ model, toolType: params.toolType, query, includeSources })),
+      body: JSON.stringify(buildWebSearchRequestBody({ model, toolType, query, includeSources })),
       signal,
     })
     const text = await readBoundedResponseText(response, MAX_SEARCH_RESPONSE_BYTES)
@@ -205,12 +206,20 @@ export async function searchWeb(params: SearchWebParams): Promise<WebSearchResul
   }
 
   try {
-    let res = await post(true)
-    if (!res.ok && (res.status === 400 || res.status === 422)) {
+    let toolType: WebSearchToolType = `web_search`
+    let includeSources = true
+    let res = await post(toolType, includeSources)
+    // Providers that do not know `include` or the newer tool name reject the whole request;
+    // drop each in turn, at most once.
+    for (let retries = 0; retries < 2 && !res.ok && (res.status === 400 || res.status === 422); retries++) {
       const { message, param } = readErrorDetail(res.json, res.text)
-      // Providers that do not know `include` reject the whole request; retry once without it.
-      if (param === `include` || /\binclude\b/i.test(message))
-        res = await post(false)
+      if (includeSources && (param === `include` || /\binclude\b/i.test(message)))
+        includeSources = false
+      else if (toolType === `web_search` && (param.startsWith(`tools`) || /\btools?\b|web_search/i.test(message)))
+        toolType = `web_search_preview`
+      else
+        break
+      res = await post(toolType, includeSources)
     }
     if (!res.ok) {
       const { message } = readErrorDetail(res.json, res.text)
@@ -222,7 +231,7 @@ export async function searchWeb(params: SearchWebParams): Promise<WebSearchResul
     const result = parseWebSearchResponse(res.json)
     if (!result.answer && result.sources.length === 0) {
       const { message } = readErrorDetail(res.json, ``)
-      throw new Error(message || `Provider returned no answer or sources (does it support the Responses API ${params.toolType} tool?)`)
+      throw new Error(message || `Provider returned no answer or sources (does it support the Responses API web_search tool?)`)
     }
     return result
   }
