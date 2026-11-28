@@ -233,6 +233,7 @@ declare module 'vue' {
     UploadProviderTextField: typeof import('./src/components/editor/dialogs/upload-providers/UploadProviderTextField.vue')['default']
     UpyunConfigForm: typeof import('./src/components/editor/dialogs/upload-providers/UpyunConfigForm.vue')['default']
     VersionDiffViewer: typeof import('./src/components/editor/post-slider/VersionDiffViewer.vue')['default']
+    WebSearchSettings: typeof import('./src/components/agent/WebSearchSettings.vue')['default']
     WeChatAccountSettings: typeof import('./src/components/agent/WeChatAccountSettings.vue')['default']
   }
 }

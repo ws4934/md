@@ -17,6 +17,8 @@ import {
   validateSetThinkingLevelParams,
   validateStartSessionParams,
   validateTestImageGenParams,
+  validateTestWebSearchParams,
+  validateWebSearchConfigUpdate,
 } from './ipc-validators'
 
 describe(`ipc-validators`, () => {
@@ -55,6 +57,26 @@ describe(`ipc-validators`, () => {
       size: `1024x1024`,
     })
     expect(() => validateImageGenConfigUpdate([])).toThrow(TypeError)
+
+    expect(validateWebSearchConfigUpdate({
+      enabled: true,
+      protocol: `openai-responses`,
+      model: `gpt-5-mini`,
+      toolType: `web_search_preview`,
+    })).toEqual({
+      enabled: true,
+      protocol: `openai-responses`,
+      model: `gpt-5-mini`,
+      toolType: `web_search_preview`,
+    })
+    expect(() => validateWebSearchConfigUpdate({ enabled: `yes` })).toThrow(TypeError)
+    expect(() => validateWebSearchConfigUpdate({ protocol: `chat-completions` })).toThrow(/protocol/i)
+    expect(() => validateWebSearchConfigUpdate({ toolType: `file_search` })).toThrow(/tool type/i)
+    expect(() => validateWebSearchConfigUpdate({ apiKey: `k`.repeat(4097) })).toThrow(RangeError)
+    expect(validateTestWebSearchParams(undefined)).toBeUndefined()
+    expect(validateTestWebSearchParams({ query: `node`, toolType: `web_search` })).toMatchObject({ query: `node`, toolType: `web_search` })
+    expect(() => validateTestWebSearchParams({ query: `x`.repeat(1001) })).toThrow(RangeError)
+    expect(() => validateTestWebSearchParams({ toolType: `bad` })).toThrow(/tool type/i)
 
     expect(validateListRemoteModelsParams({
       protocol: `openai-compatible`,

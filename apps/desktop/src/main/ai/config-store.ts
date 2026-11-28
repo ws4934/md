@@ -5,12 +5,16 @@ import type {
   DesktopImageGenConfigUpdate,
   DesktopModelApiConfig,
   DesktopModelApiConfigUpdate,
+  DesktopWebSearchConfig,
+  DesktopWebSearchConfigUpdate,
+  DesktopWebSearchProtocol,
+  DesktopWebSearchToolType,
 } from '@md/shared/types'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { DEFAULT_PROTOCOL_BASE_URLS } from '@md/shared/types'
+import { DEFAULT_PROTOCOL_BASE_URLS, DESKTOP_WEB_SEARCH_PROTOCOLS, DESKTOP_WEB_SEARCH_TOOL_TYPES } from '@md/shared/types'
 import { isValidHttpBaseUrl, validateHttpBaseUrl } from './sanitize'
 
 export interface SecretCipher {
@@ -43,10 +47,20 @@ interface StoredImageGenRecord {
   quality: string
 }
 
+interface StoredWebSearchRecord {
+  enabled: boolean
+  protocol: DesktopWebSearchProtocol
+  baseUrl: string
+  apiKey?: StoredSecret | null
+  model: string
+  toolType: DesktopWebSearchToolType
+}
+
 interface StoredAiConfigFile {
   version: 1
   modelApi: StoredModelApiRecord
   imageGen: StoredImageGenRecord
+  webSearch: StoredWebSearchRecord
 }
 
 export interface ResolvedModelApiConfig extends DesktopModelApiConfig {
@@ -59,13 +73,23 @@ export interface ResolvedImageGenConfig extends DesktopImageGenConfig {
   isConfigured: boolean
 }
 
+export interface ResolvedWebSearchConfig extends DesktopWebSearchConfig {
+  apiKey: string
+  isConfigured: boolean
+}
+
+export type AiConfigScope = `modelApi` | `imageGen` | `webSearch`
+
 export interface AiConfigStoreOptions {
   configPath: string
   cipher?: SecretCipher
-  onChange?: (scope: `modelApi` | `imageGen`) => void
+  onChange?: (scope: AiConfigScope) => void
 }
 
 const VALID_PROTOCOLS = new Set<DesktopAiProtocol>([`openai-compatible`, `anthropic`, `google`])
+const VALID_WEB_SEARCH_PROTOCOLS = new Set<string>(DESKTOP_WEB_SEARCH_PROTOCOLS)
+const VALID_WEB_SEARCH_TOOL_TYPES = new Set<string>(DESKTOP_WEB_SEARCH_TOOL_TYPES)
+const DEFAULT_WEB_SEARCH_MODEL = `gpt-5-mini`
 
 function createDefaultModelApiRecord(): StoredModelApiRecord {
   return {
@@ -87,6 +111,17 @@ function createDefaultImageGenRecord(): StoredImageGenRecord {
     model: `gpt-image-1`,
     size: `1024x1024`,
     quality: `auto`,
+  }
+}
+
+function createDefaultWebSearchRecord(): StoredWebSearchRecord {
+  return {
+    enabled: false,
+    protocol: `openai-responses`,
+    baseUrl: `https://api.openai.com/v1`,
+    apiKey: null,
+    model: DEFAULT_WEB_SEARCH_MODEL,
+    toolType: `web_search`,
   }
 }
 
@@ -151,12 +186,13 @@ function isStoredSecret(value: unknown): value is StoredSecret {
 export class AiConfigStore {
   private readonly configPath: string
   private readonly cipher?: SecretCipher
-  private readonly onChange?: (scope: `modelApi` | `imageGen`) => void
+  private readonly onChange?: (scope: AiConfigScope) => void
 
   private data: StoredAiConfigFile = {
     version: 1,
     modelApi: createDefaultModelApiRecord(),
     imageGen: createDefaultImageGenRecord(),
+    webSearch: createDefaultWebSearchRecord(),
   }
 
   private loaded = false
@@ -222,6 +258,7 @@ export class AiConfigStore {
           : (enabledModels[0] ?? ``)
 
         const rawImage = parsed.imageGen
+        const rawSearch = parsed.webSearch
         this.data = {
           version: 1,
           modelApi: {
@@ -249,6 +286,16 @@ export class AiConfigStore {
             size: typeof rawImage?.size === `string` && rawImage.size.trim() ? rawImage.size.trim() : `1024x1024`,
             quality: typeof rawImage?.quality === `string` && rawImage.quality.trim() ? rawImage.quality.trim() : `auto`,
           },
+          webSearch: {
+            enabled: rawSearch?.enabled === true,
+            protocol: VALID_WEB_SEARCH_PROTOCOLS.has(rawSearch?.protocol as string) ? rawSearch!.protocol : `openai-responses`,
+            baseUrl: typeof rawSearch?.baseUrl === `string`
+              ? normalizeBaseUrl(rawSearch.baseUrl, `https://api.openai.com/v1`)
+              : `https://api.openai.com/v1`,
+            apiKey: isStoredSecret(rawSearch?.apiKey) ? rawSearch.apiKey : null,
+            model: typeof rawSearch?.model === `string` ? rawSearch.model.trim() : DEFAULT_WEB_SEARCH_MODEL,
+            toolType: VALID_WEB_SEARCH_TOOL_TYPES.has(rawSearch?.toolType as string) ? rawSearch!.toolType : `web_search`,
+          },
         }
       }
       catch {
@@ -256,6 +303,7 @@ export class AiConfigStore {
           version: 1,
           modelApi: createDefaultModelApiRecord(),
           imageGen: createDefaultImageGenRecord(),
+          webSearch: createDefaultWebSearchRecord(),
         }
       }
       finally {
@@ -311,11 +359,25 @@ export class AiConfigStore {
     }
   }
 
+  private toPublicWebSearch(): DesktopWebSearchConfig {
+    const rec = this.data.webSearch
+    const hasApiKey = Boolean(this.decryptSecret(rec.apiKey).trim())
+    return {
+      enabled: rec.enabled,
+      protocol: rec.protocol,
+      baseUrl: rec.baseUrl,
+      hasApiKey,
+      model: rec.model,
+      toolType: rec.toolType,
+    }
+  }
+
   async getPublicConfigs(): Promise<DesktopAiConfigs> {
     await this.ensureLoaded()
     return {
       modelApi: this.toPublicModelApi(),
       imageGen: this.toPublicImageGen(),
+      webSearch: this.toPublicWebSearch(),
     }
   }
 
@@ -345,6 +407,18 @@ export class AiConfigStore {
     }
   }
 
+  async getResolvedWebSearchConfig(): Promise<ResolvedWebSearchConfig> {
+    await this.ensureLoaded()
+    const pub = this.toPublicWebSearch()
+    const apiKey = this.decryptSecret(this.data.webSearch.apiKey).trim()
+    const isConfigured = Boolean(pub.enabled && apiKey && pub.baseUrl.trim() && pub.model.trim())
+    return {
+      ...pub,
+      apiKey,
+      isConfigured,
+    }
+  }
+
   async isModelApiConfigured(): Promise<boolean> {
     const resolved = await this.getResolvedModelApiConfig()
     return resolved.isConfigured
@@ -352,6 +426,11 @@ export class AiConfigStore {
 
   async isImageGenConfigured(): Promise<boolean> {
     const resolved = await this.getResolvedImageGenConfig()
+    return resolved.isConfigured
+  }
+
+  async isWebSearchConfigured(): Promise<boolean> {
+    const resolved = await this.getResolvedWebSearchConfig()
     return resolved.isConfigured
   }
 
@@ -451,5 +530,32 @@ export class AiConfigStore {
     await this.persist()
     this.onChange?.(`imageGen`)
     return this.toPublicImageGen()
+  }
+
+  async updateWebSearchConfig(patch: DesktopWebSearchConfigUpdate): Promise<DesktopWebSearchConfig> {
+    await this.ensureLoaded()
+    const prev = this.data.webSearch
+
+    const nextBaseUrl = patch.baseUrl !== undefined
+      ? (patch.baseUrl.trim() ? validateHttpBaseUrl(patch.baseUrl) : ``)
+      : prev.baseUrl
+
+    // Clear the saved key when switching to a different origin without supplying a new key.
+    const nextApiKey = patch.apiKey !== undefined
+      ? this.encryptSecret(patch.apiKey)
+      : (hasBaseUrlOriginChanged(prev.baseUrl, nextBaseUrl) ? null : prev.apiKey)
+
+    this.data.webSearch = {
+      enabled: patch.enabled ?? prev.enabled,
+      protocol: patch.protocol && VALID_WEB_SEARCH_PROTOCOLS.has(patch.protocol) ? patch.protocol : prev.protocol,
+      baseUrl: nextBaseUrl,
+      apiKey: nextApiKey,
+      model: patch.model !== undefined ? patch.model.trim() : prev.model,
+      toolType: patch.toolType && VALID_WEB_SEARCH_TOOL_TYPES.has(patch.toolType) ? patch.toolType : prev.toolType,
+    }
+
+    await this.persist()
+    this.onChange?.(`webSearch`)
+    return this.toPublicWebSearch()
   }
 }

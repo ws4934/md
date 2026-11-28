@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { PreferencesTab } from '@/stores/ui'
-import { ArrowLeft, Bot, Cpu, Eye, Image, ImagePlus, Info, MessageCircle, PenLine, Puzzle, SlidersHorizontal, Smile } from '@lucide/vue'
+import { ArrowLeft, Bot, Cpu, Eye, Globe, Image, ImagePlus, Info, MessageCircle, PenLine, Puzzle, SlidersHorizontal, Smile } from '@lucide/vue'
 import PreferencesSection from '@/components/editor/dialogs/PreferencesSection.vue'
 import ImageHostSettings from '@/components/editor/dialogs/upload-providers/ImageHostSettings.vue'
 import { useUIStore } from '@/stores/ui'
@@ -11,6 +11,7 @@ import ImageGenSettings from './ImageGenSettings.vue'
 import IpCharacterSettings from './IpCharacterSettings.vue'
 import ModelApiSettings from './ModelApiSettings.vue'
 import SkillSettings from './SkillSettings.vue'
+import WebSearchSettings from './WebSearchSettings.vue'
 import WeChatAccountSettings from './WeChatAccountSettings.vue'
 
 const { t, locale } = useI18n()
@@ -28,6 +29,7 @@ const sections = computed(() => {
     { id: `agents`, icon: Bot, label: t(`preferences.tab.agents`), description: `` },
     { id: `modelApi`, icon: Cpu, label: t(`preferences.tab.modelApi`), description: t(`preferences.sectionHint.modelApi`) },
     { id: `imageGen`, icon: ImagePlus, label: t(`preferences.tab.imageGen`), description: t(`preferences.sectionHint.imageGen`) },
+    { id: `webSearch`, icon: Globe, label: t(`preferences.tab.webSearch`), description: t(`preferences.sectionHint.webSearch`) },
     { id: `ipCharacters`, icon: Smile, label: t(`preferences.tab.ipCharacters`), description: t(`preferences.sectionHint.ipCharacters`) },
     { id: `skills`, icon: Puzzle, label: t(`preferences.tab.skills`), description: t(`preferences.sectionHint.skills`) },
     { id: `about`, icon: Info, label: t(`preferences.tab.about`), description: t(`preferences.sectionHint.about`) },
@@ -135,6 +137,7 @@ onUnmounted(() => {
           <WeChatAccountSettings v-else-if="current.id === 'wechat'" />
           <ModelApiSettings v-else-if="current.id === 'modelApi'" />
           <ImageGenSettings v-else-if="current.id === 'imageGen'" />
+          <WebSearchSettings v-else-if="current.id === 'webSearch'" />
           <IpCharacterSettings v-else-if="current.id === 'ipCharacters'" />
           <SkillSettings v-else-if="current.id === 'skills'" />
           <AboutSettings v-else-if="current.id === 'about'" />

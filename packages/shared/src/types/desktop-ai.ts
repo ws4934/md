@@ -68,9 +68,40 @@ export interface DesktopImageGenConfigUpdate {
   quality?: string
 }
 
+/** Wire protocol used to reach the search provider; only the OpenAI Responses API for now. */
+export type DesktopWebSearchProtocol = `openai-responses`
+
+export const DESKTOP_WEB_SEARCH_PROTOCOLS = [`openai-responses`] as const satisfies readonly DesktopWebSearchProtocol[]
+
+/** Responses API hosted tool type; some providers only accept the older preview name. */
+export type DesktopWebSearchToolType = `web_search` | `web_search_preview`
+
+export const DESKTOP_WEB_SEARCH_TOOL_TYPES = [`web_search`, `web_search_preview`] as const satisfies readonly DesktopWebSearchToolType[]
+
+export interface DesktopWebSearchConfig {
+  enabled: boolean
+  protocol: DesktopWebSearchProtocol
+  baseUrl: string
+  /** Renderer never receives raw API keys; only whether one is saved in the main process. */
+  hasApiKey: boolean
+  model: string
+  toolType: DesktopWebSearchToolType
+}
+
+export interface DesktopWebSearchConfigUpdate {
+  enabled?: boolean
+  protocol?: DesktopWebSearchProtocol
+  baseUrl?: string
+  /** Non-empty sets/replaces the key, empty string clears it, undefined keeps the existing key. */
+  apiKey?: string
+  model?: string
+  toolType?: DesktopWebSearchToolType
+}
+
 export interface DesktopAiConfigs {
   modelApi: DesktopModelApiConfig
   imageGen: DesktopImageGenConfig
+  webSearch: DesktopWebSearchConfig
 }
 
 export interface DesktopRemoteModelInfo {
@@ -107,10 +138,26 @@ export interface DesktopTestImageGenResult {
   error?: string
 }
 
+export interface DesktopTestWebSearchParams {
+  query?: string
+  baseUrl?: string
+  apiKey?: string
+  model?: string
+  toolType?: DesktopWebSearchToolType
+}
+
+export interface DesktopTestWebSearchResult {
+  ok: boolean
+  sourceCount?: number
+  error?: string
+}
+
 export interface DesktopAiApi {
   getConfigs: () => Promise<DesktopAiConfigs>
   updateModelApiConfig: (patch: DesktopModelApiConfigUpdate) => Promise<DesktopModelApiConfig>
   updateImageGenConfig: (patch: DesktopImageGenConfigUpdate) => Promise<DesktopImageGenConfig>
   listRemoteModels: (params: DesktopListRemoteModelsParams) => Promise<DesktopListRemoteModelsResult>
   testImageGen: (params?: DesktopTestImageGenParams) => Promise<DesktopTestImageGenResult>
+  updateWebSearchConfig: (patch: DesktopWebSearchConfigUpdate) => Promise<DesktopWebSearchConfig>
+  testWebSearch: (params?: DesktopTestWebSearchParams) => Promise<DesktopTestWebSearchResult>
 }

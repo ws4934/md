@@ -29,7 +29,7 @@ const MAX_REFERENCE_IMAGE_BYTES = 8 * 1024 * 1024
 const MAX_REFERENCE_BASE64_CHARS = Math.ceil(MAX_REFERENCE_IMAGE_BYTES / 3) * 4
 // Sized for up to 4 max-size base64 reference images plus prompt and JSON framing.
 const MAX_BODY_BYTES = MAX_REFERENCE_IMAGES * MAX_REFERENCE_BASE64_CHARS + 256 * 1024
-const MAX_DRAIN_BYTES = MAX_BODY_BYTES + 16 * 1024 * 1024
+const DRAIN_SLACK_BYTES = 16 * 1024 * 1024
 const BODY_READ_TIMEOUT_MS = 15_000
 const MAX_PROMPT_CHARS = 8_000
 const MAX_PARAM_CHARS = 64
@@ -75,7 +75,7 @@ function parseReferenceImages(raw: unknown): Uint8Array[] | undefined {
   return decoded
 }
 
-function sendJson(
+export function sendJson(
   res: ServerResponse,
   statusCode: number,
   body: Record<string, unknown>,
@@ -100,7 +100,7 @@ function sendJson(
   }
 }
 
-function tokensEqual(expected: string, actual: string): boolean {
+export function tokensEqual(expected: string, actual: string): boolean {
   const expectedBuf = Buffer.from(expected, `utf8`)
   const actualBuf = Buffer.from(actual, `utf8`)
   if (expectedBuf.length !== actualBuf.length)
@@ -108,10 +108,11 @@ function tokensEqual(expected: string, actual: string): boolean {
   return timingSafeEqual(expectedBuf, actualBuf)
 }
 
-function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+export function readJsonBody(req: IncomingMessage, maxBodyBytes = MAX_BODY_BYTES): Promise<Record<string, unknown>> {
+  const maxDrainBytes = maxBodyBytes + DRAIN_SLACK_BYTES
   return new Promise((resolve, reject) => {
     const declaredLength = Number(req.headers[`content-length`])
-    let tooLarge = Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES
+    let tooLarge = Number.isFinite(declaredLength) && declaredLength > maxBodyBytes
     const chunks: Buffer[] = []
     let total = 0
     let settled = false
@@ -134,10 +135,10 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
 
     function onData(chunk: Buffer) {
       total += chunk.length
-      if (total > MAX_BODY_BYTES) {
+      if (total > maxBodyBytes) {
         tooLarge = true
         chunks.length = 0
-        if (total > MAX_DRAIN_BYTES && !settled) {
+        if (total > maxDrainBytes && !settled) {
           settled = true
           cleanup()
           stopReading()

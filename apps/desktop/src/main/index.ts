@@ -10,7 +10,9 @@ import type {
   DesktopModelApiConfigUpdate,
   DesktopSkill,
   DesktopTestImageGenParams,
+  DesktopTestWebSearchParams,
   DesktopUpdateState,
+  DesktopWebSearchConfigUpdate,
   WeChatPublishProgressEvent,
   WeChatPublishRequest,
   WeChatUploadImageRequest,
@@ -45,6 +47,8 @@ import {
   validateSetThinkingLevelParams,
   validateStartSessionParams,
   validateTestImageGenParams,
+  validateTestWebSearchParams,
+  validateWebSearchConfigUpdate,
 } from '../shared/ipc-validators'
 import { AcpEventBatcher } from './acp/event-batcher'
 import { AcpHost } from './acp/host'
@@ -54,6 +58,8 @@ import { generateDesktopImage } from './ai/image-service'
 import { resolveUnpackedAgentScript, resolveUnpackedSkillsDir } from './ai/paths'
 import { fetchRemoteModels } from './ai/remote-models'
 import { redactSecret } from './ai/sanitize'
+import { WebSearchBridge } from './ai/search-bridge'
+import { searchWeb } from './ai/search-service'
 import { APP_HOST, APP_SCHEME, isSafeExternalUrl, isTrustedRendererUrl, resolveAppProtocolTarget } from './app-protocol'
 import {
   areUpdateStatesEqual,
@@ -144,6 +150,7 @@ let acpEventBatcher: AcpEventBatcher | null = null
 let aiConfigStore: AiConfigStore | null = null
 let ipCharacterStore: IpCharacterStore | null = null
 let imageGenBridge: ImageGenBridge | null = null
+let webSearchBridge: WebSearchBridge | null = null
 let wechatPublisher: WeChatPublisher | null = null
 let quitGuard: QuitGuard | null = null
 let updateMode: UpdateMode | null = null
@@ -460,6 +467,39 @@ function registerIpc(
         mimeType: generated.mimeType,
         dataUrl: `data:${generated.mimeType};base64,${generated.base64}`,
       }
+    }
+    catch (error) {
+      const rawMessage = error instanceof Error ? error.message : String(error)
+      return {
+        ok: false,
+        error: redactSecret(rawMessage, usedApiKey),
+      }
+    }
+  })
+
+  handleTrustedIpc(IPC_CHANNELS.AI_UPDATE_WEB_SEARCH, (_event, patch: DesktopWebSearchConfigUpdate) =>
+    configStore.updateWebSearchConfig(validateWebSearchConfigUpdate(patch)))
+  handleTrustedIpc(IPC_CHANNELS.AI_TEST_WEB_SEARCH, async (_event, rawParams?: DesktopTestWebSearchParams) => {
+    let usedApiKey = ``
+    try {
+      const params = validateTestWebSearchParams(rawParams)
+      const saved = await configStore.getResolvedWebSearchConfig()
+      const baseUrl = params?.baseUrl?.trim() || saved.baseUrl
+      const apiKey = resolveEffectiveApiKey({
+        explicitApiKey: params?.apiKey,
+        savedApiKey: saved.apiKey,
+        requestedBaseUrl: baseUrl,
+        savedBaseUrl: saved.baseUrl,
+      })
+      usedApiKey = apiKey
+      const result = await searchWeb({
+        baseUrl,
+        apiKey,
+        model: params?.model?.trim() || saved.model,
+        toolType: params?.toolType ?? saved.toolType,
+        query: params?.query?.trim() || `What is the latest stable version of Node.js?`,
+      })
+      return { ok: true, sourceCount: result.sources.length }
     }
     catch (error) {
       const rawMessage = error instanceof Error ? error.message : String(error)
@@ -820,6 +860,7 @@ app.whenReady().then(async () => {
   const userDataDir = app.getPath(`userData`)
   const apiAgentScript = resolveUnpackedAgentScript(__dirname, `api-agent.js`)
   const imageMcpScript = resolveUnpackedAgentScript(__dirname, `image-mcp.js`)
+  const searchMcpScript = resolveUnpackedAgentScript(__dirname, `search-mcp.js`)
 
   aiConfigStore = new AiConfigStore({
     configPath: path.join(userDataDir, `ai-config.json`),
@@ -833,6 +874,9 @@ app.whenReady().then(async () => {
   })
   imageGenBridge = new ImageGenBridge({
     getConfig: () => aiConfigStore!.getResolvedImageGenConfig(),
+  })
+  webSearchBridge = new WebSearchBridge({
+    getConfig: () => aiConfigStore!.getResolvedWebSearchConfig(),
   })
 
   ipCharacterStore = new IpCharacterStore({
@@ -927,11 +971,10 @@ app.whenReady().then(async () => {
       }
     },
     resolveSessionMcpServers: async (_agentId, workspaceDir): Promise<McpServer[]> => {
-      if (!(await fileExists(imageMcpScript)) || !(await aiConfigStore!.isImageGenConfigured()))
-        return []
-      const bridge = await imageGenBridge!.ensureStarted()
-      return [
-        {
+      const servers: McpServer[] = []
+      if (await fileExists(imageMcpScript) && await aiConfigStore!.isImageGenConfigured()) {
+        const bridge = await imageGenBridge!.ensureStarted()
+        servers.push({
           name: `md-image`,
           command: process.execPath,
           args: [imageMcpScript],
@@ -941,8 +984,22 @@ app.whenReady().then(async () => {
             { name: `MD_IMAGE_BRIDGE_TOKEN`, value: bridge.token },
             { name: `MD_WORKSPACE_DIR`, value: workspaceDir },
           ],
-        },
-      ]
+        })
+      }
+      if (await fileExists(searchMcpScript) && await aiConfigStore!.isWebSearchConfigured()) {
+        const bridge = await webSearchBridge!.ensureStarted()
+        servers.push({
+          name: `md-search`,
+          command: process.execPath,
+          args: [searchMcpScript],
+          env: [
+            { name: `ELECTRON_RUN_AS_NODE`, value: `1` },
+            { name: `MD_SEARCH_BRIDGE_URL`, value: bridge.url },
+            { name: `MD_SEARCH_BRIDGE_TOKEN`, value: bridge.token },
+          ],
+        })
+      }
+      return servers
     },
     isImageGenConfigured: () => aiConfigStore!.isImageGenConfigured(),
     onEvent: broadcastAcpEvent,
@@ -963,6 +1020,7 @@ app.whenReady().then(async () => {
         acpEventBatcher?.dispose()
       }
       await imageGenBridge?.close()
+      await webSearchBridge?.close()
     },
     confirmQuit: async (copy) => {
       // Allow automated CDP smoke runs to drive cancel/confirm without a native OS sheet.

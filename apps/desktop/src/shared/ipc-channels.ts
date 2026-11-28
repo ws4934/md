@@ -11,6 +11,8 @@ export const IPC_CHANNELS = {
   AI_UPDATE_IMAGE_GEN: `md:ai:update-image-gen`,
   AI_LIST_REMOTE_MODELS: `md:ai:list-remote-models`,
   AI_TEST_IMAGE_GEN: `md:ai:test-image-gen`,
+  AI_UPDATE_WEB_SEARCH: `md:ai:update-web-search`,
+  AI_TEST_WEB_SEARCH: `md:ai:test-web-search`,
   ACP_LIST_AGENTS: `md:acp:list-agents`,
   ACP_DETECT_AGENTS: `md:acp:detect-agents`,
   ACP_GET_SETTINGS: `md:acp:get-settings`,

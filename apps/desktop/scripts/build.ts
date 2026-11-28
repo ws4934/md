@@ -87,6 +87,16 @@ export async function buildDesktopBundles(options: BuildDesktopBundlesOptions = 
       sourcemap,
       banner: { js: ESM_CJS_SHIM_BANNER },
     }),
+    build({
+      entryPoints: [path.join(rootDir, `src/agents/search-mcp/index.ts`)],
+      outfile: path.join(rootDir, `dist/agents/search-mcp.js`),
+      bundle: true,
+      platform: `node`,
+      format: `esm`,
+      target: `node22`,
+      sourcemap,
+      banner: { js: ESM_CJS_SHIM_BANNER },
+    }),
   ])
 }
 

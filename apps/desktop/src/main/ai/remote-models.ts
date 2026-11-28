@@ -126,7 +126,7 @@ export function parseGoogleModelsResponse(payload: unknown): {
   }
 }
 
-async function readBoundedResponseText(response: Response, maxBytes: number): Promise<string> {
+export async function readBoundedResponseText(response: Response, maxBytes: number): Promise<string> {
   const contentLength = Number(response.headers?.get(`content-length`))
   if (Number.isFinite(contentLength) && contentLength > maxBytes)
     throw new Error(`Provider response exceeded ${Math.round(maxBytes / 1024 / 1024)} MB limit`)

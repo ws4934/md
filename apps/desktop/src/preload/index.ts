@@ -13,7 +13,9 @@ import type {
   DesktopModelApiConfigUpdate,
   DesktopSkill,
   DesktopTestImageGenParams,
+  DesktopTestWebSearchParams,
   DesktopUpdateState,
+  DesktopWebSearchConfigUpdate,
   WeChatPublishProgressEvent,
   WeChatPublishRequest,
   WeChatUploadImageRequest,
@@ -62,6 +64,10 @@ const desktopBridge: DesktopBridge = {
       ipcRenderer.invoke(IPC_CHANNELS.AI_LIST_REMOTE_MODELS, params),
     testImageGen: (params?: DesktopTestImageGenParams) =>
       ipcRenderer.invoke(IPC_CHANNELS.AI_TEST_IMAGE_GEN, params),
+    updateWebSearchConfig: (patch: DesktopWebSearchConfigUpdate) =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_UPDATE_WEB_SEARCH, patch),
+    testWebSearch: (params?: DesktopTestWebSearchParams) =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_TEST_WEB_SEARCH, params),
   },
   acp: {
     listAgents: () => ipcRenderer.invoke(IPC_CHANNELS.ACP_LIST_AGENTS),

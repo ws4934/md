@@ -1,3 +1,4 @@
+import type { McpServer } from '@agentclientprotocol/sdk/unstable'
 import type { AcpAgentStatus, AcpHostEvent, AcpProbeResult, DesktopSkill } from '@md/shared/types'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -167,6 +168,8 @@ describe(`desktop main index wiring`, () => {
 
     const origAccess = fs.promises.access.bind(fs.promises)
     vi.spyOn(fs.promises, `access`).mockImplementation(async (target, mode) => {
+      if (/[\\/](?:image|search)-mcp\.js$/.test(String(target)))
+        return
       if (String(target).endsWith(`${path.sep}api-agent.js`)) {
         if (!apiAgentScriptExists) {
           const err = new Error(`ENOENT: no such file or directory`) as NodeJS.ErrnoException
@@ -247,6 +250,69 @@ describe(`desktop main index wiring`, () => {
     expect(await commandNames()).not.toContain(`ipc-skill`)
     await expect(invokeIpc(IPC_CHANNELS.SKILLS_SAVE, `ipc-skill`, `no front matter`)).rejects.toThrow(/invalidFrontMatter/)
     expect((await invokeIpc<DesktopSkill[]>(IPC_CHANNELS.SKILLS_LIST)).find(s => s.name === `ipc-skill`)?.enabled).toBe(false)
+  })
+
+  it(`attaches md-search next to md-image only when web search is configured`, async () => {
+    const spy = vi.spyOn(AcpHost.prototype, `getSettings`)
+    await invokeIpc(IPC_CHANNELS.ACP_GET_SETTINGS)
+    const host = spy.mock.contexts[0]
+    spy.mockRestore()
+    const resolveServers = (host as unknown as {
+      resolveSessionMcpServers: (agentId: string, workspaceDir: string) => Promise<McpServer[]>
+    }).resolveSessionMcpServers
+    const names = async () => (await resolveServers(`claude`, userDataDir)).map(server => server.name)
+
+    expect(await names()).toEqual([])
+
+    // A saved key alone is not enough: the section must be enabled.
+    await invokeIpc(IPC_CHANNELS.AI_UPDATE_WEB_SEARCH, { apiKey: `sk-search-main`, model: `gpt-5-mini` })
+    expect(await names()).toEqual([])
+    await invokeIpc(IPC_CHANNELS.AI_UPDATE_WEB_SEARCH, { enabled: true })
+    expect(await names()).toEqual([`md-search`])
+
+    await invokeIpc(IPC_CHANNELS.AI_UPDATE_IMAGE_GEN, { baseUrl: `https://api.openai.com/v1`, apiKey: `sk-img-main`, model: `gpt-image-1` })
+    const servers = await resolveServers(`claude`, userDataDir)
+    expect(servers.map(server => server.name)).toEqual([`md-image`, `md-search`])
+    const searchEnv = (servers[1] as { env: Array<{ name: string, value: string }> }).env
+    expect(searchEnv.map(e => e.name)).toEqual([`ELECTRON_RUN_AS_NODE`, `MD_SEARCH_BRIDGE_URL`, `MD_SEARCH_BRIDGE_TOKEN`])
+    expect(JSON.stringify(servers)).not.toContain(`sk-search-main`)
+
+    await invokeIpc(IPC_CHANNELS.AI_UPDATE_WEB_SEARCH, { enabled: false })
+    expect(await names()).toEqual([`md-image`])
+
+    const configs = await invokeIpc<{ webSearch: Record<string, unknown> }>(IPC_CHANNELS.AI_GET_CONFIGS)
+    expect(configs.webSearch).toMatchObject({ enabled: false, hasApiKey: true })
+    expect(`apiKey` in configs.webSearch).toBe(false)
+
+    // Test connection runs one query through the (stubbed) provider and reports the source count or a redacted error.
+    const requests: string[] = []
+    vi.stubGlobal(`fetch`, async (input: string, init: RequestInit) => {
+      requests.push(`${input} ${JSON.parse(String(init.body)).tools[0].type}`)
+      const auth = (init.headers as Record<string, string>).Authorization
+      if (auth !== `Bearer sk-search-main`)
+        return new Response(JSON.stringify({ error: { message: `bad key ${auth}` } }), { status: 401 })
+      return new Response(JSON.stringify({
+        output: [{ type: `message`, content: [{ type: `output_text`, text: `ok`, annotations: [
+          { type: `url_citation`, url: `https://a.example/`, title: `A` },
+          { type: `url_citation`, url: `https://b.example/`, title: `B` },
+        ] }] }],
+      }), { status: 200 })
+    })
+    try {
+      expect(await invokeIpc(IPC_CHANNELS.AI_TEST_WEB_SEARCH, { toolType: `web_search_preview` }))
+        .toEqual({ ok: true, sourceCount: 2 })
+      const failed = await invokeIpc<{ ok: boolean, error?: string }>(IPC_CHANNELS.AI_TEST_WEB_SEARCH, { apiKey: `sk-wrong-key` })
+      expect(failed.ok).toBe(false)
+      expect(failed.error).toMatch(/^HTTP 401/)
+      expect(failed.error).not.toContain(`sk-wrong-key`)
+      expect(requests).toEqual([
+        `https://api.openai.com/v1/responses web_search_preview`,
+        `https://api.openai.com/v1/responses web_search`,
+      ])
+    }
+    finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it(`disposes acpEventBatcher after awaiting acpHost.dispose in QuitGuard shutdown`, async () => {
