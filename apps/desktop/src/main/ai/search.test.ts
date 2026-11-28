@@ -125,6 +125,27 @@ describe(`parseWebSearchResponse`, () => {
     })
   })
 
+  it(`drops footnote numbers that some providers send as citation titles`, () => {
+    const result = parseWebSearchResponse({
+      output: [{
+        type: `message`,
+        content: [{
+          type: `output_text`,
+          text: `答案[[1]](https://a.example/x)[[2]](https://b.example/y)`,
+          annotations: [
+            { type: `url_citation`, url: `https://a.example/x`, title: `1` },
+            { type: `url_citation`, url: `https://b.example/y`, title: `[2]` },
+          ],
+        }],
+      }],
+    })
+
+    expect(result.sources).toEqual([
+      { title: ``, url: `https://a.example/x` },
+      { title: ``, url: `https://b.example/y` },
+    ])
+  })
+
   it(`parses web_search_preview output and the output_text convenience field`, () => {
     const result = parseWebSearchResponse({
       output: [

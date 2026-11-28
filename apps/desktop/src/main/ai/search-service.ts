@@ -132,7 +132,9 @@ export function parseWebSearchResponse(payload: unknown): WebSearchResult {
     const url = normalizeSourceUrl(candidate.url)
     if (!url)
       continue
-    const title = trimmedString(candidate.title)
+    const rawTitle = trimmedString(candidate.title)
+    // Some providers label citations only by their footnote number ("1", "[2]"); that is not a title.
+    const title = /^\[?\d+\]?$/.test(rawTitle) ? `` : rawTitle
     const existing = byUrl.get(url)
     if (existing) {
       if (!existing.title && title)
