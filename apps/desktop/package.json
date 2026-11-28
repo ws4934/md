@@ -2,7 +2,7 @@
   "name": "@md/desktop",
   "productName": "md",
   "type": "module",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "private": true,
   "description": "Electron desktop edition of doocs/md with local ACP agent integration",
   "main": "dist/main/index.js",
