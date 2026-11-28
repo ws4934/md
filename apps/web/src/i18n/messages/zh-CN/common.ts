@@ -207,6 +207,10 @@ export default {
       magazine: { label: `杂志`, desc: `推荐配色：经典蓝` },
       warm: { label: `暖阳`, desc: `推荐配色：玫瑰金` },
       ink: { label: `墨白`, desc: `推荐配色：石墨黑` },
+      notebook: { label: `手账`, desc: `推荐配色：天空蓝` },
+      guofeng: { label: `国风`, desc: `推荐配色：活力橘` },
+      morandi: { label: `莫兰迪`, desc: `推荐配色：薰衣紫` },
+      brief: { label: `简报`, desc: `推荐配色：经典蓝` },
     },
     fontFamily: {
       sansSerif: { label: `无衬线`, desc: `字体123Abc` },

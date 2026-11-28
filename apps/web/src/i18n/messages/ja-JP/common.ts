@@ -207,6 +207,10 @@ export default {
       magazine: { label: `マガジン`, desc: `おすすめ色：ブルー` },
       warm: { label: `ぬくもり`, desc: `おすすめ色：ローズ` },
       ink: { label: `モノトーン`, desc: `おすすめ色：ブラック` },
+      notebook: { label: `手帳`, desc: `おすすめ色：スカイ` },
+      guofeng: { label: `古典`, desc: `おすすめ色：オレンジ` },
+      morandi: { label: `モランディ`, desc: `おすすめ色：パープル` },
+      brief: { label: `レポート`, desc: `おすすめ色：ブルー` },
     },
     fontFamily: {
       sansSerif: { label: `ゴシック`, desc: `Font123Abc` },

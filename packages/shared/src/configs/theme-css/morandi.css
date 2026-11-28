@@ -1,0 +1,436 @@
+/**
+ * MD morandi theme — muted gallery tones: greyed accent tints, layered colour blocks, spaced labels.
+ * Looks best with dusty accents such as lavender purple.
+ */
+
+/* Headings */
+h1 {
+  padding: 0 0.4em 0.45em;
+  border-bottom: 3px solid color-mix(in srgb, var(--md-primary-color) 14%, rgba(120, 116, 130, 0.1));
+  margin: calc(1.2em * var(--md-block-spacing)) auto calc(2em * var(--md-block-spacing));
+  color: color-mix(in srgb, hsl(var(--foreground)) 90%, #8e8a96);
+  font-size: calc(var(--md-font-size) * 1.3);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  line-height: 1.6;
+}
+
+/* Muted chip with a pale block offset behind it */
+h2 {
+  padding: 0.3em 1.1em 0.3em 1.25em;
+  border-radius: 3px;
+  margin: calc(3.5em * var(--md-block-spacing)) auto calc(2em * var(--md-block-spacing));
+  color: #fff;
+  background: color-mix(in srgb, var(--md-primary-color) 72%, #8f8b96);
+  box-shadow: 5px 5px 0 color-mix(in srgb, var(--md-primary-color) 16%, rgba(120, 116, 130, 0.12));
+  font-size: calc(var(--md-font-size) * 1.12);
+  font-weight: 600;
+  letter-spacing: 0.15em;
+}
+
+h3 {
+  display: table;
+  padding: 0.25em 0.8em;
+  border-left: none;
+  border-radius: 3px;
+  margin: calc(2.2em * var(--md-block-spacing)) 8px calc(1em * var(--md-block-spacing));
+  color: color-mix(in srgb, var(--md-primary-color) 75%, hsl(var(--foreground)));
+  background: color-mix(in srgb, var(--md-primary-color) 8%, rgba(120, 116, 130, 0.07));
+  font-size: calc(var(--md-font-size) * 1.05);
+  letter-spacing: 0.08em;
+  line-height: 1.5;
+}
+
+h4,
+h5,
+h6 {
+  color: color-mix(in srgb, var(--md-primary-color) 72%, #8f8b96);
+  letter-spacing: 0.12em;
+}
+
+/* Body: softened grey text; line height added to the user's setting so it still applies */
+p {
+  margin: calc(1.6em * var(--md-block-spacing)) 8px;
+  line-height: calc(var(--md-line-height) + 0.2);
+  letter-spacing: 0.08em;
+  color: color-mix(in srgb, hsl(var(--foreground)) 80%, #8e8a96);
+}
+
+li {
+  color: color-mix(in srgb, hsl(var(--foreground)) 80%, #8e8a96);
+}
+
+/* Lead / pull quote: dusty panel with an offset block behind it; alerts keep the default look */
+blockquote.blockquote {
+  padding: 1.1em 1.3em;
+  border-left: none;
+  border-radius: 4px;
+  background: var(
+    --md-blockquote-background,
+    color-mix(in srgb, var(--md-primary-color) 8%, rgba(120, 116, 130, 0.07))
+  );
+  box-shadow: 8px 8px 0 color-mix(in srgb, var(--md-primary-color) 16%, rgba(120, 116, 130, 0.12));
+  margin: calc(0.5em * var(--md-block-spacing)) 8px calc(2.2em * var(--md-block-spacing)) 0;
+}
+
+blockquote.blockquote > p {
+  color: color-mix(in srgb, hsl(var(--foreground)) 80%, #8e8a96);
+  font-size: 1.02em;
+  line-height: 1.9;
+  letter-spacing: 0.08em;
+}
+
+/* Emphasis */
+strong {
+  color: color-mix(in srgb, var(--md-primary-color) 75%, hsl(var(--foreground)));
+}
+
+em {
+  font-style: normal;
+  color: color-mix(in srgb, hsl(var(--foreground)) 52%, transparent);
+}
+
+/* Closing sources line (`*参考资料：…*`): inline-block gives it its own tighter line height */
+.container > p:last-of-type > em {
+  display: inline-block;
+  font-size: 0.78em;
+  line-height: 1.8;
+  letter-spacing: 0.05em;
+}
+
+.markup-underline {
+  padding-bottom: 1px;
+  border-bottom: 2px solid color-mix(in srgb, var(--md-primary-color) 40%, transparent);
+  text-decoration: none;
+}
+
+/* Soft dusty block behind the words, not a marker stripe */
+.markup-highlight,
+strong .markup-underline {
+  padding: 1px 4px;
+  border-bottom: none;
+  border-radius: 2px;
+  color: inherit;
+  background-color: color-mix(in srgb, var(--md-primary-color) 14%, rgba(120, 116, 130, 0.1));
+}
+
+/* Images */
+img {
+  border-radius: 4px;
+}
+
+figcaption,
+.md-figcaption {
+  margin-top: 0.5em;
+  color: color-mix(in srgb, hsl(var(--foreground)) 45%, transparent);
+  font-size: 0.75em;
+  letter-spacing: 0.12em;
+}
+
+/* Horizontal rules: a short soft block instead of a line */
+hr {
+  width: 40px;
+  height: 0;
+  border-style: solid;
+  border-width: 4px 0 0;
+  border-color: color-mix(in srgb, var(--md-primary-color) 16%, rgba(120, 116, 130, 0.12));
+  border-radius: 2px;
+  -webkit-transform: none;
+  transform: none;
+  margin: calc(3em * var(--md-block-spacing)) auto;
+}
+
+/* ==================== Layout components ==================== */
+/* Lead: dusty panel with an offset block behind it, opened by a two-tone swatch */
+.md-lead {
+  padding: 1.2em 1.4em 1.3em;
+  border: none;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--md-primary-color) 8%, rgba(120, 116, 130, 0.07));
+  box-shadow: 8px 8px 0 color-mix(in srgb, var(--md-primary-color) 16%, rgba(120, 116, 130, 0.12));
+  margin: calc(1em * var(--md-block-spacing)) 8px calc(2.4em * var(--md-block-spacing)) 0;
+  text-align: left;
+}
+
+.md-lead .md-lead-mark {
+  display: none;
+}
+
+.md-lead .md-lead-mark-start {
+  display: block;
+  width: 14px;
+  height: 4px;
+  padding: 0;
+  border: none;
+  border-left: 14px solid color-mix(in srgb, var(--md-primary-color) 72%, #8f8b96);
+  border-radius: 1px;
+  margin: 0 0 14px;
+  background: color-mix(in srgb, var(--md-primary-color) 24%, transparent);
+  font-size: 0;
+}
+
+.md-lead .md-lead-text {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 82%, #8e8a96);
+  font-size: 1.06em;
+  line-height: 1.9;
+  letter-spacing: 0.08em;
+  text-align: left;
+}
+
+/* Divider: soft pale bars around a two-tone swatch or a spaced label */
+.md-divider {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(3em * var(--md-block-spacing)) 8px;
+  line-height: 1;
+  text-align: center;
+}
+
+.md-divider .md-divider-line {
+  display: inline-block;
+  width: 18%;
+  height: 3px;
+  border: none;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--md-primary-color) 14%, rgba(120, 116, 130, 0.1));
+  font-size: 0;
+  vertical-align: middle;
+}
+
+.md-divider .md-divider-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin: 0 12px;
+  border: none;
+  border-left: 7px solid color-mix(in srgb, var(--md-primary-color) 72%, #8f8b96);
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--md-primary-color) 24%, transparent);
+  font-size: 0;
+  vertical-align: middle;
+}
+
+.md-divider .md-divider-text {
+  display: inline-block;
+  padding-left: 0.35em;
+  margin: 0 14px;
+  color: color-mix(in srgb, var(--md-primary-color) 72%, #8f8b96);
+  font-size: 0.78em;
+  line-height: 1.6;
+  letter-spacing: 0.35em;
+  vertical-align: middle;
+}
+
+/* Stat: the figure sits in a light window cut into a muted mat; the caption rests on the mat */
+.md-stat {
+  padding: 0;
+  border: 7px solid color-mix(in srgb, var(--md-primary-color) 18%, rgba(120, 116, 130, 0.14));
+  border-radius: 4px;
+  background: none;
+  margin: calc(2em * var(--md-block-spacing)) 0;
+  text-align: center;
+}
+
+.md-stat .md-stat-value {
+  margin: 0;
+  padding: 0.85em 0.8em 0.7em;
+  border-radius: 2px;
+  color: color-mix(in srgb, var(--md-primary-color) 75%, hsl(var(--foreground)));
+  background: color-mix(in srgb, var(--md-primary-color) 3%, rgba(120, 116, 130, 0.02));
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
+.md-stat .md-stat-number {
+  color: color-mix(in srgb, var(--md-primary-color) 75%, hsl(var(--foreground)));
+  font-size: 2.4em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.md-stat .md-stat-unit {
+  margin-left: 6px;
+  color: color-mix(in srgb, var(--md-primary-color) 72%, #8f8b96);
+  font-size: 0.85em;
+  letter-spacing: 0.15em;
+}
+
+.md-stat .md-stat-label {
+  margin: 0;
+  padding: 0.8em 0.6em 0.1em 0.8em;
+  color: color-mix(in srgb, hsl(var(--foreground)) 82%, #8e8a96);
+  background: color-mix(in srgb, var(--md-primary-color) 18%, rgba(120, 116, 130, 0.14));
+  font-size: 0.85em;
+  line-height: 1.6;
+  letter-spacing: 0.18em;
+  text-align: center;
+}
+
+.md-stat .md-stat-label:last-child {
+  padding-bottom: 0.35em;
+}
+
+.md-stat .md-stat-note {
+  margin: 0;
+  padding: 0.15em 0.6em 0.35em;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  background: color-mix(in srgb, var(--md-primary-color) 18%, rgba(120, 116, 130, 0.14));
+  font-size: 0.75em;
+  line-height: 1.7;
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+
+/* Compare: two separate colour blocks, grey before and dusty after */
+.md-compare {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 6px 0;
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(2em * var(--md-block-spacing)) 0;
+}
+
+.md-compare .md-compare-col {
+  display: table-cell;
+  width: 50%;
+  padding: 1em 1.1em 1.1em;
+  border: none;
+  border-radius: 4px;
+  vertical-align: top;
+}
+
+.md-compare .md-compare-before {
+  background: color-mix(in srgb, hsl(var(--foreground)) 5%, transparent);
+}
+
+.md-compare .md-compare-after {
+  border-left: none;
+  background: color-mix(in srgb, var(--md-primary-color) 14%, rgba(120, 116, 130, 0.1));
+}
+
+.md-compare .md-compare-title {
+  margin: 0 0 0.7em;
+  font-size: 0.72em;
+  font-weight: normal;
+  line-height: 1.6;
+  letter-spacing: 0.3em;
+}
+
+.md-compare .md-compare-text {
+  margin: 0;
+  font-size: 0.92em;
+  line-height: 1.8;
+  letter-spacing: 0.05em;
+  text-align: left;
+}
+
+.md-compare-before .md-compare-title,
+.md-compare-before .md-compare-text {
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+}
+
+.md-compare-after .md-compare-title {
+  color: color-mix(in srgb, var(--md-primary-color) 75%, hsl(var(--foreground)));
+  font-weight: normal;
+}
+
+.md-compare-after .md-compare-text {
+  color: color-mix(in srgb, hsl(var(--foreground)) 82%, #8e8a96);
+}
+
+/* Quote: pale panel with a deeper colour strip on its left edge */
+.md-quote {
+  padding: 1.2em 1.3em 1.1em 1.2em;
+  border: none;
+  border-left: 10px solid color-mix(in srgb, var(--md-primary-color) 14%, rgba(120, 116, 130, 0.1));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--md-primary-color) 8%, rgba(120, 116, 130, 0.07));
+  margin: calc(2em * var(--md-block-spacing)) 0;
+}
+
+.md-quote .md-quote-text {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 82%, #8e8a96);
+  font-size: 1.02em;
+  line-height: 1.9;
+  letter-spacing: 0.06em;
+  text-align: left;
+}
+
+.md-quote .md-quote-source {
+  margin: 0.7em 0 0;
+  color: color-mix(in srgb, var(--md-primary-color) 72%, #8f8b96);
+  font-size: 0.75em;
+  line-height: 1.6;
+  letter-spacing: 0.15em;
+  text-align: right;
+}
+
+/* Sources: dusty chip title over small muted notes */
+.md-sources {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(3em * var(--md-block-spacing)) 8px calc(1.5em * var(--md-block-spacing));
+}
+
+.md-sources .md-sources-title {
+  display: inline-block;
+  padding: 0.2em 0.8em 0.2em 1em;
+  border-radius: 3px;
+  margin: 0 0 0.7em;
+  color: color-mix(in srgb, var(--md-primary-color) 75%, hsl(var(--foreground)));
+  background: color-mix(in srgb, var(--md-primary-color) 14%, rgba(120, 116, 130, 0.1));
+  font-size: 0.75em;
+  line-height: 1.6;
+  letter-spacing: 0.25em;
+}
+
+.md-sources .md-sources-item {
+  margin: 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+  font-size: 0.78em;
+  line-height: 1.85;
+  letter-spacing: 0.03em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* End mark: spaced small caps between two short soft bars */
+.md-end {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(3.5em * var(--md-block-spacing)) 8px calc(2em * var(--md-block-spacing));
+  line-height: 1;
+  text-align: center;
+}
+
+.md-end .md-end-line {
+  display: inline-block;
+  width: 28px;
+  height: 4px;
+  border: none;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--md-primary-color) 16%, rgba(120, 116, 130, 0.12));
+  font-size: 0;
+  vertical-align: middle;
+}
+
+.md-end .md-end-text {
+  display: inline-block;
+  padding-left: 0.4em;
+  margin: 0 12px;
+  color: color-mix(in srgb, var(--md-primary-color) 72%, #8f8b96);
+  font-size: 0.7em;
+  line-height: 1.6;
+  letter-spacing: 0.4em;
+  vertical-align: middle;
+}

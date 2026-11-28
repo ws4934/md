@@ -1,0 +1,463 @@
+/**
+ * MD brief theme — data briefing: sans headings, hairline rules tagged with a short
+ * accent block, tinted summary panels, KPI tiles with tabular figures.
+ * Looks best with deep accents such as classic blue.
+ */
+
+/* Headings: sans stack even when the body font is serif */
+h1 {
+  display: block;
+  padding: 0.7em 0 0;
+  border-bottom: none;
+  margin: calc(1em * var(--md-block-spacing)) 8px calc(1.2em * var(--md-block-spacing));
+  color: hsl(var(--foreground));
+  background-color: transparent;
+  background-image: linear-gradient(var(--md-primary-color), var(--md-primary-color));
+  background-position: left top;
+  background-size: 28px 4px;
+  background-repeat: no-repeat;
+  font-family: -apple-system-font, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei UI', 'Microsoft YaHei', Arial, sans-serif;
+  font-size: calc(var(--md-font-size) * 1.4);
+  line-height: 1.45;
+  letter-spacing: 0.02em;
+  text-align: left;
+}
+
+/* Section head: sits on a full-width hairline with a short accent block under its first characters */
+h2 {
+  display: block;
+  padding: 0 0 0.5em;
+  border-bottom: 1px solid color-mix(in srgb, hsl(var(--foreground)) 18%, transparent);
+  margin: calc(3em * var(--md-block-spacing)) 8px calc(1.2em * var(--md-block-spacing));
+  color: hsl(var(--foreground));
+  background-color: transparent;
+  background-image: linear-gradient(var(--md-primary-color), var(--md-primary-color));
+  background-origin: border-box;
+  background-position: left bottom;
+  background-size: 40px 3px;
+  background-repeat: no-repeat;
+  font-family: -apple-system-font, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei UI', 'Microsoft YaHei', Arial, sans-serif;
+  font-size: calc(var(--md-font-size) * 1.2);
+  line-height: 1.5;
+  letter-spacing: 0.03em;
+  text-align: left;
+}
+
+h3 {
+  padding-left: 0;
+  border-left: none;
+  margin: calc(2em * var(--md-block-spacing)) 8px calc(0.75em * var(--md-block-spacing));
+  color: var(--md-primary-color);
+  font-family: -apple-system-font, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei UI', 'Microsoft YaHei', Arial, sans-serif;
+  font-size: calc(var(--md-font-size) * 1.08);
+  line-height: 1.5;
+  letter-spacing: 0.03em;
+}
+
+h4 {
+  color: color-mix(in srgb, hsl(var(--foreground)) 80%, transparent);
+  letter-spacing: 0.04em;
+}
+
+/* Body: tighter tracking than the default; line height added to the user's setting */
+p {
+  line-height: calc(var(--md-line-height) + 0.1);
+  letter-spacing: 0.04em;
+}
+
+/* Lead / pull quote as a summary panel; alerts keep the default look */
+blockquote.blockquote {
+  padding: 0.85em 1.1em 0.9em;
+  border-left: none;
+  border-top: 3px solid var(--md-primary-color);
+  border-radius: 0;
+  background: var(--md-blockquote-background, color-mix(in srgb, var(--md-primary-color) 5%, transparent));
+  margin: calc(0.5em * var(--md-block-spacing)) 8px calc(1.8em * var(--md-block-spacing));
+}
+
+blockquote.blockquote > p {
+  color: hsl(var(--foreground));
+  line-height: 1.8;
+  letter-spacing: 0.04em;
+}
+
+/* Emphasis: bold stays ink-dark; the accent is kept for structure */
+strong {
+  color: hsl(var(--foreground));
+}
+
+em {
+  font-style: normal;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+}
+
+/* Closing sources line (`*参考资料：…*`): inline-block gives it its own tighter line height */
+.container > p:last-of-type > em {
+  display: inline-block;
+  font-size: 0.78em;
+  line-height: 1.8;
+}
+
+.markup-underline {
+  padding-bottom: 1px;
+  border-bottom: 2px solid color-mix(in srgb, var(--md-primary-color) 35%, transparent);
+  text-decoration: none;
+}
+
+strong .markup-underline {
+  border-bottom-color: var(--md-primary-color);
+}
+
+.markup-highlight {
+  padding: 1px 4px;
+  border-radius: 2px;
+  color: var(--md-primary-color);
+  background-color: color-mix(in srgb, var(--md-primary-color) 10%, transparent);
+}
+
+/* Images: square-ish corners and a left-aligned figure note */
+img {
+  border-radius: 2px;
+}
+
+figcaption,
+.md-figcaption {
+  padding-left: 8px;
+  border-left: 2px solid var(--md-primary-color);
+  margin-top: 0.5em;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.75em;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  text-align: left;
+}
+
+/* Horizontal rules: full-width hairline */
+hr {
+  height: 0;
+  border-style: solid;
+  border-width: 1px 0 0;
+  border-color: color-mix(in srgb, hsl(var(--foreground)) 18%, transparent);
+  -webkit-transform: none;
+  transform: none;
+  margin: calc(2em * var(--md-block-spacing)) 8px;
+}
+
+/* ==================== Layout components ==================== */
+/* Lead: summary panel opened by a solid accent bar */
+.md-lead {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--md-primary-color) 5%, transparent);
+  margin: calc(1em * var(--md-block-spacing)) 8px calc(1.8em * var(--md-block-spacing));
+  text-align: left;
+}
+
+.md-lead .md-lead-mark {
+  display: none;
+}
+
+.md-lead .md-lead-mark-start {
+  display: block;
+  width: auto;
+  height: 3px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  margin: 0;
+  background: var(--md-primary-color);
+  font-size: 0;
+}
+
+.md-lead .md-lead-text {
+  margin: 0;
+  padding: 0.9em 1.1em 1em;
+  color: hsl(var(--foreground));
+  font-size: 1.05em;
+  line-height: 1.8;
+  letter-spacing: 0.04em;
+  text-align: left;
+}
+
+/*
+ * Divider: table cells so the hairline fills the row exactly. The first line is
+ * dropped; the dot becomes a short accent block and the label sits on its own
+ * accent underline. Bottom borders align so both rest on the hairline.
+ */
+.md-divider {
+  display: table;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border: none;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: none;
+  margin: calc(2.5em * var(--md-block-spacing)) 0;
+  line-height: 1;
+  text-align: left;
+}
+
+.md-divider .md-divider-line {
+  display: table-cell;
+  width: auto;
+  height: 0;
+  border: none;
+  border-bottom: 1px solid color-mix(in srgb, hsl(var(--foreground)) 20%, transparent);
+  background: none;
+  font-size: 0;
+  vertical-align: bottom;
+}
+
+.md-divider .md-divider-line:first-child {
+  display: none;
+}
+
+.md-divider .md-divider-dot {
+  display: table-cell;
+  width: 40px;
+  height: 0;
+  margin: 0;
+  border: none;
+  border-bottom: 3px solid var(--md-primary-color);
+  border-radius: 0;
+  background: none;
+  font-size: 0;
+  vertical-align: bottom;
+}
+
+.md-divider .md-divider-text {
+  display: table-cell;
+  width: 1px;
+  padding: 0 0.6em 0.5em 0;
+  margin: 0;
+  border-bottom: 3px solid var(--md-primary-color);
+  color: var(--md-primary-color);
+  font-size: 0.8em;
+  font-weight: bold;
+  line-height: 1.4;
+  letter-spacing: 0.15em;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* Stat: KPI tile; left-aligned tabular figure over a small spaced label */
+.md-stat {
+  padding: 1em 1.2em 1.05em;
+  border: none;
+  border-left: 3px solid var(--md-primary-color);
+  border-radius: 0 2px 2px 0;
+  background: color-mix(in srgb, hsl(var(--foreground)) 4%, transparent);
+  margin: calc(1.5em * var(--md-block-spacing)) 8px;
+  text-align: left;
+}
+
+.md-stat .md-stat-value {
+  margin: 0;
+  color: var(--md-primary-color);
+  line-height: 1.1;
+  letter-spacing: 0;
+  text-align: left;
+}
+
+.md-stat .md-stat-number {
+  color: var(--md-primary-color);
+  font-family: 'DIN Alternate', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 2.6em;
+  font-weight: bold;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.md-stat .md-stat-unit {
+  margin-left: 4px;
+  color: color-mix(in srgb, hsl(var(--foreground)) 70%, transparent);
+  font-size: 0.9em;
+  font-weight: bold;
+}
+
+.md-stat .md-stat-label {
+  margin: 0.6em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 70%, transparent);
+  font-size: 0.8em;
+  line-height: 1.6;
+  letter-spacing: 0.12em;
+  text-align: left;
+}
+
+.md-stat .md-stat-note {
+  padding: 0.6em 0 0;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 12%, transparent);
+  margin: 0.7em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+  font-size: 0.75em;
+  line-height: 1.7;
+  letter-spacing: 0.03em;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Compare: two-column table with solid header cells; the after column carries the accent */
+.md-compare {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  box-sizing: border-box;
+  padding: 0 6px;
+  border: none;
+  border-collapse: separate;
+  border-spacing: 2px 0;
+  background: none;
+  margin: calc(1.5em * var(--md-block-spacing)) 0;
+}
+
+.md-compare .md-compare-col {
+  display: table-cell;
+  width: 50%;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  vertical-align: top;
+}
+
+.md-compare .md-compare-before {
+  background: color-mix(in srgb, hsl(var(--foreground)) 3%, transparent);
+}
+
+.md-compare .md-compare-after {
+  background: color-mix(in srgb, var(--md-primary-color) 6%, transparent);
+}
+
+.md-compare .md-compare-title {
+  margin: 0;
+  padding: 0.45em 0.9em;
+  font-size: 0.8em;
+  font-weight: bold;
+  line-height: 1.6;
+  letter-spacing: 0.12em;
+}
+
+.md-compare .md-compare-text {
+  margin: 0;
+  padding: 0.75em 0.9em 0.85em;
+  font-size: 0.9em;
+  line-height: 1.75;
+  letter-spacing: 0.03em;
+  text-align: left;
+}
+
+.md-compare-before .md-compare-title {
+  color: color-mix(in srgb, hsl(var(--foreground)) 60%, transparent);
+  background: color-mix(in srgb, hsl(var(--foreground)) 8%, transparent);
+}
+
+.md-compare-before .md-compare-text {
+  color: color-mix(in srgb, hsl(var(--foreground)) 60%, transparent);
+}
+
+.md-compare-after .md-compare-title {
+  color: #fff;
+  background: var(--md-primary-color);
+}
+
+.md-compare-after .md-compare-text {
+  color: hsl(var(--foreground));
+}
+
+/* Quote: key finding set bold against a left accent rule */
+.md-quote {
+  padding: 0.1em 0 0.1em 1em;
+  border: none;
+  border-left: 3px solid var(--md-primary-color);
+  border-radius: 0;
+  background: none;
+  margin: calc(1.8em * var(--md-block-spacing)) 8px;
+}
+
+.md-quote .md-quote-text {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 1.05em;
+  font-weight: bold;
+  line-height: 1.75;
+  letter-spacing: 0.03em;
+  text-align: left;
+}
+
+.md-quote .md-quote-source {
+  margin: 0.5em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+  font-size: 0.78em;
+  line-height: 1.6;
+  letter-spacing: 0.06em;
+  text-align: left;
+}
+
+/* Sources: compact footnotes under a thin rule */
+.md-sources {
+  padding: 0.75em 0 0;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 22%, transparent);
+  background: none;
+  margin: calc(2.5em * var(--md-block-spacing)) 8px calc(1.5em * var(--md-block-spacing));
+}
+
+.md-sources .md-sources-title {
+  margin: 0 0 0.1em;
+  color: hsl(var(--foreground));
+  font-size: 0.75em;
+  font-weight: bold;
+  line-height: 1.8;
+  letter-spacing: 0.12em;
+}
+
+.md-sources .md-sources-item {
+  margin: 0.3em 0 0;
+  color: color-mix(in srgb, hsl(var(--foreground)) 55%, transparent);
+  font-size: 0.75em;
+  line-height: 1.75;
+  letter-spacing: 0.02em;
+  text-align: left;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+/* End mark: small boxed label between short hairlines */
+.md-end {
+  padding: 0;
+  border: none;
+  background: none;
+  margin: calc(3em * var(--md-block-spacing)) 8px calc(1.5em * var(--md-block-spacing));
+  line-height: 1;
+  text-align: center;
+}
+
+.md-end .md-end-line {
+  display: inline-block;
+  width: 32px;
+  height: 0;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, hsl(var(--foreground)) 22%, transparent);
+  background: none;
+  font-size: 0;
+  vertical-align: middle;
+}
+
+/* padding-left exceeds padding-right by the trailing letter-spacing so the label stays centred */
+.md-end .md-end-text {
+  display: inline-block;
+  padding: 0.25em 0.45em 0.25em 0.75em;
+  border: 1px solid color-mix(in srgb, hsl(var(--foreground)) 22%, transparent);
+  border-radius: 2px;
+  margin: 0 8px;
+  color: color-mix(in srgb, hsl(var(--foreground)) 50%, transparent);
+  font-size: 0.68em;
+  font-weight: bold;
+  line-height: 1.5;
+  letter-spacing: 0.3em;
+  vertical-align: middle;
+}

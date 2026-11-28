@@ -29,6 +29,10 @@ export const themeOptions = [
   { value: `magazine`, label: `杂志`, desc: `` },
   { value: `warm`, label: `暖阳`, desc: `` },
   { value: `ink`, label: `墨白`, desc: `` },
+  { value: `notebook`, label: `手账`, desc: `` },
+  { value: `guofeng`, label: `国风`, desc: `` },
+  { value: `morandi`, label: `莫兰迪`, desc: `` },
+  { value: `brief`, label: `简报`, desc: `` },
 ] as const
 
 export const fontFamilyOptions = [

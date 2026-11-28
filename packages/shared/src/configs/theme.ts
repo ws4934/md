@@ -45,6 +45,26 @@ export const themeOptionsMap = {
     value: `ink`,
     desc: `推荐配色：石墨黑`,
   },
+  notebook: {
+    label: `手账`,
+    value: `notebook`,
+    desc: `推荐配色：天空蓝`,
+  },
+  guofeng: {
+    label: `国风`,
+    value: `guofeng`,
+    desc: `推荐配色：活力橘`,
+  },
+  morandi: {
+    label: `莫兰迪`,
+    value: `morandi`,
+    desc: `推荐配色：薰衣紫`,
+  },
+  brief: {
+    label: `简报`,
+    value: `brief`,
+    desc: `推荐配色：经典蓝`,
+  },
 }
 
 export const themeOptions: IConfigOption<ThemeName>[] = [
@@ -82,5 +102,25 @@ export const themeOptions: IConfigOption<ThemeName>[] = [
     label: `墨白`,
     value: `ink`,
     desc: `推荐配色：石墨黑`,
+  },
+  {
+    label: `手账`,
+    value: `notebook`,
+    desc: `推荐配色：天空蓝`,
+  },
+  {
+    label: `国风`,
+    value: `guofeng`,
+    desc: `推荐配色：活力橘`,
+  },
+  {
+    label: `莫兰迪`,
+    value: `morandi`,
+    desc: `推荐配色：薰衣紫`,
+  },
+  {
+    label: `简报`,
+    value: `brief`,
+    desc: `推荐配色：经典蓝`,
   },
 ]

@@ -64,6 +64,10 @@ const themeMap: Record<string, string> = {
   magazine: loadCSSFile(`magazine.css`),
   warm: loadCSSFile(`warm.css`),
   ink: loadCSSFile(`ink.css`),
+  notebook: loadCSSFile(`notebook.css`),
+  guofeng: loadCSSFile(`guofeng.css`),
+  morandi: loadCSSFile(`morandi.css`),
+  brief: loadCSSFile(`brief.css`),
 }
 
 const hljsCssCache = new Map<string, string>()

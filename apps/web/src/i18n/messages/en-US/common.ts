@@ -207,6 +207,10 @@ export default {
       magazine: { label: `Magazine`, desc: `Best with Blue` },
       warm: { label: `Warm`, desc: `Best with Rose` },
       ink: { label: `Ink`, desc: `Best with Black` },
+      notebook: { label: `Notebook`, desc: `Best with Sky` },
+      guofeng: { label: `Classical`, desc: `Best with Orange` },
+      morandi: { label: `Morandi`, desc: `Best with Purple` },
+      brief: { label: `Brief`, desc: `Best with Blue` },
     },
     fontFamily: {
       sansSerif: { label: `Sans`, desc: `Font123Abc` },

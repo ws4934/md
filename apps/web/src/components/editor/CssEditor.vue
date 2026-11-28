@@ -630,6 +630,18 @@ function exportCurrentTheme() {
                 <SelectItem value="ink">
                   {{ t('cssEditor.basedInk') }}
                 </SelectItem>
+                <SelectItem value="notebook">
+                  {{ t('cssEditor.basedNotebook') }}
+                </SelectItem>
+                <SelectItem value="guofeng">
+                  {{ t('cssEditor.basedGuofeng') }}
+                </SelectItem>
+                <SelectItem value="morandi">
+                  {{ t('cssEditor.basedMorandi') }}
+                </SelectItem>
+                <SelectItem value="brief">
+                  {{ t('cssEditor.basedBrief') }}
+                </SelectItem>
               </SelectContent>
             </Select>
             <p class="text-xs text-muted-foreground">
@@ -722,6 +734,18 @@ function exportCurrentTheme() {
               </SelectItem>
               <SelectItem value="ink">
                 {{ getThemeLabel(t, 'ink') }}
+              </SelectItem>
+              <SelectItem value="notebook">
+                {{ getThemeLabel(t, 'notebook') }}
+              </SelectItem>
+              <SelectItem value="guofeng">
+                {{ getThemeLabel(t, 'guofeng') }}
+              </SelectItem>
+              <SelectItem value="morandi">
+                {{ getThemeLabel(t, 'morandi') }}
+              </SelectItem>
+              <SelectItem value="brief">
+                {{ getThemeLabel(t, 'brief') }}
               </SelectItem>
             </SelectContent>
           </Select>
